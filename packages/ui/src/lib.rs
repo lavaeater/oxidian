@@ -8,3 +8,7 @@ pub use navbar::Navbar;
 
 mod echo;
 pub use echo::Echo;
+
+mod cm;
+pub use cm::MarkdownArea;
+
