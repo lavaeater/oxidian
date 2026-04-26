@@ -10,7 +10,7 @@
   background: none;
   color: var(--secondary-color-4);
   font-family: inherit;
-  line-height: 1.5;
+  line-height: 1.6;
   outline: none;
   white-space: pre-wrap;
   word-wrap: break-word;
@@ -19,81 +19,53 @@
   transition: background-color 100ms ease-out, border-color 100ms ease-out, box-shadow 100ms ease-out;
 }
 
-.md-area:empty::before {
+.md-area:empty::before,
+.md-area[data-placeholder]:not(:focus):empty::before {
   content: attr(data-placeholder);
   color: var(--secondary-color-5);
   pointer-events: none;
 }
 
-/* ── Variant: Default ── */
+/* ── Variants ── */
 .md-area[data-style="default"] {
   background: var(--light, var(--primary-color)) var(--dark, var(--primary-color-3));
   box-shadow: inset 0 0 0 1px var(--light, var(--primary-color-6)) var(--dark, var(--primary-color-7));
 }
-
 .md-area[data-style="default"]:hover,
 .md-area[data-style="default"]:focus {
   background: var(--light, var(--primary-color-4)) var(--dark, var(--primary-color-5));
   color: var(--secondary-color-1);
 }
 
-/* ── Variant: Fade ── */
 .md-area[data-style="fade"] {
   background: var(--light, var(--primary-color)) var(--dark, var(--primary-color-3));
 }
-
 .md-area[data-style="fade"]:hover,
 .md-area[data-style="fade"]:focus {
   background: var(--light, var(--primary-color-4)) var(--dark, var(--primary-color-5));
   color: var(--secondary-color-1);
 }
 
-/* ── Variant: Outline ── */
 .md-area[data-style="outline"] {
   border: 1px solid var(--primary-color-6);
-  background-color: var(--light, var(--primary-color))
-    var(--dark, var(--primary-color-3));
+  background-color: var(--light, var(--primary-color)) var(--dark, var(--primary-color-3));
 }
+.md-area[data-style="outline"]:hover:not(:focus) { border-color: var(--primary-color-7); }
+.md-area[data-style="outline"]:focus             { border-color: var(--focused-border-color); }
 
-.md-area[data-style="outline"]:hover:not(:focus) {
-  border-color: var(--primary-color-7);
-}
+.md-area[data-style="ghost"] { background-color: transparent; }
+.md-area[data-style="ghost"]:hover { background-color: var(--primary-color-5); color: var(--secondary-color-1); }
+.md-area[data-style="ghost"]:focus { border-color: var(--focused-border-color); }
 
-.md-area[data-style="outline"]:focus {
-  border-color: var(--focused-border-color);
-}
-
-/* ── Variant: Ghost ── */
-.md-area[data-style="ghost"] {
-  background-color: transparent;
-}
-
-.md-area[data-style="ghost"]:hover {
-  background-color: var(--primary-color-5);
-  color: var(--secondary-color-1);
-}
-
-.md-area[data-style="ghost"]:focus {
-  border-color: var(--focused-border-color);
-}
-
-/* ── Inline token styles ── */
+/* ── Token base ── */
 .md-token {
   transition: opacity 80ms ease-out;
 }
 
-.md-bold {
-  font-weight: 700;
-}
-
-.md-italic {
-  font-style: italic;
-}
-
-.md-bold-italic {
-  font-weight: 700;
-  font-style: italic;
-}
+/* ── Inline formatting ── */
+.md-bold       { font-weight: 700; }
+.md-italic     { font-style: italic; }
+.md-bold-italic { font-weight: 700; font-style: italic; }
 
 .md-code {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -103,13 +75,10 @@
   background: rgba(128, 128, 128, 0.15);
 }
 
-.md-strikethrough {
-  text-decoration: line-through;
-}
+.md-strikethrough { text-decoration: line-through; }
 
-.md-heading {
-  font-weight: 700;
-}
+/* ── Headings ── */
+.md-heading { font-weight: 700; display: block; margin: 0.2em 0; }
 .md-h1 { font-size: 1.8em; }
 .md-h2 { font-size: 1.5em; }
 .md-h3 { font-size: 1.25em; }
@@ -117,7 +86,82 @@
 .md-h5 { font-size: 1.05em; }
 .md-h6 { font-size: 1em; }
 
-/* Active token: cursor is inside, raw markdown shown */
+/* ── Links ── */
+.md-link {
+  color: var(--accent-color, #4a9eff);
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  cursor: pointer;
+  transition: text-decoration-color 120ms;
+}
+.md-link:hover { text-decoration-color: currentColor; }
+
+/* ── WikiLinks ── */
+.md-wikilink {
+  color: var(--wikilink-color, #7b68ee);
+  border-bottom: 1px dashed currentColor;
+  cursor: default;
+}
+.md-wikilink--linked {
+  cursor: pointer;
+}
+.md-wikilink--linked:hover {
+  border-bottom-style: solid;
+}
+
+/* ── Images ── */
+.md-image {
+  display: inline-block;
+  vertical-align: middle;
+}
+.md-image-img {
+  max-width: 100%;
+  max-height: 20em;
+  border-radius: 0.25rem;
+  display: block;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* ── Blockquote ── */
+.md-blockquote {
+  display: block;
+  padding-left: 0.85em;
+  color: var(--secondary-color-5);
+  font-style: italic;
+  position: relative;
+}
+.md-bq-bar {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--accent-color, #4a9eff);
+  opacity: 0.5;
+}
+
+/* ── List items ── */
+.md-list-item {
+  display: block;
+}
+.md-li-marker {
+  color: var(--secondary-color-5);
+  user-select: none;
+  margin-right: 0.15em;
+}
+
+/* ── Horizontal rule ── */
+.md-hr {
+  display: block;
+  height: 1px;
+  margin: 0.6em 0;
+  background: var(--primary-color-6, rgba(128, 128, 128, 0.3));
+  border: none;
+}
+
+/* ── Active token (cursor inside — raw markdown shown) ── */
 .md-active {
   color: var(--secondary-color-5, #888);
   border-radius: 0.15rem;
