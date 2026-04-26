@@ -161,9 +161,19 @@
   border: none;
 }
 
-/* ── Active token (cursor inside — raw markdown shown) ── */
-.md-active {
+/* ── Markdown markers (**, *, [[, ## etc.) ── */
+/* Always in the DOM so innerText == raw source; styled to read as decorations. */
+.md-marker {
+  opacity: 0.35;
+  font-weight: normal;
+  font-style: normal;
+  font-size: 0.88em;
   color: var(--secondary-color-5, #888);
-  border-radius: 0.15rem;
-  background: rgba(128, 128, 128, 0.08);
+  letter-spacing: 0;
+}
+
+/* Wikilink target (the part before | in [[target|display]]) */
+.md-wikilink-target {
+  opacity: 0.5;
+  color: var(--secondary-color-5, #888);
 }
