@@ -25,6 +25,9 @@ pub enum TokenKind {
     Blockquote,
     /// `- item` / `* item` / `1. item` — `content_range` starts after the marker.
     ListItem { ordered: bool, depth: u8 },
+    /// `- [ ] item` / `- [x] item` — `content_range` is the task text.
+    /// `bracket_pos` is the source byte position of the `[` character.
+    TaskItem { checked: bool, depth: u8, bracket_pos: usize },
     /// `---` / `***` / `___`
     HorizontalRule,
 }
@@ -85,6 +88,8 @@ pub fn tokenize(source: &str) -> Vec<Token> {
                 range: pos..line_end,
                 content_range: content_start..line_end,
             });
+        } else if let Some(token) = detect_task_item(line, pos, line_end) {
+            tokens.push(token);
         } else if let Some((ordered, depth, content_start)) = detect_list_item(line, pos) {
             tokens.push(Token {
                 kind: TokenKind::ListItem { ordered, depth },
@@ -183,6 +188,40 @@ fn detect_list_item(line: &str, pos: usize) -> Option<(bool, u8, usize)> {
 }
 
 // ── Inline tokenizer ─────────────────────────────────────────────────────────
+
+/// Detects `- [ ] text` / `- [x] text` lines (unordered list items only).
+/// Must be called before `detect_list_item` since it's more specific.
+fn detect_task_item(line: &str, pos: usize, line_end: usize) -> Option<Token> {
+    let (ordered, depth, content_start) = detect_list_item(line, pos)?;
+    if ordered {
+        return None;
+    }
+
+    let content_offset = content_start - pos;
+    let content = &line[content_offset..];
+
+    let (checked, text_start) = if content.starts_with("[ ] ") {
+        (false, content_start + 4)
+    } else if content.starts_with("[x] ") || content.starts_with("[X] ") {
+        (true, content_start + 4)
+    } else if content == "[ ]" {
+        (false, content_start + 3)
+    } else if content == "[x]" || content == "[X]" {
+        (true, content_start + 3)
+    } else {
+        return None;
+    };
+
+    Some(Token {
+        kind: TokenKind::TaskItem {
+            checked,
+            depth,
+            bracket_pos: content_start,
+        },
+        range: pos..line_end,
+        content_range: text_start..line_end,
+    })
+}
 
 pub fn tokenize_line(line: &str, line_offset: usize) -> Vec<Token> {
     let bytes = line.as_bytes();
@@ -617,6 +656,44 @@ mod tests {
     }
 
     #[test]
+    #[test]
+    fn task_item_unchecked() {
+        let src = "- [ ] buy milk";
+        let tokens = tokenize(src);
+        assert_eq!(tokens.len(), 1);
+        let TokenKind::TaskItem { checked: false, depth: 0, bracket_pos } = tokens[0].kind else {
+            panic!("expected unchecked TaskItem");
+        };
+        assert_eq!(&src[bracket_pos..bracket_pos + 3], "[ ]");
+        assert_eq!(tokens[0].display(src), "buy milk");
+        assert_eq!(tokens[0].raw(src), "- [ ] buy milk");
+    }
+
+    #[test]
+    fn task_item_checked() {
+        let src = "- [x] done";
+        let tokens = tokenize(src);
+        assert_eq!(tokens.len(), 1);
+        assert!(matches!(tokens[0].kind, TokenKind::TaskItem { checked: true, .. }));
+        assert_eq!(tokens[0].display(src), "done");
+    }
+
+    #[test]
+    fn task_item_nested() {
+        let src = "  - [ ] nested";
+        let tokens = tokenize(src);
+        assert_eq!(tokens.len(), 1);
+        assert!(matches!(tokens[0].kind, TokenKind::TaskItem { checked: false, depth: 1, .. }));
+    }
+
+    #[test]
+    fn task_item_does_not_steal_plain_list() {
+        // A plain list item starting with something other than [ ] stays ListItem
+        let src = "- regular item";
+        let tokens = tokenize(src);
+        assert!(matches!(tokens[0].kind, TokenKind::ListItem { .. }));
+    }
+
     fn ordered_list() {
         let src = "1. first\n2. second";
         let tokens = tokenize(src);

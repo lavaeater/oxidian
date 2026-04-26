@@ -35,13 +35,42 @@ fn next_editor_id() -> String {
 
 // ── JS helpers ────────────────────────────────────────────────────────────────
 
+// Sets up a mousedown capture-listener (once per element, guarded by a data
+// attribute) that records task-checkbox clicks before the click event fires.
+fn js_setup_tasks(id: &str) -> String {
+    format!(
+        r#"(function() {{
+    const el = document.getElementById({id:?});
+    if (!el || el.dataset.taskSetup) return;
+    el.dataset.taskSetup = '1';
+    el.addEventListener('mousedown', function(e) {{
+        const cb = e.target.closest('.md-task-checkbox');
+        if (cb) {{
+            e.preventDefault();
+            el._taskClick = {{
+                pos: parseInt(cb.dataset.pos),
+                checked: cb.dataset.checked === 'true'
+            }};
+        }}
+    }}, true);
+}})()"#
+    )
+}
+
 // Reads innerText and cursor offset together in one microtask, then sends
 // "cursor_offset\ntext" (split on the FIRST newline).
+// If a task-checkbox mousedown was recorded, sends "cb:pos:0or1" instead.
 fn js_read_state(id: &str) -> String {
     format!(
         r#"(function() {{
     const el = document.getElementById({id:?});
     if (!el) {{ dioxus.send("-1\n"); return; }}
+    if (el._taskClick) {{
+        const tc = el._taskClick;
+        el._taskClick = null;
+        dioxus.send('cb:' + tc.pos + ':' + (tc.checked ? '1' : '0'));
+        return;
+    }}
     const text = el.innerText;
     const sel = window.getSelection();
     let cursor = -1;
@@ -208,6 +237,29 @@ fn push_token_html(source: &str, token: &Token, out: &mut String) {
             out.push_str("</span>");
         }
 
+        TokenKind::TaskItem { checked, depth, bracket_pos } => {
+            let prefix_len = bracket_pos - token.range.start; // e.g. 2 for "- "
+            let indent = format!("{}em", *depth as f32 * 1.5);
+            let bracket_text = if *checked { "[x]" } else { "[ ]" };
+            out.push_str(&format!(
+                "<span class=\"md-token md-task-item\" style=\"padding-left:{indent}\">"
+            ));
+            // List prefix ("- ") as a muted marker
+            marker(&raw[..prefix_len], out);
+            // Checkbox span — contenteditable=false keeps cursor out of it.
+            // The literal "[ ] " / "[x] " text stays in the DOM so innerText
+            // always returns the raw markdown source.
+            out.push_str(&format!(
+                "<span class=\"md-task-checkbox\" contenteditable=\"false\" \
+                 data-pos=\"{}\" data-checked=\"{}\">{} </span>",
+                bracket_pos,
+                checked,
+                bracket_text,
+            ));
+            push_escaped(display, out);
+            out.push_str("</span>");
+        }
+
         TokenKind::HorizontalRule => {
             out.push_str("<span class=\"md-token md-hr\">");
             marker(raw, out);
@@ -314,6 +366,11 @@ pub fn MarkdownArea(
         tokens_to_html(&src, &tokens)
     });
 
+    // Set up the task-checkbox mousedown listener once per mount.
+    use_effect(move || {
+        document::eval(&js_setup_tasks(&id()));
+    });
+
     // After innerHTML is replaced (content changed), restore cursor position.
     let saved_cursor = cursor_pos();
     use_effect(move || {
@@ -342,8 +399,40 @@ pub fn MarkdownArea(
         });
     };
 
-    // onclick / onkeyup: update cursor_pos so restoration works after next
-    // content-driven re-render, but don't trigger a re-render themselves.
+    // onclick: handles both task-checkbox toggles and regular cursor sync.
+    let handle_click = move || {
+        let editor_id = id();
+        spawn(async move {
+            let Ok(payload) = document::eval(&js_read_state(&editor_id))
+                .join::<String>()
+                .await
+            else {
+                return;
+            };
+
+            if let Some(rest) = payload.strip_prefix("cb:") {
+                // Task checkbox was clicked — toggle [ ] ↔ [x] in source.
+                if let Some((pos_str, was_checked_str)) = rest.split_once(':') {
+                    if let Ok(bracket_pos) = pos_str.parse::<usize>() {
+                        let was_checked = was_checked_str == "1";
+                        let new_bracket = if was_checked { "[ ]" } else { "[x]" };
+                        let mut src = content.read().clone();
+                        if bracket_pos + 3 <= src.len() {
+                            src.replace_range(bracket_pos..bracket_pos + 3, new_bracket);
+                            content.set(src);
+                        }
+                    }
+                }
+            } else if let Some((cursor_str, _)) = payload.split_once('\n') {
+                let cursor = cursor_str.parse::<i64>().ok()
+                    .filter(|&c| c >= 0)
+                    .map(|c| c as usize);
+                cursor_pos.set(cursor);
+            }
+        });
+    };
+
+    // onkeyup: cursor sync only (no checkbox handling needed).
     let sync_cursor = move || {
         let editor_id = id();
         spawn(async move {
@@ -372,7 +461,7 @@ pub fn MarkdownArea(
             spellcheck: "false",
             dangerous_inner_html: "{rendered_html}",
             oninput: handle_input,
-            onclick: move |_: Event<MouseData>| sync_cursor(),
+            onclick: move |_: Event<MouseData>| handle_click(),
             onkeyup: move |_: Event<KeyboardData>| sync_cursor(),
             onfocus: move |e| { if let Some(cb) = onfocus { cb(e); } },
             onblur: move |e| {

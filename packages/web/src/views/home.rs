@@ -3,18 +3,21 @@ use ui::MarkdownArea;
 
 const SAMPLE: &str = "# Welcome to Oxidian
 
-This is a **hybrid markdown editor**. Click on any formatted text to edit the raw markdown, then click away to see it rendered again.
+This is a **hybrid markdown editor**. The markdown syntax peeks through at low opacity while you edit.
 
-## Try these
+## Formatting
 
 - *Italic*, **bold**, ***bold italic***
 - ~~strikethrough~~, `inline code`
 - [[WikiLink]] or [[target|custom label]]
 - [Dioxus](https://dioxuslabs.com)
-- A list item below:
 
-1. First ordered item
-2. Second ordered item
+## Tasks
+
+- [ ] Buy milk
+- [x] Build an editor
+- [ ] Add GitHub login
+  - [ ] Nested task
 
 > This is a blockquote
 

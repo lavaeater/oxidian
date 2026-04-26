@@ -161,6 +161,55 @@
   border: none;
 }
 
+/* ── Task items ── */
+.md-task-item {
+  display: block;
+}
+
+/* The [ ] / [x] span — text stays in DOM for innerText, visually styled as a checkbox. */
+.md-task-checkbox {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  user-select: none;
+  width: 1.15em;
+  height: 1.15em;
+  vertical-align: middle;
+  margin-right: 0.35em;
+  position: relative;
+  /* Hide the raw [ ] / [x] characters visually */
+  font-size: 0;
+  line-height: 0;
+  color: transparent;
+}
+.md-task-checkbox::before {
+  content: '';
+  position: absolute;
+  width: 0.85rem;
+  height: 0.85rem;
+  border: 1.5px solid var(--secondary-color-5, #888);
+  border-radius: 3px;
+  background: transparent;
+  transition: border-color 120ms, background 120ms;
+}
+.md-task-checkbox:hover::before {
+  border-color: var(--accent-color, #4a9eff);
+}
+.md-task-checkbox[data-checked="true"]::before {
+  background: var(--accent-color, #4a9eff);
+  border-color: var(--accent-color, #4a9eff);
+}
+.md-task-checkbox[data-checked="true"]::after {
+  content: '';
+  position: absolute;
+  width: 0.28rem;
+  height: 0.5rem;
+  border-right: 2px solid white;
+  border-bottom: 2px solid white;
+  transform: rotate(40deg) translate(-1px, -2px);
+}
+
 /* ── Markdown markers (**, *, [[, ## etc.) ── */
 /* Always in the DOM so innerText == raw source; styled to read as decorations. */
 .md-marker {
