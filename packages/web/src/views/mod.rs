@@ -1,4 +1,5 @@
 mod graph;
+mod properties;
 mod settings;
 mod toolbar;
 mod vault;

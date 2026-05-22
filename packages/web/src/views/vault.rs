@@ -5,6 +5,7 @@ use vault::{FileMeta, GithubConfig, SearchResult};
 use crate::state;
 use crate::wikilink_index::WikiLinkIndex;
 use super::graph::GraphView;
+use super::properties::PropertiesPanel;
 use super::toolbar::FormattingToolbar;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -369,6 +370,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                             }
                         }
                     }
+                    PropertiesPanel { content }
                     FormattingToolbar { content }
                     MarkdownArea {
                         content,

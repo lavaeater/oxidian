@@ -298,6 +298,50 @@ kbd {
 .settings-btn:hover:not(:disabled) { background: var(--accent); }
 .settings-btn:disabled { opacity: 0.5; cursor: default; }
 
+/* ── Properties panel ── */
+.props-panel {
+  border-bottom: 1px solid var(--border);
+  background: var(--bg2);
+  flex-shrink: 0;
+}
+.props-empty {
+  padding: 6px 24px;
+  border-bottom: 1px solid var(--border);
+}
+.props-add-btn {
+  background: none; border: none; color: var(--text-muted); font-size: 0.82rem;
+  cursor: pointer; padding: 4px 0; transition: color 80ms;
+}
+.props-add-btn:hover { color: var(--accent); }
+.props-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 5px 24px; cursor: pointer; user-select: none;
+}
+.props-title { font-size: 0.78rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); }
+.props-toggle { font-size: 0.7rem; color: var(--text-muted); }
+.props-body { padding: 4px 24px 8px; display: flex; flex-direction: column; gap: 3px; }
+.props-row { display: flex; align-items: center; gap: 6px; }
+.props-key {
+  width: 120px; min-width: 80px; background: var(--bg3); border: 1px solid transparent;
+  border-radius: 4px; padding: 3px 6px; color: var(--text-muted); font-size: 0.82rem; font-family: ui-monospace, monospace;
+  outline: none; transition: border-color 100ms;
+}
+.props-val {
+  flex: 1; background: var(--bg3); border: 1px solid transparent;
+  border-radius: 4px; padding: 3px 6px; color: var(--text); font-size: 0.82rem; font-family: inherit;
+  outline: none; transition: border-color 100ms;
+}
+.props-key:focus, .props-val:focus { border-color: var(--accent); }
+.props-key::placeholder, .props-val::placeholder { color: var(--text-muted); opacity: 0.5; }
+.props-del {
+  background: none; border: none; color: var(--text-muted); font-size: 1rem;
+  cursor: pointer; padding: 0 2px; line-height: 1; transition: color 80ms;
+}
+.props-del:hover { color: var(--danger); }
+.props-new-row .props-key, .props-new-row .props-val { opacity: 0.6; }
+.props-new-row:focus-within .props-key,
+.props-new-row:focus-within .props-val { opacity: 1; }
+
 /* ── Formatting toolbar ── */
 .formatting-toolbar {
   display: flex;
