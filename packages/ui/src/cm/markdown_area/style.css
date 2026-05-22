@@ -78,12 +78,11 @@
   opacity: 0;
   font-weight: normal;
   font-style: normal;
-  color: var(--secondary-color-5, #888);
   letter-spacing: 0;
 }
 .md-line--active .md-marker {
-  font-size: 0.88em;
-  opacity: 0.55;
+  font-size: 1em;
+  opacity: 1;
 }
 
 /* ── Inline formatting ── */
@@ -244,7 +243,7 @@
 }
 .md-line--active .md-wikilink-target {
   font-size: 1em;
-  opacity: 0.5;
+  opacity: 1;
 }
 
 /* ── Fenced code blocks ── */
