@@ -183,7 +183,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                 window._oxidianKeys = true;
                 window._oxidianCmd = '';
                 document.addEventListener('keydown', function(e) {
-                    if ((e.ctrlKey || e.metaKey) && e.key === 'o') {
+                    if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
                         e.preventDefault(); window._oxidianCmd = 'switcher';
                     }
                     if ((e.ctrlKey || e.metaKey) && e.key === 's') {
@@ -234,7 +234,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                     div { class: "sidebar-header-actions",
                         button {
                             class: "sidebar-icon-btn",
-                            title: "Quick open (Ctrl+O)",
+                            title: "Quick open (Ctrl+K)",
                             onclick: move |_| show_switcher.set(true),
                             "🔍"
                         }
@@ -290,7 +290,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                     div { class: "editor-empty",
                         p { "Select a file from the sidebar to start editing." }
                         p { class: "editor-empty-hint",
-                            "Tip: press " kbd { "Ctrl+O" } " to open the quick switcher."
+                            "Tip: press " kbd { "Ctrl+K" } " to open the quick switcher."
                         }
                         p { class: "editor-empty-sub",
                             "Connected to "
@@ -326,6 +326,13 @@ fn QuickSwitcher(
     on_close: EventHandler<()>,
 ) -> Element {
     let mut query = use_signal(String::new);
+
+    // Focus the input on mount (autofocus doesn't work on dynamic elements).
+    use_effect(move || {
+        document::eval(
+            "requestAnimationFrame(() => { document.querySelector('.qs-input')?.focus(); });"
+        );
+    });
 
     // Pre-compute owned display data to avoid borrow-in-rsx issues.
     let q = query.read().to_lowercase();
