@@ -4,6 +4,60 @@ use vault::{FileMeta, GithubConfig};
 
 use crate::state;
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+async fn sleep_ms(ms: u32) {
+    let _ = document::eval(&format!(
+        "await new Promise(r => setTimeout(r, {ms})); dioxus.send(1);"
+    ))
+    .join::<i32>()
+    .await;
+}
+
+/// True if every char of `needle` appears in order in `haystack`.
+fn fuzzy_match(haystack: &str, needle: &str) -> bool {
+    let mut it = haystack.chars();
+    needle.chars().all(|nc| it.any(|hc| hc == nc))
+}
+
+/// Score a fuzzy match: higher = better. Used to rank quick-switcher results.
+fn fuzzy_score(path: &str, needle: &str) -> usize {
+    let name = path.rsplit('/').next().unwrap_or(path).to_lowercase();
+    let q = needle.to_lowercase();
+    if name == q { return 1000; }
+    if name.starts_with(&q) { return 500; }
+    if name.contains(&q) { return 200; }
+    // Count consecutive matching chars as a tiebreaker.
+    let mut score = 0usize;
+    let mut last = 0usize;
+    for nc in q.chars() {
+        if let Some(pos) = name[last..].find(nc) {
+            score += if pos == 0 { 10 } else { 1 };
+            last += pos + nc.len_utf8();
+        }
+    }
+    score
+}
+
+/// Parse heading lines (# / ## / ...) from markdown content.
+fn extract_headings(content: &str) -> Vec<(u8, String)> {
+    content
+        .lines()
+        .filter_map(|line| {
+            let level = line.bytes().take_while(|&b| b == b'#').count();
+            if level >= 1 && level <= 6 && line.as_bytes().get(level) == Some(&b' ') {
+                Some((level as u8, line[level + 1..].trim().to_string()))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn word_count(text: &str) -> usize {
+    text.split_whitespace().count()
+}
+
 // ── Save status ───────────────────────────────────────────────────────────────
 
 #[derive(Clone, PartialEq)]
@@ -34,15 +88,6 @@ impl SaveStatus {
     }
 }
 
-// Sleep helper via JS setTimeout — works in WASM without extra deps.
-async fn sleep_ms(ms: u32) {
-    let _ = document::eval(&format!(
-        "await new Promise(r => setTimeout(r, {ms})); dioxus.send(1);"
-    ))
-    .join::<i32>()
-    .await;
-}
-
 // ── VaultBrowser ──────────────────────────────────────────────────────────────
 
 #[component]
@@ -55,8 +100,8 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
     let mut loading_list = use_signal(|| true);
     let mut loading_file = use_signal(|| false);
     let mut save_status: Signal<SaveStatus> = use_signal(|| SaveStatus::Idle);
-    // Snapshot of content at last load or save — used to detect unsaved changes.
     let mut saved_content: Signal<String> = use_signal(String::new);
+    let mut show_switcher = use_signal(|| false);
 
     // Load file list on mount.
     let cfg = config.clone();
@@ -96,7 +141,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
         });
     });
 
-    // Mark unsaved whenever content diverges from the last save snapshot.
+    // Mark unsaved when content diverges from the last save snapshot.
     use_effect(move || {
         let current = content();
         if !loading_file() && !current.is_empty() && current != saved_content() {
@@ -104,30 +149,22 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
         }
     });
 
-    // Auto-save loop: every 2 seconds, if there are unsaved changes, commit.
+    // Auto-save every 2 seconds when there are unsaved changes.
     let cfg = config.clone();
     use_effect(move || {
         let cfg = cfg.clone();
         spawn(async move {
             loop {
                 sleep_ms(2000).await;
-
-                // Only save if there are actual unsaved changes.
-                if save_status() != SaveStatus::Unsaved {
-                    continue;
-                }
+                if save_status() != SaveStatus::Unsaved { continue; }
                 let Some(path) = active_path() else { continue };
                 let sha = file_sha();
                 let current = content();
-                if sha.is_empty() || current == saved_content() {
-                    continue;
-                }
+                if sha.is_empty() || current == saved_content() { continue; }
 
                 save_status.set(SaveStatus::Saving);
                 let name = path.rsplit('/').next().unwrap_or(&path).to_string();
-                let message = format!("Update {name}");
-
-                match vault::github::write_file(&cfg, &path, &current, &sha, &message).await {
+                match vault::github::write_file(&cfg, &path, &current, &sha, &format!("Update {name}")).await {
                     Ok(new_sha) => {
                         file_sha.set(new_sha);
                         saved_content.set(current);
@@ -139,12 +176,53 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
         });
     });
 
+    // Global keyboard shortcuts: poll a JS global every 150 ms.
+    use_effect(move || {
+        document::eval(r#"
+            if (!window._oxidianKeys) {
+                window._oxidianKeys = true;
+                window._oxidianCmd = '';
+                document.addEventListener('keydown', function(e) {
+                    if ((e.ctrlKey || e.metaKey) && e.key === 'o') {
+                        e.preventDefault(); window._oxidianCmd = 'switcher';
+                    }
+                    if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+                        e.preventDefault(); // auto-save handles this
+                    }
+                    if (e.key === 'Escape') {
+                        window._oxidianCmd = 'escape';
+                    }
+                });
+            }
+        "#);
+        spawn(async move {
+            loop {
+                sleep_ms(150).await;
+                let cmd = document::eval(
+                    "const c = window._oxidianCmd||''; window._oxidianCmd=''; dioxus.send(c);"
+                )
+                .join::<String>()
+                .await
+                .unwrap_or_default();
+                match cmd.as_str() {
+                    "switcher" => show_switcher.set(true),
+                    "escape"   => show_switcher.set(false),
+                    _ => {}
+                }
+            }
+        });
+    });
+
+    // Pre-compute values that can't borrow across rsx!.
     let status_class = save_status.read().css_class().to_string();
     let status_label = save_status.read().label().to_string();
     let status_title = match &*save_status.read() {
         SaveStatus::Error(e) => e.clone(),
         _ => String::new(),
     };
+    let words = word_count(&content.read());
+    let headings = extract_headings(&content.read());
+    let has_file = active_path.read().is_some();
 
     rsx! {
         div { class: "app-layout",
@@ -153,14 +231,19 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
             aside { class: "sidebar",
                 div { class: "sidebar-header",
                     span { class: "sidebar-title", "Oxidian" }
-                    button {
-                        class: "sidebar-settings-btn",
-                        title: "Disconnect vault",
-                        onclick: move |_| {
-                            state::clear_config();
-                            on_logout(());
-                        },
-                        "⚙"
+                    div { class: "sidebar-header-actions",
+                        button {
+                            class: "sidebar-icon-btn",
+                            title: "Quick open (Ctrl+O)",
+                            onclick: move |_| show_switcher.set(true),
+                            "🔍"
+                        }
+                        button {
+                            class: "sidebar-icon-btn",
+                            title: "Disconnect vault",
+                            onclick: move |_| { state::clear_config(); on_logout(()); },
+                            "⚙"
+                        }
                     }
                 }
 
@@ -177,6 +260,11 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                         on_select: move |path: String| active_path.set(Some(path)),
                     }
                 }
+
+                // Outline pane — shown when a file with headings is open.
+                if has_file && !headings.is_empty() {
+                    OutlinePane { headings }
+                }
             }
 
             // ── Editor pane ─────────────────────────────────────────────────
@@ -184,10 +272,13 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                 if let Some(ref path) = active_path() {
                     div { class: "editor-titlebar",
                         span { class: "editor-filename", "{path}" }
-                        span {
-                            class: "{status_class}",
-                            title: "{status_title}",
-                            "{status_label}"
+                        div { class: "editor-meta",
+                            span { class: "word-count", "{words} words" }
+                            span {
+                                class: "{status_class}",
+                                title: "{status_title}",
+                                "{status_label}"
+                            }
                         }
                     }
                     if loading_file() {
@@ -198,6 +289,9 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                 } else {
                     div { class: "editor-empty",
                         p { "Select a file from the sidebar to start editing." }
+                        p { class: "editor-empty-hint",
+                            "Tip: press " kbd { "Ctrl+O" } " to open the quick switcher."
+                        }
                         p { class: "editor-empty-sub",
                             "Connected to "
                             strong { "{config.owner}/{config.repo}" }
@@ -205,6 +299,107 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                             code { "{config.branch}" }
                         }
                     }
+                }
+            }
+
+            // ── Quick Switcher modal ─────────────────────────────────────────
+            if show_switcher() {
+                QuickSwitcher {
+                    files: files.read().clone(),
+                    on_select: move |path: String| {
+                        active_path.set(Some(path));
+                        show_switcher.set(false);
+                    },
+                    on_close: move |_| show_switcher.set(false),
+                }
+            }
+        }
+    }
+}
+
+// ── Quick Switcher ────────────────────────────────────────────────────────────
+
+#[component]
+fn QuickSwitcher(
+    files: Vec<FileMeta>,
+    on_select: EventHandler<String>,
+    on_close: EventHandler<()>,
+) -> Element {
+    let mut query = use_signal(String::new);
+
+    // Pre-compute owned display data to avoid borrow-in-rsx issues.
+    let q = query.read().to_lowercase();
+    let first_path: Option<String>;
+    let items: Vec<(String, String, String)> = {
+        let mut v: Vec<_> = if q.is_empty() {
+            files.iter().map(|f| (0usize, f)).take(8).collect()
+        } else {
+            let mut ranked: Vec<_> = files
+                .iter()
+                .filter(|f| fuzzy_match(&f.path.to_lowercase(), &q))
+                .map(|f| (fuzzy_score(&f.path, &q), f))
+                .collect();
+            ranked.sort_by(|a, b| b.0.cmp(&a.0));
+            ranked.truncate(8);
+            ranked
+        };
+        first_path = v.first().map(|(_, f)| f.path.clone());
+        v.drain(..).map(|(_, f)| (f.path.clone(), f.name().to_string(), f.dir().to_string())).collect()
+    };
+
+    rsx! {
+        div {
+            class: "qs-overlay",
+            onclick: move |_| on_close(()),
+            div {
+                class: "qs-modal",
+                onclick: move |e| e.stop_propagation(),
+                input {
+                    class: "qs-input",
+                    placeholder: "Go to file…",
+                    autofocus: true,
+                    value: "{query}",
+                    oninput: move |e| query.set(e.value()),
+                    onkeydown: move |e| {
+                        if e.key() == Key::Escape { on_close(()); }
+                        if e.key() == Key::Enter {
+                            if let Some(ref p) = first_path { on_select(p.clone()); }
+                        }
+                    },
+                }
+                if items.is_empty() {
+                    div { class: "qs-empty", "No matching files" }
+                } else {
+                    div { class: "qs-results",
+                        for (path, name, dir) in items {
+                            div {
+                                class: "qs-item",
+                                onclick: move |_| on_select(path.clone()),
+                                span { class: "qs-item-name", "{name}" }
+                                if !dir.is_empty() {
+                                    span { class: "qs-item-dir", "{dir}" }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ── Outline pane ──────────────────────────────────────────────────────────────
+
+#[component]
+fn OutlinePane(headings: Vec<(u8, String)>) -> Element {
+    rsx! {
+        div { class: "outline-pane",
+            div { class: "outline-title", "Outline" }
+            for (level, text) in &headings {
+                div {
+                    class: "outline-item",
+                    style: "padding-left: {(*level as usize - 1) * 12}px",
+                    "{text}"
                 }
             }
         }

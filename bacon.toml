@@ -7,7 +7,7 @@
 # You may check the current default at
 #   https://github.com/Canop/bacon/blob/main/defaults/default-bacon.toml
 
-default_job = "check"
+default_job = "clippy-client"
 env.CARGO_TERM_COLOR = "always"
 
 [jobs.check]
@@ -18,26 +18,14 @@ need_stdout = false
 command = ["cargo", "check", "--all-targets"]
 need_stdout = false
 
-# Run clippy on the default target
-[jobs.clippy]
-command = ["cargo", "clippy"]
+[jobs.clippy-server]
+command = ["cargo", "clippy", "--package", "web", "--features", "server"]
 need_stdout = false
 
-# Run clippy on all targets
-# To disable some lints, you may change the job this way:
-#    [jobs.clippy-all]
-#    command = [
-#        "cargo", "clippy",
-#        "--all-targets",
-#    	 "--",
-#    	 "-A", "clippy::bool_to_int_with_if",
-#    	 "-A", "clippy::collapsible_if",
-#    	 "-A", "clippy::derive_partial_eq_without_eq",
-#    ]
-# need_stdout = false
-[jobs.clippy-all]
-command = ["cargo", "clippy", "--all-targets"]
+[jobs.clippy-client]
+command = ["cargo", "clippy", "--package", "web", "--features", "web"]
 need_stdout = false
+
 
 # Run clippy in pedantic mode
 # The 'dismiss' feature may come handy
@@ -126,4 +114,5 @@ allow_warnings = true
 # should go in your personal global prefs.toml file instead.
 [keybindings]
 # alt-m = "job:my-job"
-c = "job:clippy-all" # comment this to have 'c' run clippy on only the default target
+c = "job:clippy-client" # comment this to have 'c' run clippy on only the default target
+s = "job:clippy-server" # comment this to have 'c' run clippy on only the default target
