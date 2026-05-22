@@ -549,6 +549,33 @@ kbd {
 .qs-item-name { font-size: 0.9rem; color: var(--text); }
 .qs-item-dir  { font-size: 0.78rem; color: var(--text-muted); }
 
+/* ── Slash command menu ── */
+.slash-overlay {
+  position: fixed; inset: 0; z-index: 200;
+  pointer-events: none; /* only the menu itself captures clicks */
+}
+.slash-menu {
+  position: fixed;
+  bottom: 40%;    /* rough centre — in a real app we'd position near cursor */
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.45);
+  min-width: 280px;
+  pointer-events: all;
+}
+.slash-item {
+  display: flex; align-items: baseline; gap: 10px;
+  padding: 8px 14px; cursor: pointer;
+  transition: background 80ms;
+}
+.slash-item:hover { background: var(--bg3); }
+.slash-name { font-size: 0.9rem; color: var(--text); min-width: 90px; }
+.slash-desc { font-size: 0.8rem; color: var(--text-muted); }
+
 /* ── Backlinks panel ── */
 .backlinks-panel { padding: 4px 0; }
 

@@ -1,6 +1,7 @@
 mod graph;
 mod properties;
 mod settings;
+mod slash;
 mod toolbar;
 mod vault;
 

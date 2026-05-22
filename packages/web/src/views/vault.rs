@@ -6,6 +6,7 @@ use crate::state;
 use crate::wikilink_index::WikiLinkIndex;
 use super::graph::GraphView;
 use super::properties::PropertiesPanel;
+use super::slash::{SlashMenu, JS_SLASH_QUERY, js_apply_slash};
 use super::toolbar::FormattingToolbar;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -101,6 +102,8 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
     let mut show_new_file = use_signal(|| false);
     let mut new_file_result: Signal<Option<String>> = use_signal(|| None);
     let mut index: Signal<WikiLinkIndex> = use_signal(WikiLinkIndex::new);
+    // Slash command query: Some("query") when `/query` is at cursor, None otherwise.
+    let mut slash_query: Signal<Option<String>> = use_signal(|| None);
 
     // Load file list and bookmarks on mount.
     let cfg = config.clone();
@@ -171,6 +174,22 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                         save_status.set(SaveStatus::Saved);
                     }
                     Err(e) => save_status.set(SaveStatus::Error(e.to_string())),
+                }
+            }
+        });
+    });
+
+    // Poll for slash command query every 150ms when a file is open.
+    use_effect(move || {
+        spawn(async move {
+            loop {
+                sleep_ms(150).await;
+                if active_path().is_none() { slash_query.set(None); continue; }
+                let q = document::eval(JS_SLASH_QUERY)
+                    .join::<String>().await.unwrap_or_default();
+                // Only show menu when user has typed at least `/`
+                if active_path().is_some() {
+                    slash_query.set(Some(q));
                 }
             }
         });
@@ -398,6 +417,23 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                         show_switcher.set(false);
                     },
                     on_close: move |_| show_switcher.set(false),
+                }
+            }
+
+            // ── Slash command menu ───────────────────────────────────────────
+            if let Some(ref q) = slash_query() {
+                if !q.is_empty() || slash_query().as_deref() == Some("") {
+                    // Only show if the query came from a `/`
+                    SlashMenu {
+                        query: q.clone(),
+                        on_select: move |insert: String| {
+                            let query_len = slash_query().unwrap_or_default().len();
+                            slash_query.set(None);
+                            // Apply via JS: replace `/query` with the snippet
+                            document::eval(&js_apply_slash(&insert, 1 + query_len));
+                        },
+                        on_close: move |_| slash_query.set(None),
+                    }
                 }
             }
 
