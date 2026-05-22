@@ -12,7 +12,7 @@ pub struct Link {
 }
 
 /// The index: a list of all discovered links.
-#[derive(Clone, Default)]
+#[derive(Clone, Default, PartialEq)]
 pub struct WikiLinkIndex {
     pub links: Vec<Link>,
     /// Paths whose content has been indexed.

@@ -258,18 +258,11 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                 }
 
                 div { class: "panel-tabs",
-                    button {
-                        class: if panel() == Panel::Files { "panel-tab panel-tab--active" } else { "panel-tab" },
-                        onclick: move |_| panel.set(Panel::Files), title: "Files", "📁"
-                    }
-                    button {
-                        class: if panel() == Panel::Search { "panel-tab panel-tab--active" } else { "panel-tab" },
-                        onclick: move |_| panel.set(Panel::Search), title: "Search", "🔍"
-                    }
-                    button {
-                        class: if panel() == Panel::Bookmarks { "panel-tab panel-tab--active" } else { "panel-tab" },
-                        onclick: move |_| panel.set(Panel::Bookmarks), title: "Bookmarks", "🔖"
-                    }
+                    button { class: if panel() == Panel::Files { "panel-tab panel-tab--active" } else { "panel-tab" }, onclick: move |_| panel.set(Panel::Files), title: "Files", "📁" }
+                    button { class: if panel() == Panel::Search { "panel-tab panel-tab--active" } else { "panel-tab" }, onclick: move |_| panel.set(Panel::Search), title: "Search", "🔍" }
+                    button { class: if panel() == Panel::Backlinks { "panel-tab panel-tab--active" } else { "panel-tab" }, onclick: move |_| panel.set(Panel::Backlinks), title: "Backlinks", "↩" }
+                    button { class: if panel() == Panel::Graph { "panel-tab panel-tab--active" } else { "panel-tab" }, onclick: move |_| panel.set(Panel::Graph), title: "Graph", "◉" }
+                    button { class: if panel() == Panel::Bookmarks { "panel-tab panel-tab--active" } else { "panel-tab" }, onclick: move |_| panel.set(Panel::Bookmarks), title: "Bookmarks", "🔖" }
                 }
 
                 div { class: "panel-content",
@@ -302,6 +295,31 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                                     active_path.set(Some(path));
                                     show_switcher.set(false);
                                 },
+                            }
+                        },
+                        Panel::Backlinks => rsx! {
+                            BacklinksPanel {
+                                active: active_path.read().clone(),
+                                backlinks: {
+                                    let idx = index.read();
+                                    active_path.read().as_ref().map(|p| idx.backlinks(p).into_iter().map(|s| s.to_string()).collect::<Vec<_>>()).unwrap_or_default()
+                                },
+                                on_select: move |path: String| {
+                                    active_path.set(Some(path));
+                                    show_switcher.set(false);
+                                },
+                            }
+                        },
+                        Panel::Graph => rsx! {
+                            GraphPanel {
+                                files: files.read().iter().map(|f| f.path.clone()).collect::<Vec<_>>(),
+                                active: active_path.read().clone(),
+                                index: index.read().clone(),
+                                on_select: move |path: String| {
+                                    active_path.set(Some(path));
+                                    show_switcher.set(false);
+                                },
+                                config: cfg_search.clone(),
                             }
                         },
                         Panel::Bookmarks => rsx! {
@@ -654,6 +672,86 @@ fn QuickSwitcher(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+// ── Backlinks panel ───────────────────────────────────────────────────────────
+
+#[component]
+fn BacklinksPanel(
+    active: Option<String>,
+    backlinks: Vec<String>,
+    on_select: EventHandler<String>,
+) -> Element {
+    rsx! {
+        div { class: "backlinks-panel",
+            div { class: "outline-title",
+                if let Some(ref p) = active {
+                    "Linked to "{p.rsplit('/').next().unwrap_or(p)}""
+                } else {
+                    "Backlinks"
+                }
+            }
+            if backlinks.is_empty() {
+                div { class: "sidebar-status", "No notes link here yet." }
+            } else {
+                for path in &backlinks {
+                    {
+                        let p = path.clone();
+                        let name = path.rsplit('/').next().unwrap_or(path).to_string();
+                        rsx! {
+                            div {
+                                class: "file-entry",
+                                onclick: move |_| on_select(p.clone()),
+                                "← {name}"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ── Graph panel ───────────────────────────────────────────────────────────────
+
+#[component]
+fn GraphPanel(
+    files: Vec<String>,
+    active: Option<String>,
+    index: WikiLinkIndex,
+    on_select: EventHandler<String>,
+    config: GithubConfig,
+) -> Element {
+    let indexed = index.indexed.len();
+    let total = files.len();
+    let edges = index.edges(&files);
+
+    let connected: std::collections::HashSet<String> = edges.iter()
+        .flat_map(|(s, t)| [s.clone(), t.clone()])
+        .collect();
+
+    let nodes: Vec<(String, String, bool)> = files.iter()
+        .filter(|f| active.as_deref() == Some(f.as_str()) || connected.contains(*f))
+        .map(|f| {
+            let label = f.rsplit('/').next().unwrap_or(f).trim_end_matches(".md").to_string();
+            let is_active = active.as_deref() == Some(f.as_str());
+            (f.clone(), label, is_active)
+        })
+        .collect();
+
+    rsx! {
+        div { class: "graph-panel",
+            div { class: "graph-toolbar",
+                span { class: "outline-title", "Graph" }
+                span { class: "save-status", "{indexed}/{total} indexed" }
+            }
+            if nodes.is_empty() {
+                div { class: "sidebar-status", "Open linked notes to see connections." }
+            } else {
+                GraphView { nodes, edges, on_select }
             }
         }
     }
