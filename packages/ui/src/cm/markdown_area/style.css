@@ -62,6 +62,24 @@
   transition: opacity 80ms ease-out;
 }
 
+/* Markers: zero-size and invisible by default.
+   font-size: 0 collapses them to zero width so formatted text flows without gaps.
+   innerText still includes zero-size text (unlike display:none), preserving raw source. */
+.md-marker {
+  font-size: 0;
+  line-height: 0;
+  opacity: 0;
+  font-weight: normal;
+  font-style: normal;
+  color: var(--secondary-color-5, #888);
+  letter-spacing: 0;
+  transition: font-size 150ms ease-out, opacity 150ms ease-out;
+}
+.md-token--active .md-marker {
+  font-size: 0.88em;
+  opacity: 0.55;
+}
+
 /* ── Inline formatting ── */
 .md-bold       { font-weight: 700; }
 .md-italic     { font-style: italic; }
@@ -173,10 +191,11 @@
   justify-content: center;
   cursor: pointer;
   user-select: none;
-  width: 1.15em;
-  height: 1.15em;
+  /* Use rem so dimensions don't collapse when font-size: 0 is set */
+  width: 1.15rem;
+  height: 1.15rem;
   vertical-align: middle;
-  margin-right: 0.35em;
+  margin-right: 0.35rem;
   position: relative;
   /* Hide the raw [ ] / [x] characters visually */
   font-size: 0;
@@ -210,19 +229,36 @@
   transform: rotate(40deg) translate(-1px, -2px);
 }
 
-/* ── Markdown markers (**, *, [[, ## etc.) ── */
-/* Always in the DOM so innerText == raw source; styled to read as decorations. */
-.md-marker {
-  opacity: 0.35;
-  font-weight: normal;
-  font-style: normal;
-  font-size: 0.88em;
+/* Wikilink target (the part before | in [[target|display]]) — collapses like a marker */
+.md-wikilink-target {
+  font-size: 0;
+  line-height: 0;
+  opacity: 0;
   color: var(--secondary-color-5, #888);
-  letter-spacing: 0;
+  transition: font-size 150ms ease-out, opacity 150ms ease-out;
+}
+.md-token--active .md-wikilink-target {
+  font-size: 1em;
+  opacity: 0.5;
 }
 
-/* Wikilink target (the part before | in [[target|display]]) */
-.md-wikilink-target {
-  opacity: 0.5;
+/* ── Fenced code blocks ── */
+.md-code-fence {
+  display: block;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85em;
   color: var(--secondary-color-5, #888);
+  padding: 0.1em 0;
+}
+.md-code-lang {
+  color: var(--accent-color, #4a9eff);
+  opacity: 0.7;
+}
+.md-code-block {
+  display: block;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9em;
+  background: rgba(128, 128, 128, 0.08);
+  padding: 0.05em 0.5em;
+  margin: 0 -0.5em;
 }

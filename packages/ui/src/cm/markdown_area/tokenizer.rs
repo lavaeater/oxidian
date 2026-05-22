@@ -30,6 +30,11 @@ pub enum TokenKind {
     TaskItem { checked: bool, depth: u8, bracket_pos: usize },
     /// `---` / `***` / `___`
     HorizontalRule,
+    /// Opening or closing ` ``` ` fence line. `lang_range` is set on the
+    /// opening fence only and points at the language specifier (e.g. `javascript`).
+    CodeFence { lang_range: Option<Range<usize>> },
+    /// A content line inside a ` ``` ` fence.
+    CodeBlock,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -61,6 +66,7 @@ impl Token {
 pub fn tokenize(source: &str) -> Vec<Token> {
     let mut tokens = Vec::new();
     let mut pos = 0;
+    let mut in_code_fence = false;
 
     while pos < source.len() {
         let line_end = source[pos..]
@@ -69,9 +75,26 @@ pub fn tokenize(source: &str) -> Vec<Token> {
             .unwrap_or(source.len());
         let line = &source[pos..line_end];
 
-        // Block-level detections (whole-line tokens) ────────────────────────
-
-        if is_horizontal_rule(line) {
+        if line.starts_with("```") {
+            let is_opening = !in_code_fence;
+            in_code_fence = !in_code_fence;
+            let lang_range = if is_opening && line.len() > 3 {
+                Some(pos + 3..line_end)
+            } else {
+                None
+            };
+            tokens.push(Token {
+                kind: TokenKind::CodeFence { lang_range },
+                range: pos..line_end,
+                content_range: pos + 3..line_end,
+            });
+        } else if in_code_fence {
+            tokens.push(Token {
+                kind: TokenKind::CodeBlock,
+                range: pos..line_end,
+                content_range: pos..line_end,
+            });
+        } else if is_horizontal_rule(line) {
             tokens.push(Token {
                 kind: TokenKind::HorizontalRule,
                 range: pos..line_end,
@@ -655,7 +678,6 @@ mod tests {
         assert_eq!(tokens[1].display(src), "item two");
     }
 
-    #[test]
     #[test]
     fn task_item_unchecked() {
         let src = "- [ ] buy milk";

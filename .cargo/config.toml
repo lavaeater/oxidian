@@ -1,0 +1,4 @@
+[build]
+# dx serve injects itself as RUSTC_WRAPPER; sccache on top causes a double-wrap
+# that fails when sccache probes the "compiler" with a C test file.
+rustc-wrapper = ""

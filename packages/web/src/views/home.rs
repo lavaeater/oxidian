@@ -21,6 +21,11 @@ This is a **hybrid markdown editor**. The markdown syntax peeks through at low o
 
 > This is a blockquote
 
+```javascript
+const x = 1;
+console.log(x);
+```
+
 ---
 
 Start typing to try it out!";

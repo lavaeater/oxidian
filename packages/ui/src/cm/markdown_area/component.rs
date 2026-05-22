@@ -1,6 +1,6 @@
 use dioxus::prelude::*;
 
-use super::tokenizer::{tokenize, Token, TokenKind};
+use super::tokenizer::{tokenize, tokenize_line, Token, TokenKind};
 
 // ── Variant ───────────────────────────────────────────────────────────────────
 
@@ -35,8 +35,7 @@ fn next_editor_id() -> String {
 
 // ── JS helpers ────────────────────────────────────────────────────────────────
 
-// Sets up a mousedown capture-listener (once per element, guarded by a data
-// attribute) that records task-checkbox clicks before the click event fires.
+// Sets up mousedown capture for task-checkbox clicks and navigate clicks.
 fn js_setup_tasks(id: &str) -> String {
     format!(
         r#"(function() {{
@@ -51,20 +50,62 @@ fn js_setup_tasks(id: &str) -> String {
                 pos: parseInt(cb.dataset.pos),
                 checked: cb.dataset.checked === 'true'
             }};
+            return;
+        }}
+        const nav = e.target.closest('[data-navigate]');
+        if (nav) {{
+            el._navClick = nav.dataset.navigate;
         }}
     }}, true);
 }})()"#
     )
 }
 
-// Reads innerText and cursor offset together in one microtask, then sends
-// "cursor_offset\ntext" (split on the FIRST newline).
-// If a task-checkbox mousedown was recorded, sends "cb:pos:0or1" instead.
+// Sets up a selectionchange listener that marks the active line div so CSS
+// can show its markers. Simpler than per-token tracking.
+fn js_setup_selection(id: &str) -> String {
+    format!(
+        r#"(function() {{
+    const el = document.getElementById({id:?});
+    if (!el || el.dataset.selSetup) return;
+    el.dataset.selSetup = '1';
+    document.addEventListener('selectionchange', function() {{
+        const prev = el.querySelector('.md-line--active');
+        const sel = window.getSelection();
+        let next = null;
+        if (sel && sel.rangeCount > 0 && el.contains(sel.anchorNode)) {{
+            let cur = sel.anchorNode;
+            if (cur.nodeType !== 1) cur = cur.parentElement;
+            while (cur && cur !== el) {{
+                if (cur.classList && cur.classList.contains('md-line')) {{
+                    next = cur;
+                    break;
+                }}
+                cur = cur.parentElement;
+            }}
+        }}
+        if (prev !== next) {{
+            if (prev) prev.classList.remove('md-line--active');
+            if (next) next.classList.add('md-line--active');
+        }}
+    }});
+}})()"#
+    )
+}
+
+// Reads innerText and cursor offset together, then sends "cursor_offset\ntext".
+// If a navigate or task-checkbox click was recorded, sends those first.
 fn js_read_state(id: &str) -> String {
     format!(
         r#"(function() {{
     const el = document.getElementById({id:?});
     if (!el) {{ dioxus.send("-1\n"); return; }}
+    if (el._navClick) {{
+        const url = el._navClick;
+        el._navClick = null;
+        dioxus.send('nav:' + url);
+        return;
+    }}
     if (el._taskClick) {{
         const tc = el._taskClick;
         el._taskClick = null;
@@ -93,8 +134,7 @@ fn js_read_state(id: &str) -> String {
     )
 }
 
-// Fire-and-forget: places the cursor at `target` character offset (counting
-// raw text nodes, so source offset == DOM offset in styled-raw mode).
+// Fire-and-forget: places the cursor at `target` character offset.
 fn js_set_cursor(id: &str, target: usize) -> String {
     format!(
         r#"(function() {{
@@ -121,11 +161,7 @@ fn js_set_cursor(id: &str, target: usize) -> String {
     )
 }
 
-// ── HTML rendering (styled-raw) ───────────────────────────────────────────────
-//
-// Markers (**  *  ##  [[  etc.) are always present in the DOM so that
-// el.innerText always equals the raw markdown source. They are styled with
-// low opacity via CSS so they read as decorations, not noise.
+// ── HTML rendering ────────────────────────────────────────────────────────────
 
 fn tokens_to_html(source: &str, tokens: &[Token]) -> String {
     let mut out = String::with_capacity(source.len() * 3);
@@ -156,6 +192,15 @@ fn emit_gap_html(source: &str, start: usize, end: usize, out: &mut String) {
     }
 }
 
+// Tokenizes a block token's content range for inline formatting, then renders each.
+fn push_inline_html(source: &str, content_range: std::ops::Range<usize>, out: &mut String) {
+    let content = &source[content_range.clone()];
+    let inline_tokens = tokenize_line(content, content_range.start);
+    for token in &inline_tokens {
+        push_token_html(source, token, out);
+    }
+}
+
 fn push_token_html(source: &str, token: &Token, out: &mut String) {
     let raw = token.raw(source);
     let display = token.display(source);
@@ -168,7 +213,6 @@ fn push_token_html(source: &str, token: &Token, out: &mut String) {
         }
 
         TokenKind::Bold => {
-            // raw = "**x**" or "__x__"
             out.push_str("<strong class=\"md-token md-bold\">");
             marker(&raw[..2], out);
             push_escaped(display, out);
@@ -213,7 +257,7 @@ fn push_token_html(source: &str, token: &Token, out: &mut String) {
             let class = format!("md-token md-heading md-h{level}");
             out.push_str(&format!("<span class=\"{class}\">"));
             marker(&raw[..prefix_len], out);
-            push_escaped(display, out);
+            push_inline_html(source, token.content_range.clone(), out);
             out.push_str("</span>");
         }
 
@@ -221,7 +265,7 @@ fn push_token_html(source: &str, token: &Token, out: &mut String) {
             let prefix_len = token.content_range.start - token.range.start;
             out.push_str("<span class=\"md-token md-blockquote\">");
             marker(&raw[..prefix_len], out);
-            push_escaped(display, out);
+            push_inline_html(source, token.content_range.clone(), out);
             out.push_str("</span>");
         }
 
@@ -233,22 +277,18 @@ fn push_token_html(source: &str, token: &Token, out: &mut String) {
                 if *ordered { " md-list-ordered" } else { " md-list-unordered" }
             ));
             marker(&raw[..prefix_len], out);
-            push_escaped(display, out);
+            push_inline_html(source, token.content_range.clone(), out);
             out.push_str("</span>");
         }
 
         TokenKind::TaskItem { checked, depth, bracket_pos } => {
-            let prefix_len = bracket_pos - token.range.start; // e.g. 2 for "- "
+            let prefix_len = bracket_pos - token.range.start;
             let indent = format!("{}em", *depth as f32 * 1.5);
             let bracket_text = if *checked { "[x]" } else { "[ ]" };
             out.push_str(&format!(
                 "<span class=\"md-token md-task-item\" style=\"padding-left:{indent}\">"
             ));
-            // List prefix ("- ") as a muted marker
             marker(&raw[..prefix_len], out);
-            // Checkbox span — contenteditable=false keeps cursor out of it.
-            // The literal "[ ] " / "[x] " text stays in the DOM so innerText
-            // always returns the raw markdown source.
             out.push_str(&format!(
                 "<span class=\"md-task-checkbox\" contenteditable=\"false\" \
                  data-pos=\"{}\" data-checked=\"{}\">{} </span>",
@@ -256,7 +296,7 @@ fn push_token_html(source: &str, token: &Token, out: &mut String) {
                 checked,
                 bracket_text,
             ));
-            push_escaped(display, out);
+            push_inline_html(source, token.content_range.clone(), out);
             out.push_str("</span>");
         }
 
@@ -274,7 +314,6 @@ fn push_token_html(source: &str, token: &Token, out: &mut String) {
             ));
             marker("[", out);
             push_escaped(display, out);
-            // suffix is "](url)" — include URL inside the marker span so it's muted
             out.push_str("<span class=\"md-marker\">](");
             push_escaped(url, out);
             out.push_str(")</span>");
@@ -285,11 +324,10 @@ fn push_token_html(source: &str, token: &Token, out: &mut String) {
             let target = &source[target_range.clone()];
             let target_escaped = escaped_attr(target);
             out.push_str(&format!(
-                "<span class=\"md-token md-wikilink\" data-navigate=\"{target_escaped}\">"
+                "<span class=\"md-token md-wikilink md-wikilink--linked\" data-navigate=\"{target_escaped}\">"
             ));
             marker("[[", out);
             if display_range.is_some() {
-                // [[target|display]] — show target as extra-muted, | as marker, display as normal
                 out.push_str("<span class=\"md-wikilink-target\">");
                 push_escaped(target, out);
                 out.push_str("</span>");
@@ -310,6 +348,23 @@ fn push_token_html(source: &str, token: &Token, out: &mut String) {
             out.push_str("<span class=\"md-marker\">](");
             push_escaped(url, out);
             out.push_str(")</span></span>");
+        }
+
+        TokenKind::CodeFence { lang_range } => {
+            out.push_str("<span class=\"md-token md-code-fence\">");
+            marker("```", out);
+            if let Some(lr) = lang_range {
+                out.push_str("<span class=\"md-code-lang\">");
+                push_escaped(&source[lr.clone()], out);
+                out.push_str("</span>");
+            }
+            out.push_str("</span>");
+        }
+
+        TokenKind::CodeBlock => {
+            out.push_str("<span class=\"md-token md-code-block\">");
+            push_escaped(raw, out);
+            out.push_str("</span>");
         }
     }
 }
@@ -354,24 +409,20 @@ pub fn MarkdownArea(
     onfocus: Option<EventHandler<FocusEvent>>,
     onblur: Option<EventHandler<FocusEvent>>,
 ) -> Element {
-    // Cursor position for restoration only — not used for rendering.
     let mut cursor_pos: Signal<Option<usize>> = use_signal(|| None);
     let id = use_memo(|| next_editor_id());
 
-    // Re-renders ONLY when content changes, not on cursor moves.
-    // With styled-raw, all markers are in the DOM, so innerText == raw markdown.
     let rendered_html = use_memo(move || {
         let src = content.read();
         let tokens = tokenize(&src);
         tokens_to_html(&src, &tokens)
     });
 
-    // Set up the task-checkbox mousedown listener once per mount.
     use_effect(move || {
         document::eval(&js_setup_tasks(&id()));
+        document::eval(&js_setup_selection(&id()));
     });
 
-    // After innerHTML is replaced (content changed), restore cursor position.
     let saved_cursor = cursor_pos();
     use_effect(move || {
         if let Some(pos) = saved_cursor {
@@ -379,7 +430,6 @@ pub fn MarkdownArea(
         }
     });
 
-    // oninput: read text + cursor in one eval, update both signals.
     let handle_input = move |_: Event<FormData>| {
         let editor_id = id();
         spawn(async move {
@@ -387,7 +437,6 @@ pub fn MarkdownArea(
                 .join::<String>()
                 .await
             {
-                // payload = "cursor_offset\ntext…"
                 if let Some((cursor_str, text)) = payload.split_once('\n') {
                     let cursor = cursor_str.parse::<i64>().ok()
                         .filter(|&c| c >= 0)
@@ -399,7 +448,6 @@ pub fn MarkdownArea(
         });
     };
 
-    // onclick: handles both task-checkbox toggles and regular cursor sync.
     let handle_click = move || {
         let editor_id = id();
         spawn(async move {
@@ -410,8 +458,14 @@ pub fn MarkdownArea(
                 return;
             };
 
+            if let Some(url) = payload.strip_prefix("nav:") {
+                if let Some(cb) = on_navigate {
+                    cb(url.to_string());
+                }
+                return;
+            }
+
             if let Some(rest) = payload.strip_prefix("cb:") {
-                // Task checkbox was clicked — toggle [ ] ↔ [x] in source.
                 if let Some((pos_str, was_checked_str)) = rest.split_once(':') {
                     if let Ok(bracket_pos) = pos_str.parse::<usize>() {
                         let was_checked = was_checked_str == "1";
@@ -432,7 +486,6 @@ pub fn MarkdownArea(
         });
     };
 
-    // onkeyup: cursor sync only (no checkbox handling needed).
     let sync_cursor = move || {
         let editor_id = id();
         spawn(async move {
