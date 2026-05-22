@@ -240,28 +240,31 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                     div { class: "editor-titlebar",
                         span { class: "editor-filename", "{path}" }
                         div { class: "editor-meta",
-                            span { class: "word-count", "{words} words" }
-                            span {
-                                class: "{status_class}",
-                                title: "{status_title}",
-                                "{status_label}"
+                            if loading_file() {
+                                span { class: "save-status", "Loading…" }
+                            } else {
+                                span { class: "word-count", "{words} words" }
+                                span {
+                                    class: "{status_class}",
+                                    title: "{status_title}",
+                                    "{status_label}"
+                                }
                             }
                         }
                     }
-                    if loading_file() {
-                        div { class: "editor-loading", "Loading…" }
-                    } else {
-                        MarkdownArea {
-                            content,
-                            variant: MarkdownAreaVariant::Ghost,
-                            placeholder: "Empty file.",
-                        }
+                    // Always keep MarkdownArea mounted so its CSS <link> stays in
+                    // the document — unmounting it drops the stylesheet and markers
+                    // become visible (unstyled raw markdown).
+                    MarkdownArea {
+                        content,
+                        variant: MarkdownAreaVariant::Ghost,
+                        placeholder: "Empty file.",
                     }
                 } else {
                     div { class: "editor-empty",
                         p { "Select a file from the sidebar to start editing." }
                         p { class: "editor-empty-hint",
-                            "Tip: press " kbd { "Ctrl+K" } " to open the quick switcher."
+                            "Tip: use the 🔍 button to open the quick switcher."
                         }
                         p { class: "editor-empty-sub",
                             "Connected to "
