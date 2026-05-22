@@ -1,4 +1,4 @@
 mod component;
-mod tokenizer;
+pub mod tokenizer;
 
 pub use component::*;

@@ -1,6 +1,7 @@
 use dioxus::prelude::*;
 use vault::GithubConfig;
 
+pub mod export;
 mod state;
 pub mod wikilink_index;
 mod views;

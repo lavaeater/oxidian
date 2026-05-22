@@ -2,6 +2,7 @@ use dioxus::prelude::*;
 use ui::{MarkdownArea, MarkdownAreaVariant};
 use vault::{FileMeta, GithubConfig, SearchResult};
 
+use crate::export;
 use crate::state;
 use crate::wikilink_index::WikiLinkIndex;
 use super::graph::GraphView;
@@ -386,6 +387,20 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                             } else {
                                 span { class: "word-count", "{words} words" }
                                 span { class: "{status_class}", title: "{status_title}", "{status_label}" }
+                                button {
+                                    class: "editor-icon-btn",
+                                    title: "Export as HTML",
+                                    onclick: move |_| {
+                                        if let Some(ref path) = active_path() {
+                                            let title = path.rsplit('/').next().unwrap_or(path)
+                                                .trim_end_matches(".md").to_string();
+                                            let filename = format!("{title}.html");
+                                            let html = export::to_html(&title, &content.read());
+                                            document::eval(&export::download_html(&filename, &html));
+                                        }
+                                    },
+                                    "↓"
+                                }
                             }
                         }
                     }
