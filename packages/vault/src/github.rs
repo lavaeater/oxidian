@@ -100,6 +100,9 @@ pub async fn read_file(cfg: &GithubConfig, path: &str) -> Result<FileContent, Va
         .map_err(|e| VaultError::Decode(e.to_string()))?;
     let content = String::from_utf8(bytes).map_err(|e| VaultError::Decode(e.to_string()))?;
 
+    // Normalise line endings — GitHub can serve CRLF which breaks the tokenizer.
+    let content = content.replace("\r\n", "\n").replace('\r', "\n");
+
     Ok(FileContent { content, sha: body.sha })
 }
 

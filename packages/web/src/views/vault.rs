@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use ui::MarkdownArea;
+use ui::{MarkdownArea, MarkdownAreaVariant};
 use vault::{FileMeta, GithubConfig};
 
 use crate::state;
@@ -176,42 +176,9 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
         });
     });
 
-    // Global keyboard shortcuts: poll a JS global every 150 ms.
-    use_effect(move || {
-        document::eval(r#"
-            if (!window._oxidianKeys) {
-                window._oxidianKeys = true;
-                window._oxidianCmd = '';
-                document.addEventListener('keydown', function(e) {
-                    if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
-                        e.preventDefault(); window._oxidianCmd = 'switcher';
-                    }
-                    if ((e.ctrlKey || e.metaKey) && e.key === 's') {
-                        e.preventDefault(); // auto-save handles this
-                    }
-                    if (e.key === 'Escape') {
-                        window._oxidianCmd = 'escape';
-                    }
-                });
-            }
-        "#);
-        spawn(async move {
-            loop {
-                sleep_ms(150).await;
-                let cmd = document::eval(
-                    "const c = window._oxidianCmd||''; window._oxidianCmd=''; dioxus.send(c);"
-                )
-                .join::<String>()
-                .await
-                .unwrap_or_default();
-                match cmd.as_str() {
-                    "switcher" => show_switcher.set(true),
-                    "escape"   => show_switcher.set(false),
-                    _ => {}
-                }
-            }
-        });
-    });
+    // TODO: global keyboard shortcuts (Ctrl+K for switcher, Escape to close)
+    // Need a wasm-bindgen Closure or document-level capture before contenteditable
+    // absorbs key events. Deferred — use the toolbar button for now.
 
     // Pre-compute values that can't borrow across rsx!.
     let status_class = save_status.read().css_class().to_string();
@@ -284,7 +251,11 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                     if loading_file() {
                         div { class: "editor-loading", "Loading…" }
                     } else {
-                        MarkdownArea { content, placeholder: "Empty file." }
+                        MarkdownArea {
+                            content,
+                            variant: MarkdownAreaVariant::Ghost,
+                            placeholder: "Empty file.",
+                        }
                     }
                 } else {
                     div { class: "editor-empty",

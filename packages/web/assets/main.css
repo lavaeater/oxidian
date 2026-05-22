@@ -2,6 +2,7 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
+  /* App theme */
   --bg:           #0f1116;
   --bg2:          #161b22;
   --bg3:          #1c2128;
@@ -12,6 +13,20 @@
   --accent-dim:   #1f6feb;
   --danger:       #f85149;
   --sidebar-w:    260px;
+
+  /* ui-kit variable mappings so MarkdownArea styles resolve correctly */
+  --primary-color:    #0f1116;
+  --primary-color-3:  #161b22;
+  --primary-color-4:  #1c2128;
+  --primary-color-5:  #21262d;
+  --primary-color-6:  rgba(255,255,255,0.08);
+  --primary-color-7:  rgba(255,255,255,0.15);
+  --secondary-color-1: #ffffff;
+  --secondary-color-4: #e6edf3;
+  --secondary-color-5: #7d8590;
+  --accent-color:      #4493f8;
+  --focused-border-color: #4493f8;
+  --wikilink-color:    #7b68ee;
 }
 
 html, body { height: 100%; overflow: hidden; }
