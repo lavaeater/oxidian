@@ -1,5 +1,5 @@
-mod home;
-pub use home::Home;
+mod settings;
+mod vault;
 
-mod blog;
-pub use blog::Blog;
+pub use settings::Settings;
+pub use vault::VaultBrowser;
