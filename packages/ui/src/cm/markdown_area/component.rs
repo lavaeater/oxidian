@@ -167,6 +167,8 @@ fn tokens_to_html(source: &str, tokens: &[Token]) -> String {
     let mut out = String::with_capacity(source.len() * 3);
     let mut last_end = 0;
 
+    out.push_str("<div class=\"md-line\">");
+
     for token in tokens {
         if token.range.start > last_end {
             emit_gap_html(source, last_end, token.range.start, &mut out);
@@ -179,13 +181,16 @@ fn tokens_to_html(source: &str, tokens: &[Token]) -> String {
         emit_gap_html(source, last_end, source.len(), &mut out);
     }
 
+    out.push_str("</div>");
     out
 }
 
 fn emit_gap_html(source: &str, start: usize, end: usize, out: &mut String) {
     for ch in source[start..end].chars() {
         if ch == '\n' {
-            out.push_str("<br>");
+            // Close the current line div and open a new one.
+            // Block divs create implicit line breaks; no <br> needed.
+            out.push_str("</div><div class=\"md-line\">");
         } else {
             push_escaped_char(ch, out);
         }

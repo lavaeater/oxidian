@@ -57,14 +57,21 @@
 .md-area[data-style="ghost"]:hover { background-color: var(--primary-color-5); color: var(--secondary-color-1); }
 .md-area[data-style="ghost"]:focus { border-color: var(--focused-border-color); }
 
+/* ── Lines ── */
+.md-line {
+  min-height: 1.4em;
+  display: block;
+}
+
 /* ── Token base ── */
 .md-token {
   transition: opacity 80ms ease-out;
 }
 
 /* Markers: zero-size and invisible by default.
-   font-size: 0 collapses them to zero width so formatted text flows without gaps.
-   innerText still includes zero-size text (unlike display:none), preserving raw source. */
+   font-size:0 collapses them to zero width so formatted text flows without gaps.
+   innerText still includes zero-size text (unlike display:none), preserving raw source.
+   Shown instantly (no transition) when the cursor line becomes active. */
 .md-marker {
   font-size: 0;
   line-height: 0;
@@ -73,9 +80,8 @@
   font-style: normal;
   color: var(--secondary-color-5, #888);
   letter-spacing: 0;
-  transition: font-size 150ms ease-out, opacity 150ms ease-out;
 }
-.md-token--active .md-marker {
+.md-line--active .md-marker {
   font-size: 0.88em;
   opacity: 0.55;
 }
@@ -235,9 +241,8 @@
   line-height: 0;
   opacity: 0;
   color: var(--secondary-color-5, #888);
-  transition: font-size 150ms ease-out, opacity 150ms ease-out;
 }
-.md-token--active .md-wikilink-target {
+.md-line--active .md-wikilink-target {
   font-size: 1em;
   opacity: 0.5;
 }
