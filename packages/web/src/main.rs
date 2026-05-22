@@ -2,6 +2,7 @@ use dioxus::prelude::*;
 use vault::GithubConfig;
 
 mod state;
+pub mod wikilink_index;
 mod views;
 
 use views::{Settings, VaultBrowser};

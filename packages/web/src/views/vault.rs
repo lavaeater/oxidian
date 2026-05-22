@@ -3,6 +3,8 @@ use ui::{MarkdownArea, MarkdownAreaVariant};
 use vault::{FileMeta, GithubConfig, SearchResult};
 
 use crate::state;
+use crate::wikilink_index::WikiLinkIndex;
+use super::graph::GraphView;
 use super::toolbar::FormattingToolbar;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -77,7 +79,7 @@ impl SaveStatus {
 }
 
 #[derive(Clone, PartialEq)]
-enum Panel { Files, Search, Bookmarks }
+enum Panel { Files, Search, Backlinks, Graph, Bookmarks }
 
 // ── VaultBrowser ──────────────────────────────────────────────────────────────
 
@@ -96,8 +98,8 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
     let mut bookmarks: Signal<Vec<String>> = use_signal(Vec::new);
     let mut show_switcher = use_signal(|| false);
     let mut show_new_file = use_signal(|| false);
-    // Signal-based result channel: NewFileModal sets this, use_effect acts on it.
     let mut new_file_result: Signal<Option<String>> = use_signal(|| None);
+    let mut index: Signal<WikiLinkIndex> = use_signal(WikiLinkIndex::new);
 
     // Load file list and bookmarks on mount.
     let cfg = config.clone();
@@ -127,6 +129,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
         spawn(async move {
             match vault::github::read_file(&cfg, &p).await {
                 Ok(fc) => {
+                    index.with_mut(|idx| idx.index_file(&p, &fc.content));
                     content.set(fc.content.clone());
                     saved_content.set(fc.content);
                     file_sha.set(fc.sha);
@@ -160,7 +163,12 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                 save_status.set(SaveStatus::Saving);
                 let name = path.rsplit('/').next().unwrap_or(&path).to_string();
                 match vault::github::write_file(&cfg, &path, &current, &sha, &format!("Update {name}")).await {
-                    Ok(new_sha) => { file_sha.set(new_sha); saved_content.set(current); save_status.set(SaveStatus::Saved); }
+                    Ok(new_sha) => {
+                        index.with_mut(|idx| idx.reindex_file(&path, &current));
+                        file_sha.set(new_sha);
+                        saved_content.set(current);
+                        save_status.set(SaveStatus::Saved);
+                    }
                     Err(e) => save_status.set(SaveStatus::Error(e.to_string())),
                 }
             }

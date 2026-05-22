@@ -224,6 +224,20 @@ pub async fn search_code(cfg: &GithubConfig, query: &str) -> Result<Vec<SearchRe
         .collect())
 }
 
+// ── read_many ─────────────────────────────────────────────────────────────────
+
+/// Fetch content of multiple files sequentially.
+/// Returns `(path, content)` pairs for successfully fetched files.
+pub async fn read_many(cfg: &GithubConfig, paths: &[String]) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for path in paths {
+        if let Ok(fc) = read_file(cfg, path).await {
+            out.push((path.clone(), fc.content));
+        }
+    }
+    out
+}
+
 // ── create_file ───────────────────────────────────────────────────────────────
 
 /// Create a new file (path must not already exist).

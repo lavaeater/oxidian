@@ -56,6 +56,15 @@ pub struct SearchResult {
     pub fragment: String,
 }
 
+/// A `[[WikiLink]]` extracted from a file.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WikiLink {
+    /// The link target as written (e.g. `"My Note"` from `[[My Note]]`).
+    pub target: String,
+    /// Source file containing this link.
+    pub source_path: String,
+}
+
 /// Connection settings for a GitHub-hosted vault.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct GithubConfig {
