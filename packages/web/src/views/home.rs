@@ -25,6 +25,11 @@ This is a **hybrid markdown editor**. The markdown syntax peeks through at low o
 const x = 1;
 console.log(x);
 ```
+| This   | is    | a       |
+| ------ | ----- | ------- |
+| simple | table | example |
+
+
 
 ---
 

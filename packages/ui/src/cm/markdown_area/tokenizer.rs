@@ -35,6 +35,9 @@ pub enum TokenKind {
     CodeFence { lang_range: Option<Range<usize>> },
     /// A content line inside a ` ``` ` fence.
     CodeBlock,
+    /// A `| cell | cell |` table row. `cells` holds the trimmed source range of
+    /// each cell's content. `is_separator` is true for `| --- | --- |` lines.
+    TableRow { cells: Vec<Range<usize>>, is_separator: bool },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -111,6 +114,8 @@ pub fn tokenize(source: &str) -> Vec<Token> {
                 range: pos..line_end,
                 content_range: content_start..line_end,
             });
+        } else if let Some(token) = detect_table_row(line, pos, line_end) {
+            tokens.push(token);
         } else if let Some(token) = detect_task_item(line, pos, line_end) {
             tokens.push(token);
         } else if let Some((ordered, depth, content_start)) = detect_list_item(line, pos) {
@@ -208,6 +213,51 @@ fn detect_list_item(line: &str, pos: usize) -> Option<(bool, u8, usize)> {
     }
 
     None
+}
+
+fn detect_table_row(line: &str, pos: usize, line_end: usize) -> Option<Token> {
+    // Must have a | somewhere (leading spaces allowed)
+    let leading = line.len() - line.trim_start().len();
+    if line.as_bytes().get(leading) != Some(&b'|') {
+        return None;
+    }
+
+    // Collect pipe positions
+    let pipes: Vec<usize> = line
+        .char_indices()
+        .filter(|&(_, c)| c == '|')
+        .map(|(i, _)| i)
+        .collect();
+
+    if pipes.len() < 2 {
+        return None;
+    }
+
+    let mut cells: Vec<Range<usize>> = Vec::new();
+    for w in pipes.windows(2) {
+        let (cs, ce) = (w[0] + 1, w[1]);
+        let s = &line[cs..ce];
+        let lead = s.len() - s.trim_start().len();
+        let trail = s.len() - s.trim_end().len();
+        let ts = cs + lead;
+        let te = ce - trail;
+        cells.push(pos + ts..pos + te.max(ts));
+    }
+
+    if cells.is_empty() {
+        return None;
+    }
+
+    let is_separator = cells.iter().all(|r| {
+        let content = &line[r.start - pos..r.end - pos];
+        !content.is_empty() && content.chars().all(|c| matches!(c, '-' | ':'))
+    });
+
+    Some(Token {
+        kind: TokenKind::TableRow { cells, is_separator },
+        range: pos..line_end,
+        content_range: pos..line_end,
+    })
 }
 
 // ── Inline tokenizer ─────────────────────────────────────────────────────────
