@@ -111,7 +111,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
     use_effect(move || {
         let cfg = cfg.clone();
         spawn(async move {
-            let file_result = vault::github::list_files(&cfg).await;
+            let file_result = vault::dispatch::list_files(&cfg).await;
             let bm = state::load_bookmarks().await;
             match file_result {
                 Ok(mut list) => { list.sort_by(|a, b| a.path.cmp(&b.path)); files.set(list); }
@@ -132,7 +132,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
         let cfg = cfg.clone();
         let mut content = content.clone();
         spawn(async move {
-            match vault::github::read_file(&cfg, &p).await {
+            match vault::dispatch::read_file(&cfg, &p).await {
                 Ok(fc) => {
                     index.with_mut(|idx| idx.index_file(&p, &fc.content));
                     content.set(fc.content.clone());
@@ -167,7 +167,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                 if sha.is_empty() || current == saved_content() { continue; }
                 save_status.set(SaveStatus::Saving);
                 let name = path.rsplit('/').next().unwrap_or(&path).to_string();
-                match vault::github::write_file(&cfg, &path, &current, &sha, &format!("Update {name}")).await {
+                match vault::dispatch::write_file(&cfg, &path, &current, &sha, &format!("Update {name}")).await {
                     Ok(new_sha) => {
                         index.with_mut(|idx| idx.reindex_file(&path, &current));
                         file_sha.set(new_sha);
@@ -204,7 +204,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
         show_new_file.set(false);
         let cfg = cfg.clone();
         spawn(async move {
-            if let Ok(mut list) = vault::github::list_files(&cfg).await {
+            if let Ok(mut list) = vault::dispatch::list_files(&cfg).await {
                 list.sort_by(|a, b| a.path.cmp(&b.path));
                 files.set(list);
             }
@@ -254,12 +254,12 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                                     ).join::<String>().await.unwrap_or_default();
                                     if date.is_empty() { return; }
                                     let path = format!("{date}.md");
-                                    let _ = vault::github::create_file(
+                                    let _ = vault::dispatch::create_file(
                                         &cfg, &path,
                                         &format!("# {date}\n\n"),
                                         &format!("Daily note {date}"),
                                     ).await;
-                                    if let Ok(mut list) = vault::github::list_files(&cfg).await {
+                                    if let Ok(mut list) = vault::dispatch::list_files(&cfg).await {
                                         list.sort_by(|a, b| a.path.cmp(&b.path));
                                         files.set(list);
                                     }
@@ -490,7 +490,7 @@ fn NewFileModal(
         creating.set(true);
         error.set(None);
         spawn(async move {
-            match vault::github::create_file(
+            match vault::dispatch::create_file(
                 &cfg, &path, &format!("# {title}\n\n"), &format!("Create {path}")
             ).await {
                 Ok(_)  => result.set(Some(path)),

@@ -1,4 +1,5 @@
 pub mod github;
+pub mod gitlab;
 
 #[derive(thiserror::Error, Debug, Clone)]
 pub enum VaultError {
@@ -65,15 +66,66 @@ pub struct WikiLink {
     pub source_path: String,
 }
 
-/// Connection settings for a GitHub-hosted vault.
+/// Which git hosting provider the vault is on.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Default)]
+pub enum Provider {
+    #[default]
+    GitHub,
+    GitLab,
+}
+
+impl Provider {
+    pub fn label(&self) -> &'static str {
+        match self { Provider::GitHub => "GitHub", Provider::GitLab => "GitLab" }
+    }
+}
+
+/// Dispatch table — calls the right backend based on the config's provider.
+pub mod dispatch {
+    use super::*;
+
+    pub async fn list_files(cfg: &GithubConfig) -> Result<Vec<FileMeta>, VaultError> {
+        match cfg.provider {
+            Provider::GitHub  => github::list_files(cfg).await,
+            Provider::GitLab  => gitlab::list_files(cfg).await,
+        }
+    }
+    pub async fn read_file(cfg: &GithubConfig, path: &str) -> Result<FileContent, VaultError> {
+        match cfg.provider {
+            Provider::GitHub  => github::read_file(cfg, path).await,
+            Provider::GitLab  => gitlab::read_file(cfg, path).await,
+        }
+    }
+    pub async fn write_file(cfg: &GithubConfig, path: &str, content: &str, sha: &str, msg: &str) -> Result<String, VaultError> {
+        match cfg.provider {
+            Provider::GitHub  => github::write_file(cfg, path, content, sha, msg).await,
+            Provider::GitLab  => gitlab::write_file(cfg, path, content, sha, msg).await,
+        }
+    }
+    pub async fn create_file(cfg: &GithubConfig, path: &str, content: &str, msg: &str) -> Result<String, VaultError> {
+        match cfg.provider {
+            Provider::GitHub  => github::create_file(cfg, path, content, msg).await,
+            Provider::GitLab  => gitlab::create_file(cfg, path, content, msg).await,
+        }
+    }
+    pub async fn read_many(cfg: &GithubConfig, paths: &[String]) -> Vec<(String, String)> {
+        match cfg.provider {
+            Provider::GitHub  => github::read_many(cfg, paths).await,
+            Provider::GitLab  => github::read_many(cfg, paths).await, // uses same sequential pattern
+        }
+    }
+}
+
+/// Connection settings for a vault (works for GitHub and GitLab).
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct GithubConfig {
     pub token: String,
     pub owner: String,
     pub repo: String,
-    /// Branch to read from (defaults to "main").
     #[serde(default = "default_branch")]
     pub branch: String,
+    #[serde(default)]
+    pub provider: Provider,
 }
 
 fn default_branch() -> String {

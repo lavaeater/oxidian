@@ -1,25 +1,19 @@
 use dioxus::prelude::*;
-use vault::GithubConfig;
+use vault::{GithubConfig, Provider};
 
 use crate::state;
 
 #[component]
 pub fn Settings(
-    /// Called with the validated config when the user saves.
     on_save: EventHandler<GithubConfig>,
-    /// Optional existing config pre-fills the form.
     existing: Option<GithubConfig>,
 ) -> Element {
     let mut token = use_signal(|| existing.as_ref().map(|c| c.token.clone()).unwrap_or_default());
     let mut owner = use_signal(|| existing.as_ref().map(|c| c.owner.clone()).unwrap_or_default());
-    let mut repo = use_signal(|| existing.as_ref().map(|c| c.repo.clone()).unwrap_or_default());
-    let mut branch = use_signal(|| {
-        existing
-            .as_ref()
-            .map(|c| c.branch.clone())
-            .unwrap_or_else(|| "main".to_string())
-    });
-    let mut error = use_signal(|| None::<String>);
+    let mut repo  = use_signal(|| existing.as_ref().map(|c| c.repo.clone()).unwrap_or_default());
+    let mut branch = use_signal(|| existing.as_ref().map(|c| c.branch.clone()).unwrap_or_else(|| "main".to_string()));
+    let mut provider = use_signal(|| existing.as_ref().map(|c| c.provider.clone()).unwrap_or_default());
+    let mut error  = use_signal(|| None::<String>);
     let mut saving = use_signal(|| false);
 
     let handle_save = move |_| {
@@ -32,64 +26,74 @@ pub fn Settings(
             error.set(Some("Token, owner, and repo are required.".to_string()));
             return;
         }
-
         saving.set(true);
         error.set(None);
-
-        let cfg = GithubConfig { token: t, owner: o, repo: r, branch: b };
+        let cfg = GithubConfig { token: t, owner: o, repo: r, branch: b, provider: provider() };
         state::save_config(&cfg);
         on_save(cfg);
+    };
+
+    let (token_hint, token_url) = match provider() {
+        Provider::GitHub => ("ghp_xxxxxxxxxxxxxxxxxxxx", "https://github.com/settings/tokens"),
+        Provider::GitLab => ("glpat-xxxxxxxxxxxxxxxxxxxx", "https://gitlab.com/-/user_settings/personal_access_tokens"),
     };
 
     rsx! {
         div { class: "settings-wrap",
             div { class: "settings-card",
                 h2 { class: "settings-title", "Connect your vault" }
-                p { class: "settings-sub",
-                    "Oxidian reads and writes markdown files in a GitHub repository. "
-                    "Generate a Personal Access Token at "
-                    a {
-                        href: "https://github.com/settings/tokens",
-                        target: "_blank",
-                        rel: "noopener noreferrer",
-                        "github.com/settings/tokens"
+
+                // Provider selector
+                div { class: "settings-provider-row",
+                    for p in [Provider::GitHub, Provider::GitLab] {
+                        {
+                            let is_active = provider() == p;
+                            let label = p.label();
+                            rsx! {
+                                button {
+                                    class: if is_active { "provider-btn provider-btn--active" } else { "provider-btn" },
+                                    onclick: move |_| provider.set(p.clone()),
+                                    "{label}"
+                                }
+                            }
+                        }
                     }
-                    " with the "
-                    code { "repo" }
-                    " scope."
                 }
 
-                label { class: "settings-label", "GitHub Token"
+                p { class: "settings-sub",
+                    "Generate a Personal Access Token with "
+                    code { "api" }
+                    " / "
+                    code { "repo" }
+                    " scope at "
+                    a { href: "{token_url}", target: "_blank", rel: "noopener noreferrer", "{token_url}" }
+                    "."
+                }
+
+                label { class: "settings-label", "Token"
                     input {
-                        class: "settings-input",
-                        r#type: "password",
-                        placeholder: "ghp_xxxxxxxxxxxxxxxxxxxx",
+                        class: "settings-input", r#type: "password",
+                        placeholder: "{token_hint}",
                         value: "{token}",
                         oninput: move |e| token.set(e.value()),
                     }
                 }
-                label { class: "settings-label", "Owner (user or org)"
+                label { class: "settings-label", "Owner (user or namespace)"
                     input {
-                        class: "settings-input",
-                        placeholder: "octocat",
-                        value: "{owner}",
-                        oninput: move |e| owner.set(e.value()),
+                        class: "settings-input", placeholder: "octocat",
+                        value: "{owner}", oninput: move |e| owner.set(e.value()),
                     }
                 }
                 label { class: "settings-label", "Repository"
                     input {
-                        class: "settings-input",
-                        placeholder: "my-notes",
-                        value: "{repo}",
-                        oninput: move |e| repo.set(e.value()),
+                        class: "settings-input", placeholder: "my-notes",
+                        value: "{repo}", oninput: move |e| repo.set(e.value()),
                     }
                 }
                 label { class: "settings-label", "Branch"
                     input {
-                        class: "settings-input",
-                        placeholder: "main",
-                        value: "{branch}",
-                        oninput: move |e| branch.set(e.value()),
+                        class: "settings-input", placeholder: "main",
+                        value: "{branch}", oninput: move |e| branch.set(e.value()),
                     }
                 }
 
@@ -98,8 +102,7 @@ pub fn Settings(
                 }
 
                 button {
-                    class: "settings-btn",
-                    disabled: saving(),
+                    class: "settings-btn", disabled: saving(),
                     onclick: handle_save,
                     if saving() { "Connecting…" } else { "Connect vault" }
                 }

@@ -245,6 +245,15 @@ kbd {
   gap: 1.1rem;
 }
 
+.settings-provider-row { display: flex; gap: 8px; }
+.provider-btn {
+  flex: 1; background: var(--bg3); border: 1px solid var(--border);
+  border-radius: 6px; padding: 7px; color: var(--text-muted);
+  font-size: 0.88rem; cursor: pointer; transition: border-color 120ms, color 120ms;
+}
+.provider-btn:hover { color: var(--text); border-color: var(--text-muted); }
+.provider-btn--active { border-color: var(--accent); color: var(--text); }
+
 .settings-title {
   font-size: 1.3rem;
   font-weight: 700;
