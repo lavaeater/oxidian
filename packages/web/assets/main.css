@@ -122,14 +122,34 @@ code { font-family: ui-monospace, monospace; font-size: 0.88em; }
   flex-direction: column;
 }
 
-.editor-filename {
-  padding: 10px 24px;
-  font-size: 0.82rem;
-  color: var(--text-muted);
+.editor-titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 24px;
   border-bottom: 1px solid var(--border);
   background: var(--bg2);
   flex-shrink: 0;
+  gap: 1rem;
 }
+
+.editor-filename {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.save-status {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.save-status--unsaved { color: #e3b341; }
+.save-status--saving  { color: var(--accent); }
+.save-status--error   { color: var(--danger); cursor: help; }
 
 .editor-loading {
   padding: 24px;

@@ -10,6 +10,8 @@ pub enum VaultError {
     NotFound(String),
     #[error("Unauthorized — check your token")]
     Unauthorized,
+    #[error("Conflict — file changed remotely, refresh to get the latest version")]
+    Conflict,
 }
 
 /// Metadata for a file in the vault (returned by list_files).
