@@ -298,6 +298,32 @@ kbd {
 .settings-btn:hover:not(:disabled) { background: var(--accent); }
 .settings-btn:disabled { opacity: 0.5; cursor: default; }
 
+/* ── Formatting toolbar ── */
+.formatting-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg2);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+.tb-btn {
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  font-family: inherit;
+  padding: 3px 7px;
+  cursor: pointer;
+  transition: background 80ms, color 80ms;
+  white-space: nowrap;
+}
+.tb-btn:hover { background: var(--bg3); color: var(--text); }
+.tb-sep { width: 1px; height: 16px; background: var(--border); margin: 0 3px; }
+
 /* ── Panel tabs ── */
 .panel-tabs {
   display: flex;

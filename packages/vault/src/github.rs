@@ -224,6 +224,42 @@ pub async fn search_code(cfg: &GithubConfig, query: &str) -> Result<Vec<SearchRe
         .collect())
 }
 
+// ── create_file ───────────────────────────────────────────────────────────────
+
+/// Create a new file (path must not already exist).
+/// Returns the blob SHA of the newly created file.
+pub async fn create_file(
+    cfg: &GithubConfig,
+    path: &str,
+    content: &str,
+    message: &str,
+) -> Result<String, VaultError> {
+    let url = format!("{API}/repos/{}/{}/contents/{path}", cfg.owner, cfg.repo);
+    // No "sha" field = create, not update
+    let body = serde_json::json!({
+        "message": message,
+        "content": STANDARD.encode(content.as_bytes()),
+        "branch": cfg.branch,
+    });
+    let resp = request(reqwest::Method::PUT, &url, &cfg.token)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| VaultError::Http(e.to_string()))?;
+
+    if resp.status() == reqwest::StatusCode::UNPROCESSABLE_ENTITY {
+        return Err(VaultError::Http("File already exists".into()));
+    }
+
+    let written: WriteResponse = check(resp)
+        .await?
+        .json()
+        .await
+        .map_err(|e| VaultError::Http(e.to_string()))?;
+
+    Ok(written.content.sha)
+}
+
 fn urlencoded(s: &str) -> String {
     s.chars()
         .flat_map(|c| match c {

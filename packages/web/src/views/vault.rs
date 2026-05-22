@@ -3,6 +3,7 @@ use ui::{MarkdownArea, MarkdownAreaVariant};
 use vault::{FileMeta, GithubConfig, SearchResult};
 
 use crate::state;
+use super::toolbar::FormattingToolbar;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -75,8 +76,6 @@ impl SaveStatus {
     }
 }
 
-// ── Sidebar panel ─────────────────────────────────────────────────────────────
-
 #[derive(Clone, PartialEq)]
 enum Panel { Files, Search, Bookmarks }
 
@@ -96,6 +95,9 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
     let mut panel: Signal<Panel> = use_signal(|| Panel::Files);
     let mut bookmarks: Signal<Vec<String>> = use_signal(Vec::new);
     let mut show_switcher = use_signal(|| false);
+    let mut show_new_file = use_signal(|| false);
+    // Signal-based result channel: NewFileModal sets this, use_effect acts on it.
+    let mut new_file_result: Signal<Option<String>> = use_signal(|| None);
 
     // Load file list and bookmarks on mount.
     let cfg = config.clone();
@@ -165,10 +167,22 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
         });
     });
 
-    let open_file = move |path: String| {
-        active_path.set(Some(path));
-        show_switcher.set(false);
-    };
+    // Handle new-file result: refresh list then open the file.
+    let cfg = config.clone();
+    use_effect(move || {
+        let Some(path) = new_file_result() else { return };
+        new_file_result.set(None);
+        show_new_file.set(false);
+        let cfg = cfg.clone();
+        spawn(async move {
+            if let Ok(mut list) = vault::github::list_files(&cfg).await {
+                list.sort_by(|a, b| a.path.cmp(&b.path));
+                files.set(list);
+            }
+            active_path.set(Some(path));
+            show_switcher.set(false);
+        });
+    });
 
     // Pre-compute values that can't borrow across rsx!.
     let status_class = save_status.read().css_class().to_string();
@@ -181,6 +195,11 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
         .map(|p| bookmarks.read().contains(p))
         .unwrap_or(false);
 
+    // Pre-clone config for closures that need it. Signals are Copy so no issue there.
+    let cfg_daily = config.clone();
+    let cfg_search = config.clone();
+    let cfg_newfile = config.clone();
+
     rsx! {
         div { class: "app-layout",
 
@@ -188,37 +207,63 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
             aside { class: "sidebar",
                 div { class: "sidebar-header",
                     span { class: "sidebar-title", "Oxidian" }
-                    button {
-                        class: "sidebar-icon-btn",
-                        title: "Disconnect vault",
-                        onclick: move |_| { state::clear_config(); on_logout(()); },
-                        "⚙"
+                    div { class: "sidebar-header-actions",
+                        button {
+                            class: "sidebar-icon-btn",
+                            title: "New note",
+                            onclick: move |_| show_new_file.set(true),
+                            "✏"
+                        }
+                        button {
+                            class: "sidebar-icon-btn",
+                            title: "Today's note",
+                            onclick: move |_| {
+                                let cfg = cfg_daily.clone();
+                                spawn(async move {
+                                    let date = document::eval(
+                                        "dioxus.send(new Date().toISOString().split('T')[0]);"
+                                    ).join::<String>().await.unwrap_or_default();
+                                    if date.is_empty() { return; }
+                                    let path = format!("{date}.md");
+                                    let _ = vault::github::create_file(
+                                        &cfg, &path,
+                                        &format!("# {date}\n\n"),
+                                        &format!("Daily note {date}"),
+                                    ).await;
+                                    if let Ok(mut list) = vault::github::list_files(&cfg).await {
+                                        list.sort_by(|a, b| a.path.cmp(&b.path));
+                                        files.set(list);
+                                    }
+                                    active_path.set(Some(path));
+                                    show_switcher.set(false);
+                                });
+                            },
+                            "📅"
+                        }
+                        button {
+                            class: "sidebar-icon-btn",
+                            title: "Disconnect vault",
+                            onclick: move |_| { state::clear_config(); on_logout(()); },
+                            "⚙"
+                        }
                     }
                 }
 
-                // Panel tabs
                 div { class: "panel-tabs",
                     button {
                         class: if panel() == Panel::Files { "panel-tab panel-tab--active" } else { "panel-tab" },
-                        onclick: move |_| panel.set(Panel::Files),
-                        title: "Files",
-                        "📁"
+                        onclick: move |_| panel.set(Panel::Files), title: "Files", "📁"
                     }
                     button {
                         class: if panel() == Panel::Search { "panel-tab panel-tab--active" } else { "panel-tab" },
-                        onclick: move |_| panel.set(Panel::Search),
-                        title: "Search",
-                        "🔍"
+                        onclick: move |_| panel.set(Panel::Search), title: "Search", "🔍"
                     }
                     button {
                         class: if panel() == Panel::Bookmarks { "panel-tab panel-tab--active" } else { "panel-tab" },
-                        onclick: move |_| panel.set(Panel::Bookmarks),
-                        title: "Bookmarks",
-                        "🔖"
+                        onclick: move |_| panel.set(Panel::Bookmarks), title: "Bookmarks", "🔖"
                     }
                 }
 
-                // Panel content
                 div { class: "panel-content",
                     match panel() {
                         Panel::Files => rsx! {
@@ -232,7 +277,10 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                                 FileTree {
                                     files: files.read().clone(),
                                     active: active_path.read().clone(),
-                                    on_select: open_file,
+                                    on_select: move |path: String| {
+                                        active_path.set(Some(path));
+                                        show_switcher.set(false);
+                                    },
                                 }
                             }
                             if has_file && !headings.is_empty() {
@@ -241,15 +289,21 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                         },
                         Panel::Search => rsx! {
                             SearchPanel {
-                                config: config.clone(),
-                                on_select: open_file,
+                                config: cfg_search,
+                                on_select: move |path: String| {
+                                    active_path.set(Some(path));
+                                    show_switcher.set(false);
+                                },
                             }
                         },
                         Panel::Bookmarks => rsx! {
                             BookmarksPanel {
                                 bookmarks: bookmarks.read().clone(),
                                 active: active_path.read().clone(),
-                                on_select: open_file,
+                                on_select: move |path: String| {
+                                    active_path.set(Some(path));
+                                    show_switcher.set(false);
+                                },
                                 on_remove: move |path: String| {
                                     bookmarks.with_mut(|bm| bm.retain(|p| p != &path));
                                     state::save_bookmarks(&bookmarks.read());
@@ -266,7 +320,6 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                     div { class: "editor-titlebar",
                         span { class: "editor-filename", "{path}" }
                         div { class: "editor-meta",
-                            // Bookmark toggle
                             button {
                                 class: if is_bookmarked { "editor-icon-btn editor-icon-btn--active" } else { "editor-icon-btn" },
                                 title: if is_bookmarked { "Remove bookmark" } else { "Add bookmark" },
@@ -275,7 +328,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                                         if is_bookmarked {
                                             bookmarks.with_mut(|bm| bm.retain(|b| b != &p));
                                         } else {
-                                            bookmarks.with_mut(|bm| bm.push(p));
+                                            bookmarks.with_mut(|bm| { if !bm.contains(&p) { bm.push(p); } });
                                         }
                                         state::save_bookmarks(&bookmarks.read());
                                     }
@@ -290,6 +343,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                             }
                         }
                     }
+                    FormattingToolbar { content }
                     MarkdownArea {
                         content,
                         variant: MarkdownAreaVariant::Ghost,
@@ -301,8 +355,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                         p { class: "editor-empty-sub",
                             "Connected to "
                             strong { "{config.owner}/{config.repo}" }
-                            " · "
-                            code { "{config.branch}" }
+                            " · " code { "{config.branch}" }
                         }
                     }
                 }
@@ -312,8 +365,90 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
             if show_switcher() {
                 QuickSwitcher {
                     files: files.read().clone(),
-                    on_select: open_file,
+                    on_select: move |path: String| {
+                        active_path.set(Some(path));
+                        show_switcher.set(false);
+                    },
                     on_close: move |_| show_switcher.set(false),
+                }
+            }
+
+            // ── New file modal ───────────────────────────────────────────────
+            if show_new_file() {
+                NewFileModal {
+                    config: cfg_newfile,
+                    result: new_file_result,
+                    on_close: move |_| show_new_file.set(false),
+                }
+            }
+        }
+    }
+}
+
+// ── New file modal ────────────────────────────────────────────────────────────
+
+#[component]
+fn NewFileModal(
+    config: GithubConfig,
+    result: Signal<Option<String>>,
+    on_close: EventHandler<()>,
+) -> Element {
+    let mut name = use_signal(String::new);
+    let mut creating = use_signal(|| false);
+    let mut error = use_signal(|| None::<String>);
+    // Signal used to fire the create action from both onkeydown and onclick
+    // without needing to move a non-Copy closure into two places.
+    let mut trigger = use_signal(|| false);
+
+    use_effect(move || {
+        if !trigger() { return; }
+        trigger.set(false);
+        let raw = name.read().trim().to_string();
+        if raw.is_empty() { error.set(Some("Enter a file name.".into())); return; }
+        let path = if raw.ends_with(".md") { raw } else { format!("{raw}.md") };
+        let title = path.trim_end_matches(".md").to_string();
+        let cfg = config.clone();
+        creating.set(true);
+        error.set(None);
+        spawn(async move {
+            match vault::github::create_file(
+                &cfg, &path, &format!("# {title}\n\n"), &format!("Create {path}")
+            ).await {
+                Ok(_)  => result.set(Some(path)),
+                Err(e) => { error.set(Some(e.to_string())); creating.set(false); }
+            }
+        });
+    });
+
+    rsx! {
+        div {
+            class: "qs-overlay",
+            onclick: move |_| on_close(()),
+            div {
+                class: "qs-modal", style: "max-width: 400px;",
+                onclick: move |e| e.stop_propagation(),
+                div { style: "padding: 16px 16px 8px; font-weight: 600;", "New note" }
+                input {
+                    class: "qs-input",
+                    placeholder: "note-name  (or  folder/note-name)",
+                    autofocus: true,
+                    value: "{name}",
+                    oninput: move |e| name.set(e.value()),
+                    onkeydown: move |e| {
+                        if e.key() == Key::Enter  { trigger.set(true); }
+                        if e.key() == Key::Escape { on_close(()); }
+                    },
+                }
+                if let Some(ref err) = error() {
+                    div { style: "padding: 0 16px 8px; color: var(--danger); font-size: 0.85rem;", "{err}" }
+                }
+                div { style: "padding: 8px 16px 14px; display: flex; gap: 8px; justify-content: flex-end;",
+                    button {
+                        class: "settings-btn", style: "padding: 7px 16px;",
+                        disabled: creating(),
+                        onclick: move |_| trigger.set(true),
+                        if creating() { "Creating…" } else { "Create" }
+                    }
                 }
             }
         }
@@ -329,19 +464,15 @@ fn SearchPanel(config: GithubConfig, on_select: EventHandler<String>) -> Element
     let mut searching = use_signal(|| false);
     let mut search_error: Signal<Option<String>> = use_signal(|| None);
 
-    // Debounced search: fire 500ms after the user stops typing.
     use_effect(move || {
         let q = query();
         let cfg = config.clone();
-        if q.trim().is_empty() {
-            results.set(vec![]);
-            return;
-        }
+        if q.trim().is_empty() { results.set(vec![]); return; }
         searching.set(true);
         search_error.set(None);
         spawn(async move {
             sleep_ms(500).await;
-            if query() != q { return; } // newer query supersedes this one
+            if query() != q { return; }
             match vault::github::search_code(&cfg, &q).await {
                 Ok(r)  => results.set(r),
                 Err(e) => search_error.set(Some(e.to_string())),
@@ -491,9 +622,7 @@ fn QuickSwitcher(
                 class: "qs-modal",
                 onclick: move |e| e.stop_propagation(),
                 input {
-                    class: "qs-input",
-                    placeholder: "Go to file…",
-                    autofocus: true,
+                    class: "qs-input", placeholder: "Go to file…", autofocus: true,
                     value: "{query}",
                     oninput: move |e| query.set(e.value()),
                     onkeydown: move |e| {
@@ -512,9 +641,7 @@ fn QuickSwitcher(
                                 class: "qs-item",
                                 onclick: move |_| on_select(path.clone()),
                                 span { class: "qs-item-name", "{name}" }
-                                if !dir.is_empty() {
-                                    span { class: "qs-item-dir", "{dir}" }
-                                }
+                                if !dir.is_empty() { span { class: "qs-item-dir", "{dir}" } }
                             }
                         }
                     }
@@ -527,24 +654,16 @@ fn QuickSwitcher(
 // ── File tree ─────────────────────────────────────────────────────────────────
 
 #[component]
-fn FileTree(
-    files: Vec<FileMeta>,
-    active: Option<String>,
-    on_select: EventHandler<String>,
-) -> Element {
+fn FileTree(files: Vec<FileMeta>, active: Option<String>, on_select: EventHandler<String>) -> Element {
     let mut root: Vec<&FileMeta> = Vec::new();
     let mut dirs: Vec<(&str, Vec<&FileMeta>)> = Vec::new();
     for file in &files {
         let dir = file.dir();
-        if dir.is_empty() {
-            root.push(file);
-        } else {
+        if dir.is_empty() { root.push(file); }
+        else {
             let top = dir.splitn(2, '/').next().unwrap_or(dir);
-            if let Some(group) = dirs.iter_mut().find(|(d, _)| *d == top) {
-                group.1.push(file);
-            } else {
-                dirs.push((top, vec![file]));
-            }
+            if let Some(g) = dirs.iter_mut().find(|(d, _)| *d == top) { g.1.push(file); }
+            else { dirs.push((top, vec![file])); }
         }
     }
     rsx! {
