@@ -35,3 +35,25 @@ pub fn save_config(cfg: &GithubConfig) {
 pub fn clear_config() {
     document::eval(&format!("localStorage.removeItem({:?})", STORAGE_KEY));
 }
+
+const BOOKMARKS_KEY: &str = "oxidian_bookmarks";
+
+pub async fn load_bookmarks() -> Vec<String> {
+    let json = document::eval(&format!(
+        "dioxus.send(localStorage.getItem({:?}) || '[]')",
+        BOOKMARKS_KEY
+    ))
+    .join::<String>()
+    .await
+    .unwrap_or_default();
+    serde_json::from_str(&json).unwrap_or_default()
+}
+
+pub fn save_bookmarks(bookmarks: &[String]) {
+    let json = serde_json::to_string(bookmarks).unwrap_or_default();
+    document::eval(&format!(
+        "localStorage.setItem({:?}, {})",
+        BOOKMARKS_KEY,
+        serde_json::to_string(&json).unwrap_or_default()
+    ));
+}

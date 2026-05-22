@@ -1,6 +1,6 @@
 use dioxus::prelude::*;
 use ui::{MarkdownArea, MarkdownAreaVariant};
-use vault::{FileMeta, GithubConfig};
+use vault::{FileMeta, GithubConfig, SearchResult};
 
 use crate::state;
 
@@ -14,20 +14,17 @@ async fn sleep_ms(ms: u32) {
     .await;
 }
 
-/// True if every char of `needle` appears in order in `haystack`.
 fn fuzzy_match(haystack: &str, needle: &str) -> bool {
     let mut it = haystack.chars();
     needle.chars().all(|nc| it.any(|hc| hc == nc))
 }
 
-/// Score a fuzzy match: higher = better. Used to rank quick-switcher results.
 fn fuzzy_score(path: &str, needle: &str) -> usize {
     let name = path.rsplit('/').next().unwrap_or(path).to_lowercase();
     let q = needle.to_lowercase();
     if name == q { return 1000; }
     if name.starts_with(&q) { return 500; }
     if name.contains(&q) { return 200; }
-    // Count consecutive matching chars as a tiebreaker.
     let mut score = 0usize;
     let mut last = 0usize;
     for nc in q.chars() {
@@ -39,19 +36,15 @@ fn fuzzy_score(path: &str, needle: &str) -> usize {
     score
 }
 
-/// Parse heading lines (# / ## / ...) from markdown content.
 fn extract_headings(content: &str) -> Vec<(u8, String)> {
-    content
-        .lines()
-        .filter_map(|line| {
-            let level = line.bytes().take_while(|&b| b == b'#').count();
-            if level >= 1 && level <= 6 && line.as_bytes().get(level) == Some(&b' ') {
-                Some((level as u8, line[level + 1..].trim().to_string()))
-            } else {
-                None
-            }
-        })
-        .collect()
+    content.lines().filter_map(|line| {
+        let level = line.bytes().take_while(|&b| b == b'#').count();
+        if level >= 1 && level <= 6 && line.as_bytes().get(level) == Some(&b' ') {
+            Some((level as u8, line[level + 1..].trim().to_string()))
+        } else {
+            None
+        }
+    }).collect()
 }
 
 fn word_count(text: &str) -> usize {
@@ -61,32 +54,31 @@ fn word_count(text: &str) -> usize {
 // ── Save status ───────────────────────────────────────────────────────────────
 
 #[derive(Clone, PartialEq)]
-enum SaveStatus {
-    Idle,
-    Unsaved,
-    Saving,
-    Saved,
-    Error(String),
-}
+enum SaveStatus { Idle, Unsaved, Saving, Saved, Error(String) }
 
 impl SaveStatus {
     fn label(&self) -> &str {
         match self {
             SaveStatus::Idle | SaveStatus::Saved => "Saved",
             SaveStatus::Unsaved => "Unsaved changes",
-            SaveStatus::Saving => "Saving…",
+            SaveStatus::Saving  => "Saving…",
             SaveStatus::Error(_) => "Save failed",
         }
     }
     fn css_class(&self) -> &str {
         match self {
-            SaveStatus::Error(_) => "save-status save-status--error",
-            SaveStatus::Unsaved => "save-status save-status--unsaved",
-            SaveStatus::Saving => "save-status save-status--saving",
+            SaveStatus::Error(_)  => "save-status save-status--error",
+            SaveStatus::Unsaved   => "save-status save-status--unsaved",
+            SaveStatus::Saving    => "save-status save-status--saving",
             _ => "save-status",
         }
     }
 }
+
+// ── Sidebar panel ─────────────────────────────────────────────────────────────
+
+#[derive(Clone, PartialEq)]
+enum Panel { Files, Search, Bookmarks }
 
 // ── VaultBrowser ──────────────────────────────────────────────────────────────
 
@@ -101,20 +93,22 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
     let mut loading_file = use_signal(|| false);
     let mut save_status: Signal<SaveStatus> = use_signal(|| SaveStatus::Idle);
     let mut saved_content: Signal<String> = use_signal(String::new);
+    let mut panel: Signal<Panel> = use_signal(|| Panel::Files);
+    let mut bookmarks: Signal<Vec<String>> = use_signal(Vec::new);
     let mut show_switcher = use_signal(|| false);
 
-    // Load file list on mount.
+    // Load file list and bookmarks on mount.
     let cfg = config.clone();
     use_effect(move || {
         let cfg = cfg.clone();
         spawn(async move {
-            match vault::github::list_files(&cfg).await {
-                Ok(mut list) => {
-                    list.sort_by(|a, b| a.path.cmp(&b.path));
-                    files.set(list);
-                }
+            let file_result = vault::github::list_files(&cfg).await;
+            let bm = state::load_bookmarks().await;
+            match file_result {
+                Ok(mut list) => { list.sort_by(|a, b| a.path.cmp(&b.path)); files.set(list); }
                 Err(e) => load_error.set(Some(e.to_string())),
             }
+            bookmarks.set(bm);
             loading_list.set(false);
         });
     });
@@ -141,7 +135,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
         });
     });
 
-    // Mark unsaved when content diverges from the last save snapshot.
+    // Mark unsaved when content diverges from last save.
     use_effect(move || {
         let current = content();
         if !loading_file() && !current.is_empty() && current != saved_content() {
@@ -149,7 +143,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
         }
     });
 
-    // Auto-save every 2 seconds when there are unsaved changes.
+    // Auto-save every 2 seconds when unsaved.
     let cfg = config.clone();
     use_effect(move || {
         let cfg = cfg.clone();
@@ -161,35 +155,31 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                 let sha = file_sha();
                 let current = content();
                 if sha.is_empty() || current == saved_content() { continue; }
-
                 save_status.set(SaveStatus::Saving);
                 let name = path.rsplit('/').next().unwrap_or(&path).to_string();
                 match vault::github::write_file(&cfg, &path, &current, &sha, &format!("Update {name}")).await {
-                    Ok(new_sha) => {
-                        file_sha.set(new_sha);
-                        saved_content.set(current);
-                        save_status.set(SaveStatus::Saved);
-                    }
+                    Ok(new_sha) => { file_sha.set(new_sha); saved_content.set(current); save_status.set(SaveStatus::Saved); }
                     Err(e) => save_status.set(SaveStatus::Error(e.to_string())),
                 }
             }
         });
     });
 
-    // TODO: global keyboard shortcuts (Ctrl+K for switcher, Escape to close)
-    // Need a wasm-bindgen Closure or document-level capture before contenteditable
-    // absorbs key events. Deferred — use the toolbar button for now.
+    let open_file = move |path: String| {
+        active_path.set(Some(path));
+        show_switcher.set(false);
+    };
 
     // Pre-compute values that can't borrow across rsx!.
     let status_class = save_status.read().css_class().to_string();
     let status_label = save_status.read().label().to_string();
-    let status_title = match &*save_status.read() {
-        SaveStatus::Error(e) => e.clone(),
-        _ => String::new(),
-    };
+    let status_title = match &*save_status.read() { SaveStatus::Error(e) => e.clone(), _ => String::new() };
     let words = word_count(&content.read());
     let headings = extract_headings(&content.read());
     let has_file = active_path.read().is_some();
+    let is_bookmarked = active_path.read().as_ref()
+        .map(|p| bookmarks.read().contains(p))
+        .unwrap_or(false);
 
     rsx! {
         div { class: "app-layout",
@@ -198,39 +188,75 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
             aside { class: "sidebar",
                 div { class: "sidebar-header",
                     span { class: "sidebar-title", "Oxidian" }
-                    div { class: "sidebar-header-actions",
-                        button {
-                            class: "sidebar-icon-btn",
-                            title: "Quick open (Ctrl+K)",
-                            onclick: move |_| show_switcher.set(true),
-                            "🔍"
-                        }
-                        button {
-                            class: "sidebar-icon-btn",
-                            title: "Disconnect vault",
-                            onclick: move |_| { state::clear_config(); on_logout(()); },
-                            "⚙"
-                        }
+                    button {
+                        class: "sidebar-icon-btn",
+                        title: "Disconnect vault",
+                        onclick: move |_| { state::clear_config(); on_logout(()); },
+                        "⚙"
                     }
                 }
 
-                if loading_list() {
-                    div { class: "sidebar-status", "Loading…" }
-                } else if let Some(err) = load_error() {
-                    div { class: "sidebar-error", "{err}" }
-                } else if files.read().is_empty() {
-                    div { class: "sidebar-status", "No markdown files found." }
-                } else {
-                    FileTree {
-                        files: files.read().clone(),
-                        active: active_path.read().clone(),
-                        on_select: move |path: String| active_path.set(Some(path)),
+                // Panel tabs
+                div { class: "panel-tabs",
+                    button {
+                        class: if panel() == Panel::Files { "panel-tab panel-tab--active" } else { "panel-tab" },
+                        onclick: move |_| panel.set(Panel::Files),
+                        title: "Files",
+                        "📁"
+                    }
+                    button {
+                        class: if panel() == Panel::Search { "panel-tab panel-tab--active" } else { "panel-tab" },
+                        onclick: move |_| panel.set(Panel::Search),
+                        title: "Search",
+                        "🔍"
+                    }
+                    button {
+                        class: if panel() == Panel::Bookmarks { "panel-tab panel-tab--active" } else { "panel-tab" },
+                        onclick: move |_| panel.set(Panel::Bookmarks),
+                        title: "Bookmarks",
+                        "🔖"
                     }
                 }
 
-                // Outline pane — shown when a file with headings is open.
-                if has_file && !headings.is_empty() {
-                    OutlinePane { headings }
+                // Panel content
+                div { class: "panel-content",
+                    match panel() {
+                        Panel::Files => rsx! {
+                            if loading_list() {
+                                div { class: "sidebar-status", "Loading…" }
+                            } else if let Some(err) = load_error() {
+                                div { class: "sidebar-error", "{err}" }
+                            } else if files.read().is_empty() {
+                                div { class: "sidebar-status", "No markdown files found." }
+                            } else {
+                                FileTree {
+                                    files: files.read().clone(),
+                                    active: active_path.read().clone(),
+                                    on_select: open_file,
+                                }
+                            }
+                            if has_file && !headings.is_empty() {
+                                OutlinePane { headings }
+                            }
+                        },
+                        Panel::Search => rsx! {
+                            SearchPanel {
+                                config: config.clone(),
+                                on_select: open_file,
+                            }
+                        },
+                        Panel::Bookmarks => rsx! {
+                            BookmarksPanel {
+                                bookmarks: bookmarks.read().clone(),
+                                active: active_path.read().clone(),
+                                on_select: open_file,
+                                on_remove: move |path: String| {
+                                    bookmarks.with_mut(|bm| bm.retain(|p| p != &path));
+                                    state::save_bookmarks(&bookmarks.read());
+                                },
+                            }
+                        },
+                    }
                 }
             }
 
@@ -240,21 +266,30 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                     div { class: "editor-titlebar",
                         span { class: "editor-filename", "{path}" }
                         div { class: "editor-meta",
+                            // Bookmark toggle
+                            button {
+                                class: if is_bookmarked { "editor-icon-btn editor-icon-btn--active" } else { "editor-icon-btn" },
+                                title: if is_bookmarked { "Remove bookmark" } else { "Add bookmark" },
+                                onclick: move |_| {
+                                    if let Some(p) = active_path() {
+                                        if is_bookmarked {
+                                            bookmarks.with_mut(|bm| bm.retain(|b| b != &p));
+                                        } else {
+                                            bookmarks.with_mut(|bm| bm.push(p));
+                                        }
+                                        state::save_bookmarks(&bookmarks.read());
+                                    }
+                                },
+                                "🔖"
+                            }
                             if loading_file() {
                                 span { class: "save-status", "Loading…" }
                             } else {
                                 span { class: "word-count", "{words} words" }
-                                span {
-                                    class: "{status_class}",
-                                    title: "{status_title}",
-                                    "{status_label}"
-                                }
+                                span { class: "{status_class}", title: "{status_title}", "{status_label}" }
                             }
                         }
                     }
-                    // Always keep MarkdownArea mounted so its CSS <link> stays in
-                    // the document — unmounting it drops the stylesheet and markers
-                    // become visible (unstyled raw markdown).
                     MarkdownArea {
                         content,
                         variant: MarkdownAreaVariant::Ghost,
@@ -262,10 +297,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                     }
                 } else {
                     div { class: "editor-empty",
-                        p { "Select a file from the sidebar to start editing." }
-                        p { class: "editor-empty-hint",
-                            "Tip: use the 🔍 button to open the quick switcher."
-                        }
+                        p { "Select a file to start editing." }
                         p { class: "editor-empty-sub",
                             "Connected to "
                             strong { "{config.owner}/{config.repo}" }
@@ -276,15 +308,141 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                 }
             }
 
-            // ── Quick Switcher modal ─────────────────────────────────────────
+            // ── Quick Switcher ───────────────────────────────────────────────
             if show_switcher() {
                 QuickSwitcher {
                     files: files.read().clone(),
-                    on_select: move |path: String| {
-                        active_path.set(Some(path));
-                        show_switcher.set(false);
-                    },
+                    on_select: open_file,
                     on_close: move |_| show_switcher.set(false),
+                }
+            }
+        }
+    }
+}
+
+// ── Search panel ──────────────────────────────────────────────────────────────
+
+#[component]
+fn SearchPanel(config: GithubConfig, on_select: EventHandler<String>) -> Element {
+    let mut query = use_signal(String::new);
+    let mut results: Signal<Vec<SearchResult>> = use_signal(Vec::new);
+    let mut searching = use_signal(|| false);
+    let mut search_error: Signal<Option<String>> = use_signal(|| None);
+
+    // Debounced search: fire 500ms after the user stops typing.
+    use_effect(move || {
+        let q = query();
+        let cfg = config.clone();
+        if q.trim().is_empty() {
+            results.set(vec![]);
+            return;
+        }
+        searching.set(true);
+        search_error.set(None);
+        spawn(async move {
+            sleep_ms(500).await;
+            if query() != q { return; } // newer query supersedes this one
+            match vault::github::search_code(&cfg, &q).await {
+                Ok(r)  => results.set(r),
+                Err(e) => search_error.set(Some(e.to_string())),
+            }
+            searching.set(false);
+        });
+    });
+
+    let items: Vec<(String, String, String)> = results.read().iter()
+        .map(|r| (r.path.clone(), r.path.rsplit('/').next().unwrap_or(&r.path).to_string(), r.fragment.clone()))
+        .collect();
+
+    rsx! {
+        div { class: "search-panel",
+            div { class: "search-input-wrap",
+                input {
+                    class: "search-input",
+                    placeholder: "Search notes…",
+                    value: "{query}",
+                    oninput: move |e| query.set(e.value()),
+                }
+                if searching() { span { class: "search-spinner", "⟳" } }
+            }
+            if let Some(err) = search_error() {
+                div { class: "search-error", "{err}" }
+            } else if items.is_empty() && !query.read().is_empty() && !searching() {
+                div { class: "search-empty", "No results." }
+            } else {
+                div { class: "search-results",
+                    for (path, name, fragment) in items {
+                        div {
+                            class: "search-item",
+                            onclick: move |_| on_select(path.clone()),
+                            div { class: "search-item-name", "{name}" }
+                            if !fragment.is_empty() {
+                                div { class: "search-item-fragment", "{fragment}" }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ── Bookmarks panel ───────────────────────────────────────────────────────────
+
+#[component]
+fn BookmarksPanel(
+    bookmarks: Vec<String>,
+    active: Option<String>,
+    on_select: EventHandler<String>,
+    on_remove: EventHandler<String>,
+) -> Element {
+    rsx! {
+        div { class: "bookmarks-panel",
+            if bookmarks.is_empty() {
+                div { class: "sidebar-status",
+                    "No bookmarks yet."
+                    br {}
+                    "Click 🔖 in the editor to bookmark a file."
+                }
+            } else {
+                for path in &bookmarks {
+                    {
+                        let p = path.clone();
+                        let p2 = path.clone();
+                        let name = path.rsplit('/').next().unwrap_or(path).to_string();
+                        let is_active = active.as_deref() == Some(path.as_str());
+                        rsx! {
+                            div {
+                                class: if is_active { "bookmark-item bookmark-item--active" } else { "bookmark-item" },
+                                onclick: move |_| on_select(p.clone()),
+                                span { class: "bookmark-name", "🔖 {name}" }
+                                button {
+                                    class: "bookmark-remove",
+                                    title: "Remove bookmark",
+                                    onclick: move |e| { e.stop_propagation(); on_remove(p2.clone()); },
+                                    "×"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ── Outline pane ──────────────────────────────────────────────────────────────
+
+#[component]
+fn OutlinePane(headings: Vec<(u8, String)>) -> Element {
+    rsx! {
+        div { class: "outline-pane",
+            div { class: "outline-title", "Outline" }
+            for (level, text) in &headings {
+                div {
+                    class: "outline-item",
+                    style: "padding-left: {(*level as usize - 1) * 12}px",
+                    "{text}"
                 }
             }
         }
@@ -301,22 +459,19 @@ fn QuickSwitcher(
 ) -> Element {
     let mut query = use_signal(String::new);
 
-    // Focus the input on mount (autofocus doesn't work on dynamic elements).
     use_effect(move || {
         document::eval(
             "requestAnimationFrame(() => { document.querySelector('.qs-input')?.focus(); });"
         );
     });
 
-    // Pre-compute owned display data to avoid borrow-in-rsx issues.
     let q = query.read().to_lowercase();
     let first_path: Option<String>;
     let items: Vec<(String, String, String)> = {
         let mut v: Vec<_> = if q.is_empty() {
             files.iter().map(|f| (0usize, f)).take(8).collect()
         } else {
-            let mut ranked: Vec<_> = files
-                .iter()
+            let mut ranked: Vec<_> = files.iter()
                 .filter(|f| fuzzy_match(&f.path.to_lowercase(), &q))
                 .map(|f| (fuzzy_score(&f.path, &q), f))
                 .collect();
@@ -369,24 +524,6 @@ fn QuickSwitcher(
     }
 }
 
-// ── Outline pane ──────────────────────────────────────────────────────────────
-
-#[component]
-fn OutlinePane(headings: Vec<(u8, String)>) -> Element {
-    rsx! {
-        div { class: "outline-pane",
-            div { class: "outline-title", "Outline" }
-            for (level, text) in &headings {
-                div {
-                    class: "outline-item",
-                    style: "padding-left: {(*level as usize - 1) * 12}px",
-                    "{text}"
-                }
-            }
-        }
-    }
-}
-
 // ── File tree ─────────────────────────────────────────────────────────────────
 
 #[component]
@@ -397,7 +534,6 @@ fn FileTree(
 ) -> Element {
     let mut root: Vec<&FileMeta> = Vec::new();
     let mut dirs: Vec<(&str, Vec<&FileMeta>)> = Vec::new();
-
     for file in &files {
         let dir = file.dir();
         if dir.is_empty() {
@@ -411,27 +547,16 @@ fn FileTree(
             }
         }
     }
-
     rsx! {
         div { class: "file-tree",
             for file in root {
-                FileEntry {
-                    key: "{file.path}",
-                    file: file.clone(),
-                    active: active.as_deref() == Some(file.path.as_str()),
-                    on_select,
-                }
+                FileEntry { key: "{file.path}", file: file.clone(), active: active.as_deref() == Some(file.path.as_str()), on_select }
             }
             for (dir, dir_files) in dirs {
                 div { class: "file-tree-dir",
                     div { class: "file-tree-dir-name", "📁 {dir}" }
                     for file in dir_files {
-                        FileEntry {
-                            key: "{file.path}",
-                            file: file.clone(),
-                            active: active.as_deref() == Some(file.path.as_str()),
-                            on_select,
-                        }
+                        FileEntry { key: "{file.path}", file: file.clone(), active: active.as_deref() == Some(file.path.as_str()), on_select }
                     }
                 }
             }

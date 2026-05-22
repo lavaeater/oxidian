@@ -47,6 +47,15 @@ pub struct FileContent {
     pub sha: String,
 }
 
+/// A single result from a code search.
+#[derive(Debug, Clone)]
+pub struct SearchResult {
+    pub path: String,
+    pub sha: String,
+    /// Best matching text fragment returned by the GitHub text-match API.
+    pub fragment: String,
+}
+
 /// Connection settings for a GitHub-hosted vault.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct GithubConfig {

@@ -1,7 +1,7 @@
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::Deserialize;
 
-use crate::{FileContent, FileMeta, GithubConfig, VaultError};
+use crate::{FileContent, FileMeta, GithubConfig, SearchResult, VaultError};
 
 const API: &str = "https://api.github.com";
 
@@ -160,4 +160,76 @@ pub async fn write_file(
         .map_err(|e| VaultError::Http(e.to_string()))?;
 
     Ok(written.content.sha)
+}
+
+// ── search_code ───────────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct SearchResponse {
+    items: Vec<SearchItem>,
+}
+
+#[derive(Deserialize)]
+struct SearchItem {
+    path: String,
+    sha: String,
+    #[serde(default)]
+    text_matches: Vec<TextMatch>,
+}
+
+#[derive(Deserialize)]
+struct TextMatch {
+    fragment: String,
+}
+
+/// Full-text search across the repo using GitHub's Code Search API.
+/// Returns up to 30 results with matching text fragments.
+pub async fn search_code(cfg: &GithubConfig, query: &str) -> Result<Vec<SearchResult>, VaultError> {
+    if query.trim().is_empty() {
+        return Ok(vec![]);
+    }
+    let q = format!("{} repo:{}/{}", query.trim(), cfg.owner, cfg.repo);
+    let url = format!("{API}/search/code?q={}&per_page=30", urlencoded(&q));
+
+    let resp = reqwest::Client::new()
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", cfg.token))
+        .header("User-Agent", "Oxidian/0.1")
+        // text-match media type returns matching fragments
+        .header("Accept", "application/vnd.github.text-match+json")
+        .send()
+        .await
+        .map_err(|e| VaultError::Http(e.to_string()))?;
+
+    let body: SearchResponse = check(resp)
+        .await?
+        .json()
+        .await
+        .map_err(|e| VaultError::Http(e.to_string()))?;
+
+    Ok(body
+        .items
+        .into_iter()
+        .filter(|i| i.path.ends_with(".md"))
+        .map(|i| SearchResult {
+            path: i.path,
+            sha: i.sha,
+            fragment: i
+                .text_matches
+                .into_iter()
+                .next()
+                .map(|m| m.fragment)
+                .unwrap_or_default(),
+        })
+        .collect())
+}
+
+fn urlencoded(s: &str) -> String {
+    s.chars()
+        .flat_map(|c| match c {
+            ' ' => "+".chars().collect::<Vec<_>>(),
+            c if c.is_alphanumeric() || "-_.~".contains(c) => vec![c],
+            c => format!("%{:02X}", c as u32).chars().collect(),
+        })
+        .collect()
 }
