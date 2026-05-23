@@ -287,6 +287,15 @@ kbd {
   color: var(--text-muted);
 }
 
+.settings-input-row { display: flex; gap: 6px; align-items: center; }
+.settings-input-row .settings-input { flex: 1; }
+.settings-eye-btn {
+  background: var(--bg3); border: 1px solid var(--border); border-radius: 6px;
+  padding: 6px 10px; color: var(--text-muted); cursor: pointer; font-size: 1rem;
+  flex-shrink: 0; height: 36px;
+}
+.settings-eye-btn:hover { color: var(--text); }
+
 .settings-input {
   background: var(--bg3);
   border: 1px solid var(--border);

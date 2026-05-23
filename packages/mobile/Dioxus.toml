@@ -14,6 +14,5 @@ target_sdk = 35
 compile_sdk = 35
 
 [android.permissions]
-# Network access for GitHub/GitLab API
-"android.permission.INTERNET" = {}
-"android.permission.ACCESS_NETWORK_STATE" = {}
+"android.permission.INTERNET" = { description = "Network access for GitHub/GitLab API" }
+"android.permission.ACCESS_NETWORK_STATE" = { description = "Check network connectivity" }

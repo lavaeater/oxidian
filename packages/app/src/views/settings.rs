@@ -15,6 +15,7 @@ pub fn Settings(
     let mut provider = use_signal(|| existing.as_ref().map(|c| c.provider.clone()).unwrap_or_default());
     let mut error  = use_signal(|| None::<String>);
     let mut saving = use_signal(|| false);
+    let mut show_token = use_signal(|| false);
 
     let handle_save = move |_| {
         let t = token.read().trim().to_string();
@@ -71,11 +72,21 @@ pub fn Settings(
                 }
 
                 label { class: "settings-label", "Token"
-                    input {
-                        class: "settings-input", r#type: "password",
-                        placeholder: "{token_hint}",
-                        value: "{token}",
-                        oninput: move |e| token.set(e.value()),
+                    div { class: "settings-input-row",
+                        input {
+                            class: "settings-input",
+                            r#type: if show_token() { "text" } else { "password" },
+                            placeholder: "{token_hint}",
+                            value: "{token}",
+                            oninput: move |e| token.set(e.value()),
+                        }
+                        button {
+                            class: "settings-eye-btn",
+                            r#type: "button",
+                            title: if show_token() { "Hide token" } else { "Show token (enables paste)" },
+                            onclick: move |_| show_token.set(!show_token()),
+                            if show_token() { "🙈" } else { "👁" }
+                        }
                     }
                 }
                 label { class: "settings-label", "Owner (user or namespace)"
