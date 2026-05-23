@@ -7,7 +7,7 @@ use crate::state;
 use crate::wikilink_index::WikiLinkIndex;
 use super::graph::GraphView;
 use super::properties::PropertiesPanel;
-use super::slash::{SlashMenu, JS_SLASH_QUERY, js_apply_slash};
+use super::slash::{SlashMenu, JS_NO_SLASH, JS_SLASH_QUERY, js_apply_slash};
 use super::toolbar::FormattingToolbar;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -187,10 +187,13 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                 sleep_ms(150).await;
                 if active_path().is_none() { slash_query.set(None); continue; }
                 let q = document::eval(JS_SLASH_QUERY)
-                    .join::<String>().await.unwrap_or_default();
-                // Only show menu when user has typed at least `/`
+                    .join::<String>().await.unwrap_or(JS_NO_SLASH.to_string());
                 if active_path().is_some() {
-                    slash_query.set(Some(q));
+                    if q == JS_NO_SLASH {
+                        slash_query.set(None);
+                    } else {
+                        slash_query.set(Some(q));
+                    }
                 }
             }
         });
@@ -437,18 +440,14 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
 
             // ── Slash command menu ───────────────────────────────────────────
             if let Some(ref q) = slash_query() {
-                if !q.is_empty() || slash_query().as_deref() == Some("") {
-                    // Only show if the query came from a `/`
-                    SlashMenu {
-                        query: q.clone(),
-                        on_select: move |insert: String| {
-                            let query_len = slash_query().unwrap_or_default().len();
-                            slash_query.set(None);
-                            // Apply via JS: replace `/query` with the snippet
-                            document::eval(&js_apply_slash(&insert, 1 + query_len));
-                        },
-                        on_close: move |_| slash_query.set(None),
-                    }
+                SlashMenu {
+                    query: q.clone(),
+                    on_select: move |insert: String| {
+                        let query_len = slash_query().unwrap_or_default().len();
+                        slash_query.set(None);
+                        document::eval(&js_apply_slash(&insert, 1 + query_len));
+                    },
+                    on_close: move |_| slash_query.set(None),
                 }
             }
 
@@ -542,6 +541,12 @@ fn SearchPanel(config: GithubConfig, on_select: EventHandler<String>) -> Element
     let mut results: Signal<Vec<SearchResult>> = use_signal(Vec::new);
     let mut searching = use_signal(|| false);
     let mut search_error: Signal<Option<String>> = use_signal(|| None);
+
+    use_effect(move || {
+        document::eval(
+            "requestAnimationFrame(() => { document.querySelector('.search-input')?.focus(); });"
+        );
+    });
 
     use_effect(move || {
         let q = query();
@@ -831,10 +836,41 @@ fn FileTree(files: Vec<FileMeta>, active: Option<String>, on_select: EventHandle
                 FileEntry { key: "{file.path}", file: file.clone(), active: active.as_deref() == Some(file.path.as_str()), on_select }
             }
             for (dir, dir_files) in dirs {
-                div { class: "file-tree-dir",
-                    div { class: "file-tree-dir-name", "📁 {dir}" }
-                    for file in dir_files {
-                        FileEntry { key: "{file.path}", file: file.clone(), active: active.as_deref() == Some(file.path.as_str()), on_select }
+                FileTreeDir {
+                    key: "{dir}",
+                    name: dir.to_string(),
+                    files: dir_files.into_iter().cloned().collect(),
+                    active: active.clone(),
+                    on_select,
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn FileTreeDir(
+    name: String,
+    files: Vec<FileMeta>,
+    active: Option<String>,
+    on_select: EventHandler<String>,
+) -> Element {
+    let mut collapsed = use_signal(|| true);
+    rsx! {
+        div { class: "file-tree-dir",
+            div {
+                class: "file-tree-dir-name",
+                onclick: move |_| collapsed.set(!collapsed()),
+                span { class: "file-tree-dir-chevron", if collapsed() { "▶" } else { "▼" } }
+                " 📁 {name}"
+            }
+            if !collapsed() {
+                for file in &files {
+                    FileEntry {
+                        key: "{file.path}",
+                        file: file.clone(),
+                        active: active.as_deref() == Some(file.path.as_str()),
+                        on_select,
                     }
                 }
             }

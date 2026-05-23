@@ -2,32 +2,37 @@ use dioxus::prelude::*;
 
 // JS: returns the text typed after the most recent `/` on the current line,
 // or "" if the cursor is not right after a `/…` token.
+// Sentinel returned when the cursor is NOT right after a `/…` token.
+// Distinct from "" which means "cursor is directly after `/` with no query yet".
+pub const JS_NO_SLASH: &str = "\x00";
+
 pub const JS_SLASH_QUERY: &str = r#"
 (function() {
+    const NO_SLASH = '\x00';
     const el = document.querySelector('.md-area[contenteditable="true"]');
-    if (!el) { dioxus.send(''); return; }
+    if (!el) { dioxus.send(NO_SLASH); return; }
     const sel = window.getSelection();
     if (!sel || !sel.rangeCount || !el.contains(sel.anchorNode)) {
-        dioxus.send(''); return;
+        dioxus.send(NO_SLASH); return;
     }
     const range = sel.getRangeAt(0);
     let offset = range.startOffset;
     let node = range.startContainer;
     let collected = '';
     // Walk backwards through text nodes
-    outer: while (true) {
+    while (true) {
         const text = (node.textContent || '').slice(0, offset);
         for (let i = text.length - 1; i >= 0; i--) {
             const ch = text[i];
             if (ch === '/') { dioxus.send(collected); return; }
-            if (/[\s\n]/.test(ch)) { dioxus.send(''); return; }
+            if (/[\s\n]/.test(ch)) { dioxus.send(NO_SLASH); return; }
             collected = ch + collected;
         }
         // Previous text node
         const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
         let prev = null, cur = walk.nextNode();
         while (cur && cur !== node) { prev = cur; cur = walk.nextNode(); }
-        if (!prev) { dioxus.send(''); return; }
+        if (!prev) { dioxus.send(NO_SLASH); return; }
         node = prev; offset = prev.textContent.length;
     }
 })();
