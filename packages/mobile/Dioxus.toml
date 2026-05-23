@@ -1,0 +1,19 @@
+[application]
+name = "Oxidian"
+version = "0.1.0"
+
+[bundle]
+identifier = "com.oxidian.app"
+publisher = "Oxidian"
+icon = ["assets/icons/icon.png"]
+application_name = "Oxidian"
+
+[android]
+min_sdk = 24
+target_sdk = 35
+compile_sdk = 35
+
+[android.permissions]
+# Network access for GitHub/GitLab API
+"android.permission.INTERNET" = {}
+"android.permission.ACCESS_NETWORK_STATE" = {}
