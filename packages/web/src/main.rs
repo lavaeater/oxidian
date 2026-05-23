@@ -1,12 +1,8 @@
 use dioxus::prelude::*;
 use vault::GithubConfig;
 
-pub mod export;
-mod state;
-pub mod wikilink_index;
-mod views;
-
-use views::{Settings, VaultBrowser};
+use app::state;
+use app::views::{Settings, VaultBrowser};
 
 const FAVICON: Asset = asset!("/assets/favicon.ico");
 const MAIN_CSS: Asset = asset!("/assets/main.css");
@@ -20,7 +16,6 @@ fn App() -> Element {
     let mut config: Signal<Option<GithubConfig>> = use_signal(|| None);
     let mut booted = use_signal(|| false);
 
-    // Read persisted config from localStorage on first mount.
     use_effect(move || {
         spawn(async move {
             config.set(state::load_config().await);
@@ -33,7 +28,7 @@ fn App() -> Element {
         document::Link { rel: "stylesheet", href: MAIN_CSS }
 
         if !booted() {
-            // Blank while we check localStorage — avoids a settings flash.
+            // Blank while checking localStorage — avoids a settings flash.
         } else if let Some(cfg) = config() {
             VaultBrowser {
                 config: cfg,

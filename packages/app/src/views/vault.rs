@@ -98,6 +98,9 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
     let mut save_status: Signal<SaveStatus> = use_signal(|| SaveStatus::Idle);
     let mut saved_content: Signal<String> = use_signal(String::new);
     let mut panel: Signal<Panel> = use_signal(|| Panel::Files);
+    // Mobile: controls whether the sidebar drawer is visible.
+    // Web CSS ignores this class; mobile CSS uses it to slide the sidebar in/out.
+    let mut sidebar_open = use_signal(|| true);
     let mut bookmarks: Signal<Vec<String>> = use_signal(Vec::new);
     let mut show_switcher = use_signal(|| false);
     let mut show_new_file = use_signal(|| false);
@@ -236,7 +239,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
         div { class: "app-layout",
 
             // ── Sidebar ─────────────────────────────────────────────────────
-            aside { class: "sidebar",
+            aside { class: if sidebar_open() { "sidebar sidebar--open" } else { "sidebar" },
                 div { class: "sidebar-header",
                     span { class: "sidebar-title", "Oxidian" }
                     div { class: "sidebar-header-actions",
@@ -268,6 +271,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                                     }
                                     active_path.set(Some(path));
                                     show_switcher.set(false);
+                                    sidebar_open.set(false);
                                 });
                             },
                             "📅"
@@ -277,6 +281,13 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                             title: "Disconnect vault",
                             onclick: move |_| { state::clear_config(); on_logout(()); },
                             "⚙"
+                        }
+                        // Close button — hidden on desktop via web CSS, visible on mobile
+                        button {
+                            class: "sidebar-icon-btn sidebar-close-btn",
+                            title: "Close",
+                            onclick: move |_| sidebar_open.set(false),
+                            "✕"
                         }
                     }
                 }
@@ -305,6 +316,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                                     on_select: move |path: String| {
                                         active_path.set(Some(path));
                                         show_switcher.set(false);
+                                        sidebar_open.set(false);
                                     },
                                 }
                             }
@@ -318,6 +330,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                                 on_select: move |path: String| {
                                     active_path.set(Some(path));
                                     show_switcher.set(false);
+                                    sidebar_open.set(false);
                                 },
                             }
                         },
@@ -331,6 +344,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                                 on_select: move |path: String| {
                                     active_path.set(Some(path));
                                     show_switcher.set(false);
+                                    sidebar_open.set(false);
                                 },
                             }
                         },
@@ -342,6 +356,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                                 on_select: move |path: String| {
                                     active_path.set(Some(path));
                                     show_switcher.set(false);
+                                    sidebar_open.set(false);
                                 },
                                 config: cfg_search.clone(),
                             }
@@ -353,6 +368,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                                 on_select: move |path: String| {
                                     active_path.set(Some(path));
                                     show_switcher.set(false);
+                                    sidebar_open.set(false);
                                 },
                                 on_remove: move |path: String| {
                                     bookmarks.with_mut(|bm| bm.retain(|p| p != &path));
@@ -368,6 +384,13 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
             main { class: "editor-pane",
                 if let Some(ref path) = active_path() {
                     div { class: "editor-titlebar",
+                        // Back button — hidden on desktop, visible on mobile
+                        button {
+                            class: "editor-icon-btn editor-back-btn",
+                            title: "Back to files",
+                            onclick: move |_| sidebar_open.set(true),
+                            "‹"
+                        }
                         span { class: "editor-filename", "{path}" }
                         div { class: "editor-meta",
                             button {
@@ -423,6 +446,40 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                             " · " code { "{config.branch}" }
                         }
                     }
+                }
+            }
+
+            // ── Bottom nav (mobile only — hidden by web CSS) ─────────────────
+            div { class: "bottom-nav",
+                button {
+                    class: if panel() == Panel::Files { "bottom-nav-btn bottom-nav-btn--active" } else { "bottom-nav-btn" },
+                    onclick: move |_| { panel.set(Panel::Files); sidebar_open.set(true); },
+                    span { "📁" }
+                    span { class: "bottom-nav-label", "Files" }
+                }
+                button {
+                    class: if panel() == Panel::Search { "bottom-nav-btn bottom-nav-btn--active" } else { "bottom-nav-btn" },
+                    onclick: move |_| { panel.set(Panel::Search); sidebar_open.set(true); },
+                    span { "🔍" }
+                    span { class: "bottom-nav-label", "Search" }
+                }
+                button {
+                    class: if panel() == Panel::Backlinks { "bottom-nav-btn bottom-nav-btn--active" } else { "bottom-nav-btn" },
+                    onclick: move |_| { panel.set(Panel::Backlinks); sidebar_open.set(true); },
+                    span { "↩" }
+                    span { class: "bottom-nav-label", "Links" }
+                }
+                button {
+                    class: if panel() == Panel::Graph { "bottom-nav-btn bottom-nav-btn--active" } else { "bottom-nav-btn" },
+                    onclick: move |_| { panel.set(Panel::Graph); sidebar_open.set(true); },
+                    span { "◉" }
+                    span { class: "bottom-nav-label", "Graph" }
+                }
+                button {
+                    class: if panel() == Panel::Bookmarks { "bottom-nav-btn bottom-nav-btn--active" } else { "bottom-nav-btn" },
+                    onclick: move |_| { panel.set(Panel::Bookmarks); sidebar_open.set(true); },
+                    span { "🔖" }
+                    span { class: "bottom-nav-label", "Saved" }
                 }
             }
 

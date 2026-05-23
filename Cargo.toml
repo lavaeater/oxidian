@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "packages/ui",
     "packages/vault",
+    "packages/app",
     "packages/web",
     "packages/desktop",
     "packages/mobile",
@@ -16,3 +17,4 @@ dioxus = { version = "0.7.9" }
 ui = { path = "packages/ui" }
 api = { path = "packages/api" }
 vault = { path = "packages/vault" }
+app = { path = "packages/app" }
