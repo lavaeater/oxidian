@@ -1,6 +1,7 @@
 [application]
 name = "Oxidian"
 version = "0.1.0"
+android_manifest = "assets/android/AndroidManifest.xml"
 
 [bundle]
 identifier = "com.oxidian.app"
