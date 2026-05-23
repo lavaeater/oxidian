@@ -246,6 +246,23 @@
   opacity: 1;
 }
 
+/* ── Tables ── */
+.md-table-row {
+  display: flex;
+  width: 100%;
+  border-bottom: 1px solid var(--primary-color-6, rgba(128, 128, 128, 0.15));
+}
+.md-table-cell {
+  flex: 1;
+  padding: 0.15em 0.5em;
+  min-width: 0;
+}
+/* Separator row: shown as a thicker divider; raw --- text is a marker */
+.md-table-sep {
+  display: block;
+  border-bottom: 2px solid var(--primary-color-6, rgba(128, 128, 128, 0.25));
+}
+
 /* ── Fenced code blocks ── */
 .md-code-fence {
   display: block;

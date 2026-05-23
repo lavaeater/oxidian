@@ -10,5 +10,6 @@ mod echo;
 pub use echo::Echo;
 
 mod cm;
-pub use cm::MarkdownArea;
+pub use cm::{MarkdownArea, MarkdownAreaVariant};
+pub use cm::tokenizer;
 

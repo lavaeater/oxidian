@@ -371,6 +371,35 @@ fn push_token_html(source: &str, token: &Token, out: &mut String) {
             push_escaped(raw, out);
             out.push_str("</span>");
         }
+
+        TokenKind::TableRow { cells, is_separator } => {
+            if *is_separator {
+                // Render as an invisible line divider; raw text appears as marker when active.
+                out.push_str("<span class=\"md-token md-table-sep\">");
+                marker(raw, out);
+                out.push_str("</span>");
+            } else {
+                out.push_str("<span class=\"md-token md-table-row\">");
+                let base = token.range.start;
+                let mut consumed = 0; // offset into raw
+                for cell in cells {
+                    // Emit everything up to the cell (includes leading pipe + space)
+                    let up_to = cell.start - base;
+                    for ch in raw[consumed..up_to].chars() {
+                        if ch == '|' { marker("|", out); } else { push_escaped_char(ch, out); }
+                    }
+                    out.push_str("<span class=\"md-table-cell\">");
+                    push_inline_html(source, cell.clone(), out);
+                    out.push_str("</span>");
+                    consumed = cell.end - base;
+                }
+                // Trailing pipe(s) and whitespace
+                for ch in raw[consumed..].chars() {
+                    if ch == '|' { marker("|", out); } else { push_escaped_char(ch, out); }
+                }
+                out.push_str("</span>");
+            }
+        }
     }
 }
 

@@ -1,19 +1,12 @@
 use dioxus::prelude::*;
+use vault::GithubConfig;
 
-use ui::Navbar;
-use views::{Blog, Home};
-
+pub mod export;
+mod state;
+pub mod wikilink_index;
 mod views;
 
-#[derive(Debug, Clone, Routable, PartialEq)]
-#[rustfmt::skip]
-enum Route {
-    #[layout(WebNavbar)]
-    #[route("/")]
-    Home {},
-    #[route("/blog/:id")]
-    Blog { id: i32 },
-}
+use views::{Settings, VaultBrowser};
 
 const FAVICON: Asset = asset!("/assets/favicon.ico");
 const MAIN_CSS: Asset = asset!("/assets/main.css");
@@ -24,33 +17,33 @@ fn main() {
 
 #[component]
 fn App() -> Element {
-    // Build cool things ✌️
+    let mut config: Signal<Option<GithubConfig>> = use_signal(|| None);
+    let mut booted = use_signal(|| false);
+
+    // Read persisted config from localStorage on first mount.
+    use_effect(move || {
+        spawn(async move {
+            config.set(state::load_config().await);
+            booted.set(true);
+        });
+    });
 
     rsx! {
-        // Global app resources
         document::Link { rel: "icon", href: FAVICON }
         document::Link { rel: "stylesheet", href: MAIN_CSS }
 
-        Router::<Route> {}
-    }
-}
-
-/// A web-specific Router around the shared `Navbar` component
-/// which allows us to use the web-specific `Route` enum.
-#[component]
-fn WebNavbar() -> Element {
-    rsx! {
-        Navbar {
-            Link {
-                to: Route::Home {},
-                "Home"
+        if !booted() {
+            // Blank while we check localStorage — avoids a settings flash.
+        } else if let Some(cfg) = config() {
+            VaultBrowser {
+                config: cfg,
+                on_logout: move |_| config.set(None),
             }
-            Link {
-                to: Route::Blog { id: 1 },
-                "Blog"
+        } else {
+            Settings {
+                existing: None,
+                on_save: move |cfg| config.set(Some(cfg)),
             }
         }
-
-        Outlet::<Route> {}
     }
 }
