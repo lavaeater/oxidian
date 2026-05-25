@@ -274,6 +274,82 @@ pub async fn create_file(
     Ok(written.content.sha)
 }
 
+// ── OAuth Device Flow ─────────────────────────────────────────────────────────
+
+pub const GITHUB_CLIENT_ID: &str = "Ov23li0fTUa8YSbUsWwI";
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct DeviceCodeResponse {
+    pub device_code: String,
+    pub user_code: String,
+    pub verification_uri: String,
+    pub expires_in: u32,
+    pub interval: u32,
+}
+
+#[derive(Debug)]
+pub enum PollOutcome {
+    Token(String),
+    Pending,
+    SlowDown(u32),
+    Expired,
+    Denied,
+}
+
+pub async fn request_device_code() -> Result<DeviceCodeResponse, VaultError> {
+    let resp = reqwest::Client::new()
+        .post("https://github.com/login/device/code")
+        .header("Accept", "application/json")
+        .form(&[("client_id", GITHUB_CLIENT_ID), ("scope", "repo")])
+        .send()
+        .await
+        .map_err(|e| VaultError::Http(e.to_string()))?;
+    resp.json::<DeviceCodeResponse>()
+        .await
+        .map_err(|e| VaultError::Http(e.to_string()))
+}
+
+pub async fn poll_device_token(device_code: &str) -> Result<PollOutcome, VaultError> {
+    #[derive(serde::Deserialize)]
+    struct PollResp {
+        access_token: Option<String>,
+        error: Option<String>,
+        interval: Option<u32>,
+    }
+    let resp = reqwest::Client::new()
+        .post("https://github.com/login/oauth/access_token")
+        .header("Accept", "application/json")
+        .form(&[
+            ("client_id", GITHUB_CLIENT_ID),
+            ("device_code", device_code),
+            ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
+        ])
+        .send()
+        .await
+        .map_err(|e| VaultError::Http(e.to_string()))?;
+    let body: PollResp = resp.json().await.map_err(|e| VaultError::Http(e.to_string()))?;
+    if let Some(token) = body.access_token {
+        return Ok(PollOutcome::Token(token));
+    }
+    Ok(match body.error.as_deref() {
+        Some("slow_down")      => PollOutcome::SlowDown(body.interval.unwrap_or(10)),
+        Some("expired_token")  => PollOutcome::Expired,
+        Some("access_denied")  => PollOutcome::Denied,
+        _                      => PollOutcome::Pending,
+    })
+}
+
+pub async fn get_username(token: &str) -> Result<String, VaultError> {
+    #[derive(serde::Deserialize)]
+    struct User { login: String }
+    let resp = get("https://api.github.com/user", token)
+        .send()
+        .await
+        .map_err(|e| VaultError::Http(e.to_string()))?;
+    let user: User = check(resp).await?.json().await.map_err(|e| VaultError::Http(e.to_string()))?;
+    Ok(user.login)
+}
+
 fn urlencoded(s: &str) -> String {
     s.chars()
         .flat_map(|c| match c {

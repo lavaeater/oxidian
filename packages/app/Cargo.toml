@@ -8,3 +8,4 @@ dioxus = { workspace = true, features = ["router"] }
 ui = { workspace = true }
 vault = { workspace = true }
 serde_json = "1"
+futures-timer = "3"

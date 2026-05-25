@@ -1,6 +1,8 @@
 pub mod github;
 pub mod gitlab;
 
+pub use github::{DeviceCodeResponse, PollOutcome, request_device_code, poll_device_token, get_username};
+
 #[derive(thiserror::Error, Debug, Clone)]
 pub enum VaultError {
     #[error("HTTP error: {0}")]

@@ -329,6 +329,42 @@ kbd {
 .settings-btn:hover:not(:disabled) { background: var(--accent); }
 .settings-btn:disabled { opacity: 0.5; cursor: default; }
 
+.settings-oauth-btn {
+  background: #24292f; border: none; border-radius: 6px;
+  padding: 10px 14px; color: #fff; font-size: 0.9rem; font-weight: 600;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  gap: 8px; transition: background 120ms;
+}
+.settings-oauth-btn:hover { background: #3c4149; }
+
+.settings-divider {
+  text-align: center; color: var(--text-muted); font-size: 0.8rem; margin: -4px 0;
+}
+
+.settings-device-box {
+  background: var(--bg3); border: 1px solid var(--border); border-radius: 8px;
+  padding: 1.2rem; display: flex; flex-direction: column; gap: 0.75rem;
+  align-items: center; text-align: center;
+}
+.settings-device-instruction { font-size: 0.88rem; color: var(--text-muted); }
+.settings-device-code {
+  font-family: monospace; font-size: 1.8rem; font-weight: 700;
+  letter-spacing: 0.15em; color: var(--text); background: var(--bg);
+  border: 1px solid var(--border); border-radius: 6px; padding: 8px 20px;
+}
+.settings-device-waiting {
+  font-size: 0.82rem; color: var(--text-muted); animation: pulse 1.5s ease-in-out infinite;
+}
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+.settings-cancel-btn {
+  background: none; border: 1px solid var(--border); border-radius: 6px;
+  padding: 5px 14px; color: var(--text-muted); font-size: 0.85rem; cursor: pointer;
+}
+.settings-cancel-btn:hover { color: var(--text); border-color: var(--text-muted); }
+.settings-oauth-done {
+  color: var(--success, #40a02b); font-size: 0.9rem; font-weight: 600;
+}
+
 /* ── Properties panel ── */
 .props-panel {
   border-bottom: 1px solid var(--border);
