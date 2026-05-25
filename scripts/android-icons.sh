@@ -18,13 +18,14 @@ fi
 
 echo "Copying icon resources → $DEST"
 
-# Raster mipmap icons — remove dx-generated WebP first to avoid duplicate
-# resource error (Gradle rejects same resource name in two formats).
+# Raster mipmap icons — convert our PNG to WebP so we replace dx's file
+# in-place (same name, same format). Avoids the duplicate-resource error that
+# occurs when both ic_launcher.webp and ic_launcher.png exist side-by-side.
 for density in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
   mkdir -p "$DEST/mipmap-${density}"
-  rm -f "$DEST/mipmap-${density}/ic_launcher.webp"
-  cp "$SRC/mipmap-${density}/ic_launcher.png" "$DEST/mipmap-${density}/ic_launcher.png"
-  echo "  mipmap-${density}/ic_launcher.png"
+  rm -f "$DEST/mipmap-${density}/ic_launcher.png"
+  magick "$SRC/mipmap-${density}/ic_launcher.png" "$DEST/mipmap-${density}/ic_launcher.webp"
+  echo "  mipmap-${density}/ic_launcher.webp"
 done
 
 # Adaptive icon drawables (background colour + foreground bitmap)
