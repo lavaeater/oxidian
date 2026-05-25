@@ -8,6 +8,7 @@
         android:allowNativeHeapPointerTagging="false"
         android:label="Oxidian"
         android:supportsRtl="true"
+        android:usesCleartextTraffic="true"
         android:theme="@style/AppTheme">
         <activity
             android:name="dev.dioxus.main.MainActivity"
