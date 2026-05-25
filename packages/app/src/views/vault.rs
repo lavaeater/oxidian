@@ -13,6 +13,58 @@ use super::toolbar::FormattingToolbar;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+/// Applies a template: creates the target file (or navigates to it if it already
+/// exists for filepath templates) and returns the path that was opened.
+async fn apply_template(
+    meta: &TemplateMeta,
+    cfg: &GithubConfig,
+    mut files: Signal<Vec<FileMeta>>,
+    mut active_path: Signal<Option<String>>,
+    mut load_error: Signal<Option<String>>,
+    current_dir: &str,
+) {
+    let date_json = document::eval(JS_DATE_VARS)
+        .join::<String>().await.unwrap_or_default();
+    let vars = template::TemplateVars::from_json(&date_json, "", current_dir);
+
+    if let Some(ref fp_tmpl) = meta.filepath {
+        let path = template::substitute_vars(fp_tmpl, &vars)
+            .trim_start_matches('/').to_string();
+        if files.read().iter().any(|f| f.path == path) {
+            active_path.set(Some(path));
+        } else {
+            let body = template::strip_tabstops(&template::substitute_vars(&meta.body, &vars));
+            match vault::dispatch::create_file(cfg, &path, &body, &format!("Create {path}")).await {
+                Ok(_) => {
+                    if let Ok(mut list) = vault::dispatch::list_files(cfg).await {
+                        list.sort_by(|a, b| a.path.cmp(&b.path));
+                        files.set(list);
+                    }
+                    active_path.set(Some(path));
+                }
+                Err(e) => load_error.set(Some(e.to_string())),
+            }
+        }
+    } else {
+        // Insert-only template: open as a new untitled note pre-filled with body.
+        let body = template::strip_tabstops(&template::substitute_vars(&meta.body, &vars));
+        let date_json2 = document::eval(
+            "dioxus.send(new Date().toISOString().split('T')[0]);"
+        ).join::<String>().await.unwrap_or_default();
+        let path = format!("{date_json2}-note.md");
+        match vault::dispatch::create_file(cfg, &path, &body, &format!("Create {path}")).await {
+            Ok(_) => {
+                if let Ok(mut list) = vault::dispatch::list_files(cfg).await {
+                    list.sort_by(|a, b| a.path.cmp(&b.path));
+                    files.set(list);
+                }
+                active_path.set(Some(path));
+            }
+            Err(e) => load_error.set(Some(e.to_string())),
+        }
+    }
+}
+
 async fn sleep_ms(ms: u32) {
     let _ = document::eval(&format!(
         "await new Promise(r => setTimeout(r, {ms})); dioxus.send(1);"
@@ -275,22 +327,31 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                             title: "Today's note",
                             onclick: move |_| {
                                 let cfg = cfg_daily.clone();
+                                let tmpl_path = cfg.daily_note_template.clone();
+                                let tmpl = templates.read().iter()
+                                    .find(|t| t.source_path == tmpl_path)
+                                    .cloned();
                                 spawn(async move {
-                                    let date = document::eval(
-                                        "dioxus.send(new Date().toISOString().split('T')[0]);"
-                                    ).join::<String>().await.unwrap_or_default();
-                                    if date.is_empty() { return; }
-                                    let path = format!("{date}.md");
-                                    let _ = vault::dispatch::create_file(
-                                        &cfg, &path,
-                                        &format!("# {date}\n\n"),
-                                        &format!("Daily note {date}"),
-                                    ).await;
-                                    if let Ok(mut list) = vault::dispatch::list_files(&cfg).await {
-                                        list.sort_by(|a, b| a.path.cmp(&b.path));
-                                        files.set(list);
+                                    if let Some(meta) = tmpl {
+                                        apply_template(&meta, &cfg, files, active_path, load_error, "").await;
+                                    } else {
+                                        // Fallback: simple YYYY-MM-DD.md note
+                                        let date = document::eval(
+                                            "dioxus.send(new Date().toISOString().split('T')[0]);"
+                                        ).join::<String>().await.unwrap_or_default();
+                                        if date.is_empty() { return; }
+                                        let path = format!("{date}.md");
+                                        let _ = vault::dispatch::create_file(
+                                            &cfg, &path,
+                                            &format!("# {date}\n\n"),
+                                            &format!("Daily note {date}"),
+                                        ).await;
+                                        if let Ok(mut list) = vault::dispatch::list_files(&cfg).await {
+                                            list.sort_by(|a, b| a.path.cmp(&b.path));
+                                            files.set(list);
+                                        }
+                                        active_path.set(Some(path));
                                     }
-                                    active_path.set(Some(path));
                                     show_switcher.set(false);
                                     sidebar_open.set(false);
                                 });
@@ -536,32 +597,14 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                                 let current_dir = active_path().and_then(|p| {
                                     p.rfind('/').map(|i| p[..i].to_string())
                                 }).unwrap_or_default();
-                                let all_files = files.read().clone();
                                 spawn(async move {
-                                    let date_json = document::eval(JS_DATE_VARS)
-                                        .join::<String>().await.unwrap_or_default();
-                                    let vars = template::TemplateVars::from_json(&date_json, "", &current_dir);
-                                    if let Some(ref fp_tmpl) = meta.filepath {
-                                        let path = template::substitute_vars(fp_tmpl, &vars)
-                                            .trim_start_matches('/').to_string();
-                                        if all_files.iter().any(|f| f.path == path) {
-                                            active_path.set(Some(path));
-                                        } else {
-                                            let body = template::strip_tabstops(
-                                                &template::substitute_vars(&meta.body, &vars));
-                                            match vault::dispatch::create_file(&cfg, &path, &body,
-                                                &format!("Create {path}")).await {
-                                                Ok(_) => {
-                                                    if let Ok(mut list) = vault::dispatch::list_files(&cfg).await {
-                                                        list.sort_by(|a, b| a.path.cmp(&b.path));
-                                                        files.set(list);
-                                                    }
-                                                    active_path.set(Some(path));
-                                                }
-                                                Err(e) => load_error.set(Some(e.to_string())),
-                                            }
-                                        }
+                                    if meta.filepath.is_some() {
+                                        apply_template(&meta, &cfg, files, active_path, load_error, &current_dir).await;
                                     } else {
+                                        // Insert-only: substitute vars and paste at cursor
+                                        let date_json = document::eval(JS_DATE_VARS)
+                                            .join::<String>().await.unwrap_or_default();
+                                        let vars = template::TemplateVars::from_json(&date_json, "", &current_dir);
                                         let body = template::strip_tabstops(
                                             &template::substitute_vars(&meta.body, &vars));
                                         document::eval(&js_apply_slash(&body, 1 + query_len));

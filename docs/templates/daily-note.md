@@ -1,9 +1,9 @@
 ---
-foam_template:
-  filepath: "/2.privat/journal/${FOAM_DATE_YEAR}/${FOAM_DATE_MONTH_NAME}/Week-${FOAM_DATE_WEEK}/${FOAM_DATE_YEAR_SHORT}.${FOAM_DATE_MONTH}.${FOAM_DATE_DATE}-${FOAM_DATE_DAY_NAME}.md"
+oxid_template:
+  filepath: "/2.privat/journal/${OXID_DATE_YEAR}/${OXID_DATE_MONTH_NAME}/Week-${OXID_DATE_WEEK}/${OXID_DATE_YEAR_SHORT}.${OXID_DATE_MONTH}.${OXID_DATE_DATE}-${OXID_DATE_DAY_NAME}.md"
   description: "Daily note"
 ---
-# ${FOAM_DATE_DAY_NAME} ${FOAM_DATE_DATE} ${FOAM_DATE_MONTH_NAME} ${FOAM_DATE_YEAR}
+# ${OXID_DATE_DAY_NAME} ${OXID_DATE_DATE} ${OXID_DATE_MONTH_NAME} ${OXID_DATE_YEAR}
 
 ## Planera Checklista
 

@@ -130,7 +130,10 @@ pub struct GithubConfig {
     pub provider: Provider,
     #[serde(default = "default_templates_dir")]
     pub templates_dir: String,
+    #[serde(default = "default_daily_note_template")]
+    pub daily_note_template: String,
 }
 
 fn default_branch() -> String { "main".to_string() }
-fn default_templates_dir() -> String { "templates".to_string() }
+fn default_templates_dir() -> String { ".oxidian/templates".to_string() }
+fn default_daily_note_template() -> String { ".oxidian/templates/daily-note.md".to_string() }

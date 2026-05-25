@@ -22,7 +22,8 @@ pub fn Settings(
     let mut repo     = use_signal(|| existing.as_ref().map(|c| c.repo.clone()).unwrap_or_default());
     let mut branch        = use_signal(|| existing.as_ref().map(|c| c.branch.clone()).unwrap_or_else(|| "main".to_string()));
     let mut provider      = use_signal(|| existing.as_ref().map(|c| c.provider.clone()).unwrap_or_default());
-    let mut templates_dir = use_signal(|| existing.as_ref().map(|c| c.templates_dir.clone()).unwrap_or_else(|| "templates".to_string()));
+    let mut templates_dir       = use_signal(|| existing.as_ref().map(|c| c.templates_dir.clone()).unwrap_or_else(|| ".oxidian/templates".to_string()));
+    let mut daily_note_template = use_signal(|| existing.as_ref().map(|c| c.daily_note_template.clone()).unwrap_or_else(|| ".oxidian/templates/daily-note.md".to_string()));
     let mut error    = use_signal(|| None::<String>);
     let mut saving   = use_signal(|| false);
     let mut show_token  = use_signal(|| false);
@@ -84,9 +85,14 @@ pub fn Settings(
         }
         saving.set(true);
         error.set(None);
-        let td = templates_dir.read().trim().to_string();
-        let td = if td.is_empty() { "templates".to_string() } else { td };
-        let cfg = GithubConfig { token: t, owner: o, repo: r, branch: b, provider: provider(), templates_dir: td };
+        let td  = templates_dir.read().trim().to_string();
+        let td  = if td.is_empty() { ".oxidian/templates".to_string() } else { td };
+        let dnt = daily_note_template.read().trim().to_string();
+        let dnt = if dnt.is_empty() { ".oxidian/templates/daily-note.md".to_string() } else { dnt };
+        let cfg = GithubConfig {
+            token: t, owner: o, repo: r, branch: b, provider: provider(),
+            templates_dir: td, daily_note_template: dnt,
+        };
         state::save_config(&cfg);
         on_save(cfg);
     };
@@ -213,8 +219,14 @@ pub fn Settings(
                 }
                 label { class: "settings-label", "Templates folder"
                     input {
-                        class: "settings-input", placeholder: "templates",
+                        class: "settings-input", placeholder: ".oxidian/templates",
                         value: "{templates_dir}", oninput: move |e| templates_dir.set(e.value()),
+                    }
+                }
+                label { class: "settings-label", "Daily note template"
+                    input {
+                        class: "settings-input", placeholder: ".oxidian/templates/daily-note.md",
+                        value: "{daily_note_template}", oninput: move |e| daily_note_template.set(e.value()),
                     }
                 }
 
