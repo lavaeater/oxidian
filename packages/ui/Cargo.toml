@@ -5,5 +5,4 @@ edition = "2024"
 
 [dependencies]
 dioxus = { workspace = true }
-dioxus-primitives = { git = "https://github.com/DioxusLabs/components", version = "0.0.1", default-features = false, features = ["router"] }
 
