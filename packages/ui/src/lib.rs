@@ -6,9 +6,6 @@ pub use hero::Hero;
 mod navbar;
 pub use navbar::Navbar;
 
-mod echo;
-pub use echo::Echo;
-
 mod cm;
 pub use cm::{MarkdownArea, MarkdownAreaVariant};
 pub use cm::tokenizer;

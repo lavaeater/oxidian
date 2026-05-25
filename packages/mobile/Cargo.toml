@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-dioxus = { workspace = true, features = ["router", "fullstack"] }
+dioxus = { workspace = true, features = ["router"] }
 ui = { workspace = true }
 vault = { workspace = true }
 app = { workspace = true }
@@ -12,4 +12,3 @@ app = { workspace = true }
 [features]
 default = []
 mobile = ["dioxus/mobile"]
-server = ["dioxus/server", "ui/server"]
