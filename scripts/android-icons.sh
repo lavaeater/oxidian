@@ -18,9 +18,11 @@ fi
 
 echo "Copying icon resources → $DEST"
 
-# Raster mipmap icons (replace the dx-generated WebP with our PNG)
+# Raster mipmap icons — remove dx-generated WebP first to avoid duplicate
+# resource error (Gradle rejects same resource name in two formats).
 for density in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
   mkdir -p "$DEST/mipmap-${density}"
+  rm -f "$DEST/mipmap-${density}/ic_launcher.webp"
   cp "$SRC/mipmap-${density}/ic_launcher.png" "$DEST/mipmap-${density}/ic_launcher.png"
   echo "  mipmap-${density}/ic_launcher.png"
 done
