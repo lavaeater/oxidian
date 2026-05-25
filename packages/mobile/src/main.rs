@@ -1,19 +1,8 @@
 use dioxus::prelude::*;
+use vault::GithubConfig;
 
-use ui::Navbar;
-use views::{Blog, Home};
-
-mod views;
-
-#[derive(Debug, Clone, Routable, PartialEq)]
-#[rustfmt::skip]
-enum Route {
-    #[layout(MobileNavbar)]
-    #[route("/")]
-    Home {},
-    #[route("/blog/:id")]
-    Blog { id: i32 },
-}
+use app::state;
+use app::views::{Settings, VaultBrowser};
 
 const MAIN_CSS: Asset = asset!("/assets/main.css");
 
@@ -23,32 +12,32 @@ fn main() {
 
 #[component]
 fn App() -> Element {
-    // Build cool things ✌️
+    let mut config: Signal<Option<GithubConfig>> = use_signal(|| None);
+    let mut booted = use_signal(|| false);
+
+    use_effect(move || {
+        spawn(async move {
+            config.set(state::load_config().await);
+            booted.set(true);
+        });
+    });
 
     rsx! {
-        // Global app resources
+        document::Meta { name: "viewport", content: "width=device-width, initial-scale=1, viewport-fit=cover" }
         document::Link { rel: "stylesheet", href: MAIN_CSS }
 
-        Router::<Route> {}
-    }
-}
-
-/// A mobile-specific Router around the shared `Navbar` component
-/// which allows us to use the mobile-specific `Route` enum.
-#[component]
-fn MobileNavbar() -> Element {
-    rsx! {
-        Navbar {
-            Link {
-                to: Route::Home {},
-                "Home"
+        if !booted() {
+            // blank while loading
+        } else if let Some(cfg) = config() {
+            VaultBrowser {
+                config: cfg,
+                on_logout: move |_| config.set(None),
             }
-            Link {
-                to: Route::Blog { id: 1 },
-                "Blog"
+        } else {
+            Settings {
+                existing: None,
+                on_save: move |cfg| config.set(Some(cfg)),
             }
         }
-
-        Outlet::<Route> {}
     }
 }
