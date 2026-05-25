@@ -20,8 +20,9 @@ pub fn Settings(
     let mut token    = use_signal(|| existing.as_ref().map(|c| c.token.clone()).unwrap_or_default());
     let mut owner    = use_signal(|| existing.as_ref().map(|c| c.owner.clone()).unwrap_or_default());
     let mut repo     = use_signal(|| existing.as_ref().map(|c| c.repo.clone()).unwrap_or_default());
-    let mut branch   = use_signal(|| existing.as_ref().map(|c| c.branch.clone()).unwrap_or_else(|| "main".to_string()));
-    let mut provider = use_signal(|| existing.as_ref().map(|c| c.provider.clone()).unwrap_or_default());
+    let mut branch        = use_signal(|| existing.as_ref().map(|c| c.branch.clone()).unwrap_or_else(|| "main".to_string()));
+    let mut provider      = use_signal(|| existing.as_ref().map(|c| c.provider.clone()).unwrap_or_default());
+    let mut templates_dir = use_signal(|| existing.as_ref().map(|c| c.templates_dir.clone()).unwrap_or_else(|| "templates".to_string()));
     let mut error    = use_signal(|| None::<String>);
     let mut saving   = use_signal(|| false);
     let mut show_token  = use_signal(|| false);
@@ -83,7 +84,9 @@ pub fn Settings(
         }
         saving.set(true);
         error.set(None);
-        let cfg = GithubConfig { token: t, owner: o, repo: r, branch: b, provider: provider() };
+        let td = templates_dir.read().trim().to_string();
+        let td = if td.is_empty() { "templates".to_string() } else { td };
+        let cfg = GithubConfig { token: t, owner: o, repo: r, branch: b, provider: provider(), templates_dir: td };
         state::save_config(&cfg);
         on_save(cfg);
     };
@@ -206,6 +209,12 @@ pub fn Settings(
                     input {
                         class: "settings-input", placeholder: "main",
                         value: "{branch}", oninput: move |e| branch.set(e.value()),
+                    }
+                }
+                label { class: "settings-label", "Templates folder"
+                    input {
+                        class: "settings-input", placeholder: "templates",
+                        value: "{templates_dir}", oninput: move |e| templates_dir.set(e.value()),
                     }
                 }
 

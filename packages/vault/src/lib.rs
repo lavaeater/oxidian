@@ -128,8 +128,9 @@ pub struct GithubConfig {
     pub branch: String,
     #[serde(default)]
     pub provider: Provider,
+    #[serde(default = "default_templates_dir")]
+    pub templates_dir: String,
 }
 
-fn default_branch() -> String {
-    "main".to_string()
-}
+fn default_branch() -> String { "main".to_string() }
+fn default_templates_dir() -> String { "templates".to_string() }

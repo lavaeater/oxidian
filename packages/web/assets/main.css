@@ -640,6 +640,8 @@ kbd {
   transition: background 80ms;
 }
 .slash-item:hover { background: var(--bg3); }
+.slash-item--template { border-top: 1px solid var(--border); }
+.slash-item--template:first-of-type { border-top: none; }
 .slash-name { font-size: 0.9rem; color: var(--text); min-width: 90px; }
 .slash-desc { font-size: 0.8rem; color: var(--text-muted); }
 

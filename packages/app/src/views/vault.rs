@@ -4,6 +4,7 @@ use vault::{FileMeta, GithubConfig, SearchResult};
 
 use crate::export;
 use crate::state;
+use crate::template::{self, TemplateMeta, JS_DATE_VARS};
 use crate::wikilink_index::WikiLinkIndex;
 use super::graph::GraphView;
 use super::properties::PropertiesPanel;
@@ -108,6 +109,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
     let mut index: Signal<WikiLinkIndex> = use_signal(WikiLinkIndex::new);
     // Slash command query: Some("query") when `/query` is at cursor, None otherwise.
     let mut slash_query: Signal<Option<String>> = use_signal(|| None);
+    let mut templates: Signal<Vec<TemplateMeta>> = use_signal(Vec::new);
 
     // Load file list and bookmarks on mount.
     let cfg = config.clone();
@@ -122,6 +124,25 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
             }
             bookmarks.set(bm);
             loading_list.set(false);
+        });
+    });
+
+    // Load templates whenever the file list changes.
+    let cfg_tmpl = config.clone();
+    use_effect(move || {
+        let cfg = cfg_tmpl.clone();
+        let prefix = format!("{}/", cfg.templates_dir);
+        let paths: Vec<String> = files.read()
+            .iter()
+            .filter(|f| f.path.starts_with(&prefix))
+            .map(|f| f.path.clone())
+            .collect();
+        spawn(async move {
+            if paths.is_empty() { templates.set(vec![]); return; }
+            let contents = vault::dispatch::read_many(&cfg, &paths).await;
+            templates.set(contents.iter()
+                .map(|(p, c)| template::parse_template(p, c))
+                .collect());
         });
     });
 
@@ -497,14 +518,59 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
 
             // ── Slash command menu ───────────────────────────────────────────
             if let Some(ref q) = slash_query() {
-                SlashMenu {
-                    query: q.clone(),
-                    on_select: move |insert: String| {
-                        let query_len = slash_query().unwrap_or_default().len();
-                        slash_query.set(None);
-                        document::eval(&js_apply_slash(&insert, 1 + query_len));
-                    },
-                    on_close: move |_| slash_query.set(None),
+                {
+                    let cfg_t = config.clone();
+                    rsx! {
+                        SlashMenu {
+                            query: q.clone(),
+                            templates: templates.read().clone(),
+                            on_select: move |insert: String| {
+                                let query_len = slash_query().unwrap_or_default().len();
+                                slash_query.set(None);
+                                document::eval(&js_apply_slash(&insert, 1 + query_len));
+                            },
+                            on_template: move |meta: TemplateMeta| {
+                                let query_len = slash_query().unwrap_or_default().len();
+                                slash_query.set(None);
+                                let cfg = cfg_t.clone();
+                                let current_dir = active_path().and_then(|p| {
+                                    p.rfind('/').map(|i| p[..i].to_string())
+                                }).unwrap_or_default();
+                                let all_files = files.read().clone();
+                                spawn(async move {
+                                    let date_json = document::eval(JS_DATE_VARS)
+                                        .join::<String>().await.unwrap_or_default();
+                                    let vars = template::TemplateVars::from_json(&date_json, "", &current_dir);
+                                    if let Some(ref fp_tmpl) = meta.filepath {
+                                        let path = template::substitute_vars(fp_tmpl, &vars)
+                                            .trim_start_matches('/').to_string();
+                                        if all_files.iter().any(|f| f.path == path) {
+                                            active_path.set(Some(path));
+                                        } else {
+                                            let body = template::strip_tabstops(
+                                                &template::substitute_vars(&meta.body, &vars));
+                                            match vault::dispatch::create_file(&cfg, &path, &body,
+                                                &format!("Create {path}")).await {
+                                                Ok(_) => {
+                                                    if let Ok(mut list) = vault::dispatch::list_files(&cfg).await {
+                                                        list.sort_by(|a, b| a.path.cmp(&b.path));
+                                                        files.set(list);
+                                                    }
+                                                    active_path.set(Some(path));
+                                                }
+                                                Err(e) => load_error.set(Some(e.to_string())),
+                                            }
+                                        }
+                                    } else {
+                                        let body = template::strip_tabstops(
+                                            &template::substitute_vars(&meta.body, &vars));
+                                        document::eval(&js_apply_slash(&body, 1 + query_len));
+                                    }
+                                });
+                            },
+                            on_close: move |_| slash_query.set(None),
+                        }
+                    }
                 }
             }
 
