@@ -562,11 +562,24 @@ code { font-family: ui-monospace, monospace; font-size: 0.88em; }
   padding: 1.2rem; display: flex; flex-direction: column; gap: 0.9rem; align-items: center; text-align: center;
 }
 .settings-device-instruction { font-size: 0.9rem; color: var(--text-muted); }
+.settings-device-link {
+  font-size: 0.88rem; color: var(--accent); word-break: break-all;
+}
+.settings-device-code-row {
+  display: flex; align-items: center; gap: 0.5rem;
+}
 .settings-device-code {
   font-family: monospace; font-size: 2rem; font-weight: 700;
   letter-spacing: 0.15em; color: var(--text); background: var(--bg);
   border: 1px solid var(--border); border-radius: 8px; padding: 10px 24px;
+  margin: 0;
 }
+.settings-copy-btn {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+  padding: 6px 14px; color: var(--text-muted); font-size: 0.85rem; cursor: pointer;
+  flex-shrink: 0;
+}
+.settings-copy-btn:hover { color: var(--text); border-color: var(--text-muted); }
 .settings-device-waiting { font-size: 0.85rem; color: var(--text-muted); }
 .settings-cancel-btn {
   background: none; border: 1px solid var(--border); border-radius: 8px;

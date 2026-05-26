@@ -8,7 +8,7 @@ use crate::state;
 #[derive(Clone, PartialEq)]
 enum OAuthPhase {
     Idle,
-    AwaitingAuth { user_code: String, verification_uri: String },
+    AwaitingAuth { user_code: String, verification_uri: String, verification_uri_complete: String },
     Done,
 }
 
@@ -38,9 +38,12 @@ pub fn Settings(
                 Ok(dc) => {
                     let device_code = dc.device_code.clone();
                     let mut interval = dc.interval;
+                    let uri_complete = dc.verification_uri_complete
+                        .unwrap_or_else(|| format!("{}?user_code={}", dc.verification_uri, dc.user_code));
                     oauth_phase.set(OAuthPhase::AwaitingAuth {
                         user_code: dc.user_code,
                         verification_uri: dc.verification_uri,
+                        verification_uri_complete: uri_complete,
                     });
                     loop {
                         Delay::new(Duration::from_secs(interval as u64)).await;
@@ -110,11 +113,12 @@ pub fn Settings(
     let phase = oauth_phase();
     let is_awaiting = matches!(phase, OAuthPhase::AwaitingAuth { .. });
     let is_done = phase == OAuthPhase::Done;
-    let (user_code, verification_uri) = if let OAuthPhase::AwaitingAuth { ref user_code, ref verification_uri } = phase {
-        (user_code.clone(), verification_uri.clone())
-    } else {
-        (String::new(), String::new())
-    };
+    let (user_code, verification_uri, verification_uri_complete) =
+        if let OAuthPhase::AwaitingAuth { ref user_code, ref verification_uri, ref verification_uri_complete } = phase {
+            (user_code.clone(), verification_uri.clone(), verification_uri_complete.clone())
+        } else {
+            (String::new(), String::new(), String::new())
+        };
 
     rsx! {
         div { class: "settings-wrap",
@@ -143,13 +147,33 @@ pub fn Settings(
                     if is_awaiting {
                         div { class: "settings-device-box",
                             p { class: "settings-device-instruction",
-                                "Visit "
-                                a { href: "{verification_uri}", target: "_blank", rel: "noopener noreferrer",
-                                    "{verification_uri}"
-                                }
-                                " and enter this code:"
+                                "Click the link to authorize — the code will be pre-filled:"
                             }
-                            p { class: "settings-device-code", "{user_code}" }
+                            a {
+                                class: "settings-device-link",
+                                href: "{verification_uri_complete}",
+                                target: "_blank",
+                                rel: "noopener noreferrer",
+                                "{verification_uri}"
+                            }
+                            div { class: "settings-device-code-row",
+                                p { class: "settings-device-code", "{user_code}" }
+                                button {
+                                    class: "settings-copy-btn",
+                                    r#type: "button",
+                                    title: "Copy code",
+                                    onclick: move |_| {
+                                        let code = user_code.clone();
+                                        spawn(async move {
+                                            let _ = document::eval(&format!(
+                                                "navigator.clipboard.writeText('{}').catch(()=>{{}})",
+                                                code
+                                            )).await;
+                                        });
+                                    },
+                                    "Copy"
+                                }
+                            }
                             p { class: "settings-device-waiting", "Waiting for authorization…" }
                             button {
                                 class: "settings-cancel-btn",

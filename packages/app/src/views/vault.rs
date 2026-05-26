@@ -983,32 +983,54 @@ fn GraphPanel(
 
 // ── File tree ─────────────────────────────────────────────────────────────────
 
-#[component]
-fn FileTree(files: Vec<FileMeta>, active: Option<String>, on_select: EventHandler<String>) -> Element {
-    let mut root: Vec<&FileMeta> = Vec::new();
-    let mut dirs: Vec<(&str, Vec<&FileMeta>)> = Vec::new();
-    for file in &files {
-        let dir = file.dir();
-        if dir.is_empty() { root.push(file); }
-        else {
-            let top = dir.splitn(2, '/').next().unwrap_or(dir);
-            if let Some(g) = dirs.iter_mut().find(|(d, _)| *d == top) { g.1.push(file); }
-            else { dirs.push((top, vec![file])); }
+fn group_by_dir(files: &[FileMeta], prefix: &str) -> (Vec<FileMeta>, Vec<(String, Vec<FileMeta>)>) {
+    let strip = if prefix.is_empty() { String::new() } else { format!("{prefix}/") };
+    let mut root: Vec<FileMeta> = Vec::new();
+    let mut dirs: Vec<(String, Vec<FileMeta>)> = Vec::new();
+    for file in files {
+        let relative = if strip.is_empty() { file.path.as_str() }
+                       else { file.path.strip_prefix(&strip).unwrap_or(&file.path) };
+        if let Some(slash) = relative.find('/') {
+            let child_name = &relative[..slash];
+            let child_prefix = if prefix.is_empty() {
+                child_name.to_string()
+            } else {
+                format!("{prefix}/{child_name}")
+            };
+            if let Some(g) = dirs.iter_mut().find(|(p, _)| p == &child_prefix) {
+                g.1.push(file.clone());
+            } else {
+                dirs.push((child_prefix, vec![file.clone()]));
+            }
+        } else {
+            root.push(file.clone());
         }
     }
+    (root, dirs)
+}
+
+#[component]
+fn FileTree(files: Vec<FileMeta>, active: Option<String>, on_select: EventHandler<String>) -> Element {
+    let (root, dirs) = group_by_dir(&files, "");
     rsx! {
         div { class: "file-tree",
+            for (dir_prefix, dir_files) in dirs {
+                {
+                    let name = dir_prefix.rsplit('/').next().unwrap_or(&dir_prefix).to_string();
+                    rsx! {
+                        FileTreeDir {
+                            key: "{dir_prefix}",
+                            name,
+                            prefix: dir_prefix,
+                            files: dir_files,
+                            active: active.clone(),
+                            on_select,
+                        }
+                    }
+                }
+            }
             for file in root {
                 FileEntry { key: "{file.path}", file: file.clone(), active: active.as_deref() == Some(file.path.as_str()), on_select }
-            }
-            for (dir, dir_files) in dirs {
-                FileTreeDir {
-                    key: "{dir}",
-                    name: dir.to_string(),
-                    files: dir_files.into_iter().cloned().collect(),
-                    active: active.clone(),
-                    on_select,
-                }
             }
         }
     }
@@ -1017,11 +1039,13 @@ fn FileTree(files: Vec<FileMeta>, active: Option<String>, on_select: EventHandle
 #[component]
 fn FileTreeDir(
     name: String,
+    prefix: String,
     files: Vec<FileMeta>,
     active: Option<String>,
     on_select: EventHandler<String>,
 ) -> Element {
     let mut collapsed = use_signal(|| true);
+    let (root, subdirs) = group_by_dir(&files, &prefix);
     rsx! {
         div { class: "file-tree-dir",
             div {
@@ -1031,7 +1055,22 @@ fn FileTreeDir(
                 " 📁 {name}"
             }
             if !collapsed() {
-                for file in &files {
+                for (sub_prefix, sub_files) in subdirs {
+                    {
+                        let sub_name = sub_prefix.rsplit('/').next().unwrap_or(&sub_prefix).to_string();
+                        rsx! {
+                            FileTreeDir {
+                                key: "{sub_prefix}",
+                                name: sub_name,
+                                prefix: sub_prefix,
+                                files: sub_files,
+                                active: active.clone(),
+                                on_select,
+                            }
+                        }
+                    }
+                }
+                for file in root {
                     FileEntry {
                         key: "{file.path}",
                         file: file.clone(),
