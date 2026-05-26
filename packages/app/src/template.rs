@@ -22,7 +22,7 @@ const __jan4 = new Date(__d.getFullYear(), 0, 4);
 const __dow = __jan4.getDay() || 7;
 const __weekStart = new Date(__jan4);
 __weekStart.setDate(__jan4.getDate() - __dow + 1);
-const __week = Math.max(1, Math.ceil((__d - __weekStart) / 604800000) + 1);
+const __week = Math.max(1, Math.floor((__d - __weekStart) / 604800000) + 1);
 dioxus.send(JSON.stringify({
     year:      String(__d.getFullYear()),
     yearShort: String(__d.getFullYear()).slice(-2),
@@ -156,8 +156,9 @@ pub fn strip_tabstops(s: &str) -> String {
                 }
             }
         }
-        out.push(b[i] as char);
-        i += 1;
+        let ch = s[i..].chars().next().unwrap_or('\u{FFFD}');
+        out.push(ch);
+        i += ch.len_utf8();
     }
     out
 }
