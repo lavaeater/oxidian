@@ -24,10 +24,8 @@ const JS_GET_SEL: &str = r#"
 "#;
 
 pub async fn get_sel() -> (usize, usize) {
-    let json = document::eval(JS_GET_SEL)
-        .join::<String>()
-        .await
-        .unwrap_or_default();
+    let mut eval = document::eval(JS_GET_SEL);
+    let json = eval.recv::<String>().await.unwrap_or_default();
     let v: [i64; 2] = serde_json::from_str(&json).unwrap_or([-1, -1]);
     if v[0] < 0 { (0, 0) } else { (v[0] as usize, v[1] as usize) }
 }

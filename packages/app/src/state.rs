@@ -5,13 +5,11 @@ const STORAGE_KEY: &str = "oxidian_cfg";
 
 /// Load config from localStorage via JS eval. Returns None if nothing is stored.
 pub async fn load_config() -> Option<GithubConfig> {
-    let json = document::eval(&format!(
+    let mut eval = document::eval(&format!(
         "dioxus.send(localStorage.getItem({:?}) || '')",
         STORAGE_KEY
-    ))
-    .join::<String>()
-    .await
-    .unwrap_or_default();
+    ));
+    let json = eval.recv::<String>().await.unwrap_or_default();
 
     if json.is_empty() {
         None
@@ -39,13 +37,11 @@ pub fn clear_config() {
 const BOOKMARKS_KEY: &str = "oxidian_bookmarks";
 
 pub async fn load_bookmarks() -> Vec<String> {
-    let json = document::eval(&format!(
+    let mut eval = document::eval(&format!(
         "dioxus.send(localStorage.getItem({:?}) || '[]')",
         BOOKMARKS_KEY
-    ))
-    .join::<String>()
-    .await
-    .unwrap_or_default();
+    ));
+    let json = eval.recv::<String>().await.unwrap_or_default();
     serde_json::from_str(&json).unwrap_or_default()
 }
 

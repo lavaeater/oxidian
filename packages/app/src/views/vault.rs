@@ -23,9 +23,14 @@ async fn apply_template(
     mut load_error: Signal<Option<String>>,
     current_dir: &str,
 ) {
-    let date_json = document::eval(JS_DATE_VARS)
-        .join::<String>().await.unwrap_or_default();
+    let mut eval = document::eval(JS_DATE_VARS);
+    let date_json = eval.recv::<String>().await.unwrap_or_default();
     let vars = template::TemplateVars::from_json(&date_json, "", current_dir);
+
+    if vars.year.is_empty() || vars.month.is_empty() || vars.date.is_empty() {
+        load_error.set(Some("Could not read current date — please try again.".to_string()));
+        return;
+    }
 
     if let Some(ref fp_tmpl) = meta.filepath {
         let path = template::substitute_vars(fp_tmpl, &vars)
@@ -42,18 +47,32 @@ async fn apply_template(
                     }
                     active_path.set(Some(path));
                 }
+                Err(ref e) if e.to_string().contains("File already exists") => {
+                    // File exists on remote but wasn't in the local list — just navigate.
+                    if let Ok(mut list) = vault::dispatch::list_files(cfg).await {
+                        list.sort_by(|a, b| a.path.cmp(&b.path));
+                        files.set(list);
+                    }
+                    active_path.set(Some(path));
+                }
                 Err(e) => load_error.set(Some(e.to_string())),
             }
         }
     } else {
         // Insert-only template: open as a new untitled note pre-filled with body.
         let body = template::strip_tabstops(&template::substitute_vars(&meta.body, &vars));
-        let date_json2 = document::eval(
-            "dioxus.send(new Date().toISOString().split('T')[0]);"
-        ).join::<String>().await.unwrap_or_default();
+        let mut eval2 = document::eval("dioxus.send(new Date().toISOString().split('T')[0]);");
+        let date_json2 = eval2.recv::<String>().await.unwrap_or_default();
         let path = format!("{date_json2}-note.md");
         match vault::dispatch::create_file(cfg, &path, &body, &format!("Create {path}")).await {
             Ok(_) => {
+                if let Ok(mut list) = vault::dispatch::list_files(cfg).await {
+                    list.sort_by(|a, b| a.path.cmp(&b.path));
+                    files.set(list);
+                }
+                active_path.set(Some(path));
+            }
+            Err(e) if e.to_string().contains("File already exists") => {
                 if let Ok(mut list) = vault::dispatch::list_files(cfg).await {
                     list.sort_by(|a, b| a.path.cmp(&b.path));
                     files.set(list);
@@ -66,11 +85,9 @@ async fn apply_template(
 }
 
 async fn sleep_ms(ms: u32) {
-    let _ = document::eval(&format!(
-        "await new Promise(r => setTimeout(r, {ms})); dioxus.send(1);"
-    ))
-    .join::<i32>()
-    .await;
+    // join() awaits the JS async wrapper's return value (undefined → Err, ignored).
+    // No dioxus.send needed — just waiting for the timeout to elapse.
+    let _ = document::eval(&format!("await new Promise(r => setTimeout(r, {ms}));")).await;
 }
 
 fn fuzzy_match(haystack: &str, needle: &str) -> bool {
@@ -262,8 +279,10 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
             loop {
                 sleep_ms(150).await;
                 if active_path().is_none() { slash_query.set(None); continue; }
-                let q = document::eval(JS_SLASH_QUERY)
-                    .join::<String>().await.unwrap_or(JS_NO_SLASH.to_string());
+                let q = {
+                    let mut e = document::eval(JS_SLASH_QUERY);
+                    e.recv::<String>().await.unwrap_or(JS_NO_SLASH.to_string())
+                };
                 if active_path().is_some() {
                     if q == JS_NO_SLASH {
                         slash_query.set(None);
@@ -336,9 +355,10 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                                         apply_template(&meta, &cfg, files, active_path, load_error, "").await;
                                     } else {
                                         // Fallback: simple YYYY-MM-DD.md note
-                                        let date = document::eval(
-                                            "dioxus.send(new Date().toISOString().split('T')[0]);"
-                                        ).join::<String>().await.unwrap_or_default();
+                                        let date = {
+                                            let mut e = document::eval("dioxus.send(new Date().toISOString().split('T')[0]);");
+                                            e.recv::<String>().await.unwrap_or_default()
+                                        };
                                         if date.is_empty() { return; }
                                         let path = format!("{date}.md");
                                         let _ = vault::dispatch::create_file(
@@ -387,19 +407,29 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                         Panel::Files => rsx! {
                             if loading_list() {
                                 div { class: "sidebar-status", "Loading…" }
-                            } else if let Some(err) = load_error() {
-                                div { class: "sidebar-error", "{err}" }
-                            } else if files.read().is_empty() {
-                                div { class: "sidebar-status", "No markdown files found." }
                             } else {
-                                FileTree {
-                                    files: files.read().clone(),
-                                    active: active_path.read().clone(),
-                                    on_select: move |path: String| {
-                                        active_path.set(Some(path));
-                                        show_switcher.set(false);
-                                        sidebar_open.set(false);
-                                    },
+                                if let Some(err) = load_error() {
+                                    div { class: "sidebar-error",
+                                        span { "{err}" }
+                                        button {
+                                            class: "sidebar-error-close",
+                                            onclick: move |_| load_error.set(None),
+                                            "✕"
+                                        }
+                                    }
+                                }
+                                if files.read().is_empty() {
+                                    div { class: "sidebar-status", "No markdown files found." }
+                                } else {
+                                    FileTree {
+                                        files: files.read().clone(),
+                                        active: active_path.read().clone(),
+                                        on_select: move |path: String| {
+                                            active_path.set(Some(path));
+                                            show_switcher.set(false);
+                                            sidebar_open.set(false);
+                                        },
+                                    }
                                 }
                             }
                             if has_file && !headings.is_empty() {
@@ -602,8 +632,10 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                                         apply_template(&meta, &cfg, files, active_path, load_error, &current_dir).await;
                                     } else {
                                         // Insert-only: substitute vars and paste at cursor
-                                        let date_json = document::eval(JS_DATE_VARS)
-                                            .join::<String>().await.unwrap_or_default();
+                                        let date_json = {
+                                            let mut e = document::eval(JS_DATE_VARS);
+                                            e.recv::<String>().await.unwrap_or_default()
+                                        };
                                         let vars = template::TemplateVars::from_json(&date_json, "", &current_dir);
                                         let body = template::strip_tabstops(
                                             &template::substitute_vars(&meta.body, &vars));

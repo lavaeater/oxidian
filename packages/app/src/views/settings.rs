@@ -109,6 +109,10 @@ pub fn Settings(
         Provider::GitLab => "glpat-xxxxxxxxxxxxxxxxxxxx",
     };
 
+    // github.com/login/... OAuth endpoints don't set CORS headers, so the device
+    // flow only works in native builds (desktop/mobile), not in the browser.
+    let is_wasm = cfg!(target_arch = "wasm32");
+
     // Extract OAuth phase data for the template
     let phase = oauth_phase();
     let is_awaiting = matches!(phase, OAuthPhase::AwaitingAuth { .. });
@@ -142,8 +146,8 @@ pub fn Settings(
                     }
                 }
 
-                // GitHub OAuth Device Flow
-                if provider() == Provider::GitHub {
+                // GitHub OAuth Device Flow.
+                if provider() == Provider::GitHub && !is_wasm {
                     if is_awaiting {
                         div { class: "settings-device-box",
                             p { class: "settings-device-instruction",
@@ -188,6 +192,20 @@ pub fn Settings(
                             "Sign in with GitHub"
                         }
                         p { class: "settings-divider", "— or enter a token manually —" }
+                    }
+                }
+                if provider() == Provider::GitHub && is_wasm && !is_awaiting && !is_done {
+                    p { class: "settings-sub",
+                        "In the browser, paste a "
+                        a {
+                            href: "https://github.com/settings/tokens",
+                            target: "_blank",
+                            rel: "noopener noreferrer",
+                            "Personal Access Token"
+                        }
+                        " with "
+                        code { "repo" }
+                        " scope below."
                     }
                 }
 

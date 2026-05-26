@@ -13,27 +13,25 @@ pub struct TemplateMeta {
 // ── Date variables via JS ─────────────────────────────────────────────────────
 
 pub const JS_DATE_VARS: &str = r#"
-(function() {
-    const d = new Date();
-    const months = ['January','February','March','April','May','June',
-                    'July','August','September','October','November','December'];
-    const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-    const pad = n => String(n).padStart(2, '0');
-    const jan4 = new Date(d.getFullYear(), 0, 4);
-    const dow = jan4.getDay() || 7;
-    const weekStart = new Date(jan4);
-    weekStart.setDate(jan4.getDate() - dow + 1);
-    const week = Math.max(1, Math.ceil((d - weekStart) / 604800000) + 1);
-    dioxus.send(JSON.stringify({
-        year:      String(d.getFullYear()),
-        yearShort: String(d.getFullYear()).slice(-2),
-        month:     pad(d.getMonth() + 1),
-        monthName: months[d.getMonth()],
-        date:      pad(d.getDate()),
-        dayName:   days[d.getDay()],
-        week:      pad(week)
-    }));
-})();
+const __d = new Date();
+const __months = ['January','February','March','April','May','June',
+                  'July','August','September','October','November','December'];
+const __days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+const __pad = n => String(n).padStart(2, '0');
+const __jan4 = new Date(__d.getFullYear(), 0, 4);
+const __dow = __jan4.getDay() || 7;
+const __weekStart = new Date(__jan4);
+__weekStart.setDate(__jan4.getDate() - __dow + 1);
+const __week = Math.max(1, Math.ceil((__d - __weekStart) / 604800000) + 1);
+dioxus.send(JSON.stringify({
+    year:      String(__d.getFullYear()),
+    yearShort: String(__d.getFullYear()).slice(-2),
+    month:     __pad(__d.getMonth() + 1),
+    monthName: __months[__d.getMonth()],
+    date:      __pad(__d.getDate()),
+    dayName:   __days[__d.getDay()],
+    week:      __pad(__week)
+}));
 "#;
 
 pub struct TemplateVars {
