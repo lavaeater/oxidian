@@ -1057,12 +1057,13 @@ fn FileTree(files: Vec<FileMeta>, active: Option<String>, on_select: EventHandle
                             files: dir_files,
                             active: active.clone(),
                             on_select,
+                            depth: 0,
                         }
                     }
                 }
             }
             for file in root {
-                FileEntry { key: "{file.path}", file: file.clone(), active: active.as_deref() == Some(file.path.as_str()), on_select }
+                FileEntry { key: "{file.path}", file: file.clone(), active: active.as_deref() == Some(file.path.as_str()), on_select, depth: 0 }
             }
         }
     }
@@ -1075,13 +1076,16 @@ fn FileTreeDir(
     files: Vec<FileMeta>,
     active: Option<String>,
     on_select: EventHandler<String>,
+    depth: u32,
 ) -> Element {
     let mut collapsed = use_signal(|| true);
     let (root, subdirs) = group_by_dir(&files, &prefix);
+    let dir_pl = 14 + depth * 14;
     rsx! {
         div { class: "file-tree-dir",
             div {
                 class: "file-tree-dir-name",
+                style: "padding-left: {dir_pl}px",
                 onclick: move |_| collapsed.set(!collapsed()),
                 span { class: "file-tree-dir-chevron", if collapsed() { "▶" } else { "▼" } }
                 " 📁 {name}"
@@ -1098,6 +1102,7 @@ fn FileTreeDir(
                                 files: sub_files,
                                 active: active.clone(),
                                 on_select,
+                                depth: depth + 1,
                             }
                         }
                     }
@@ -1108,6 +1113,7 @@ fn FileTreeDir(
                         file: file.clone(),
                         active: active.as_deref() == Some(file.path.as_str()),
                         on_select,
+                        depth: depth + 1,
                     }
                 }
             }
@@ -1116,11 +1122,13 @@ fn FileTreeDir(
 }
 
 #[component]
-fn FileEntry(file: FileMeta, active: bool, on_select: EventHandler<String>) -> Element {
+fn FileEntry(file: FileMeta, active: bool, on_select: EventHandler<String>, depth: u32) -> Element {
     let path = file.path.clone();
+    let file_pl = 22 + depth * 14;
     rsx! {
         div {
             class: if active { "file-entry file-entry--active" } else { "file-entry" },
+            style: "padding-left: {file_pl}px",
             onclick: move |_| on_select(path.clone()),
             "📄 {file.name()}"
         }
