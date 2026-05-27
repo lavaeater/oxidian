@@ -347,11 +347,24 @@ kbd {
   align-items: center; text-align: center;
 }
 .settings-device-instruction { font-size: 0.88rem; color: var(--text-muted); }
+.settings-device-link {
+  font-size: 0.85rem; color: var(--accent); word-break: break-all;
+}
+.settings-device-code-row {
+  display: flex; align-items: center; gap: 0.5rem;
+}
 .settings-device-code {
   font-family: monospace; font-size: 1.8rem; font-weight: 700;
   letter-spacing: 0.15em; color: var(--text); background: var(--bg);
   border: 1px solid var(--border); border-radius: 6px; padding: 8px 20px;
+  margin: 0;
 }
+.settings-copy-btn {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+  padding: 5px 12px; color: var(--text-muted); font-size: 0.82rem; cursor: pointer;
+  flex-shrink: 0;
+}
+.settings-copy-btn:hover { color: var(--text); border-color: var(--text-muted); }
 .settings-device-waiting {
   font-size: 0.82rem; color: var(--text-muted); animation: pulse 1.5s ease-in-out infinite;
 }
@@ -640,6 +653,8 @@ kbd {
   transition: background 80ms;
 }
 .slash-item:hover { background: var(--bg3); }
+.slash-item--template { border-top: 1px solid var(--border); }
+.slash-item--template:first-of-type { border-top: none; }
 .slash-name { font-size: 0.9rem; color: var(--text); min-width: 90px; }
 .slash-desc { font-size: 0.8rem; color: var(--text-muted); }
 

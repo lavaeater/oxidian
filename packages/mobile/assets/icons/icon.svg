@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <!-- Background -->
+    <linearGradient id="bg" x1="0" y1="0" x2="1024" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop offset="0%"   stop-color="#0f0d1a"/>
+      <stop offset="100%" stop-color="#1b1630"/>
+    </linearGradient>
+
+    <!-- Crown (top half of gem) — lighter purple, lit from above -->
+    <linearGradient id="crown" x1="512" y1="155" x2="512" y2="495" gradientUnits="userSpaceOnUse">
+      <stop offset="0%"   stop-color="#c4b5fd"/>
+      <stop offset="100%" stop-color="#6d28d9"/>
+    </linearGradient>
+
+    <!-- Pavilion (bottom half of gem) — deep shadow -->
+    <linearGradient id="pavilion" x1="512" y1="495" x2="512" y2="865" gradientUnits="userSpaceOnUse">
+      <stop offset="0%"   stop-color="#4c1d95"/>
+      <stop offset="100%" stop-color="#1e0a40"/>
+    </linearGradient>
+
+    <!-- Rust-orange girdle line -->
+    <linearGradient id="girdle" x1="184" y1="495" x2="840" y2="495" gradientUnits="userSpaceOnUse">
+      <stop offset="0%"   stop-color="#0f0d1a" stop-opacity="0"/>
+      <stop offset="20%"  stop-color="#f97316"/>
+      <stop offset="50%"  stop-color="#fb923c"/>
+      <stop offset="80%"  stop-color="#ea580c"/>
+      <stop offset="100%" stop-color="#0f0d1a" stop-opacity="0"/>
+    </linearGradient>
+
+    <!-- Left crown facet — slightly cooler -->
+    <linearGradient id="cl" x1="184" y1="495" x2="512" y2="155" gradientUnits="userSpaceOnUse">
+      <stop offset="0%"   stop-color="#7c3aed"/>
+      <stop offset="100%" stop-color="#a78bfa"/>
+    </linearGradient>
+
+    <!-- Right crown facet — slightly warmer/brighter -->
+    <linearGradient id="cr" x1="840" y1="495" x2="512" y2="155" gradientUnits="userSpaceOnUse">
+      <stop offset="0%"   stop-color="#8b5cf6"/>
+      <stop offset="100%" stop-color="#ddd6fe"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background rounded square -->
+  <rect width="1024" height="1024" rx="230" fill="url(#bg)"/>
+
+  <!-- ── Crown (top half) split into left and right facets ── -->
+  <!-- Left crown facet -->
+  <polygon points="512,155 184,495 512,495" fill="url(#cl)"/>
+  <!-- Right crown facet -->
+  <polygon points="512,155 840,495 512,495" fill="url(#cr)"/>
+
+  <!-- Crown centre facet line (subtle ridge) -->
+  <line x1="512" y1="155" x2="512" y2="495"
+        stroke="#e9d5ff" stroke-width="3" opacity="0.35"/>
+
+  <!-- ── Pavilion (bottom half) ── -->
+  <polygon points="184,495 840,495 512,865" fill="url(#pavilion)"/>
+
+  <!-- Pavilion facet lines -->
+  <line x1="512" y1="865" x2="350" y2="495"
+        stroke="#0d0018" stroke-width="4" opacity="0.55"/>
+  <line x1="512" y1="865" x2="675" y2="495"
+        stroke="#0d0018" stroke-width="4" opacity="0.45"/>
+
+  <!-- ── Outer edge of diamond (crisp border) ── -->
+  <polygon points="512,155 840,495 512,865 184,495"
+           fill="none" stroke="#7c3aed" stroke-width="6" stroke-linejoin="round" opacity="0.7"/>
+
+  <!-- ── Rust-orange girdle ── -->
+  <line x1="184" y1="495" x2="840" y2="495"
+        stroke="url(#girdle)" stroke-width="10"/>
+
+  <!-- ── Shine highlight (upper-right facet catch-light) ── -->
+  <ellipse cx="660" cy="295" rx="72" ry="30"
+           fill="white" opacity="0.18"
+           transform="rotate(-35 660 295)"/>
+
+  <!-- ── Tiny top sparkle ── -->
+  <circle cx="512" cy="170" r="7" fill="white" opacity="0.55"/>
+</svg>

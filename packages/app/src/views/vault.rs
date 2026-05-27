@@ -4,6 +4,7 @@ use vault::{FileMeta, GithubConfig, SearchResult};
 
 use crate::export;
 use crate::state;
+use crate::template::{self, TemplateMeta, JS_DATE_VARS};
 use crate::wikilink_index::WikiLinkIndex;
 use super::graph::GraphView;
 use super::properties::PropertiesPanel;
@@ -12,12 +13,81 @@ use super::toolbar::FormattingToolbar;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+/// Applies a template: creates the target file (or navigates to it if it already
+/// exists for filepath templates) and returns the path that was opened.
+async fn apply_template(
+    meta: &TemplateMeta,
+    cfg: &GithubConfig,
+    mut files: Signal<Vec<FileMeta>>,
+    mut active_path: Signal<Option<String>>,
+    mut load_error: Signal<Option<String>>,
+    current_dir: &str,
+) {
+    let mut eval = document::eval(JS_DATE_VARS);
+    let date_json = eval.recv::<String>().await.unwrap_or_default();
+    let vars = template::TemplateVars::from_json(&date_json, "", current_dir);
+
+    if vars.year.is_empty() || vars.month.is_empty() || vars.date.is_empty() {
+        load_error.set(Some("Could not read current date — please try again.".to_string()));
+        return;
+    }
+
+    if let Some(ref fp_tmpl) = meta.filepath {
+        let path = template::substitute_vars(fp_tmpl, &vars)
+            .trim_start_matches('/').to_string();
+        if files.read().iter().any(|f| f.path == path) {
+            active_path.set(Some(path));
+        } else {
+            let body = template::strip_tabstops(&template::substitute_vars(&meta.body, &vars));
+            match vault::dispatch::create_file(cfg, &path, &body, &format!("Create {path}")).await {
+                Ok(_) => {
+                    if let Ok(mut list) = vault::dispatch::list_files(cfg).await {
+                        list.sort_by(|a, b| a.path.cmp(&b.path));
+                        files.set(list);
+                    }
+                    active_path.set(Some(path));
+                }
+                Err(ref e) if e.to_string().contains("File already exists") => {
+                    // File exists on remote but wasn't in the local list — just navigate.
+                    if let Ok(mut list) = vault::dispatch::list_files(cfg).await {
+                        list.sort_by(|a, b| a.path.cmp(&b.path));
+                        files.set(list);
+                    }
+                    active_path.set(Some(path));
+                }
+                Err(e) => load_error.set(Some(e.to_string())),
+            }
+        }
+    } else {
+        // Insert-only template: open as a new untitled note pre-filled with body.
+        let body = template::strip_tabstops(&template::substitute_vars(&meta.body, &vars));
+        let mut eval2 = document::eval("dioxus.send(new Date().toISOString().split('T')[0]);");
+        let date_json2 = eval2.recv::<String>().await.unwrap_or_default();
+        let path = format!("{date_json2}-note.md");
+        match vault::dispatch::create_file(cfg, &path, &body, &format!("Create {path}")).await {
+            Ok(_) => {
+                if let Ok(mut list) = vault::dispatch::list_files(cfg).await {
+                    list.sort_by(|a, b| a.path.cmp(&b.path));
+                    files.set(list);
+                }
+                active_path.set(Some(path));
+            }
+            Err(e) if e.to_string().contains("File already exists") => {
+                if let Ok(mut list) = vault::dispatch::list_files(cfg).await {
+                    list.sort_by(|a, b| a.path.cmp(&b.path));
+                    files.set(list);
+                }
+                active_path.set(Some(path));
+            }
+            Err(e) => load_error.set(Some(e.to_string())),
+        }
+    }
+}
+
 async fn sleep_ms(ms: u32) {
-    let _ = document::eval(&format!(
-        "await new Promise(r => setTimeout(r, {ms})); dioxus.send(1);"
-    ))
-    .join::<i32>()
-    .await;
+    // join() awaits the JS async wrapper's return value (undefined → Err, ignored).
+    // No dioxus.send needed — just waiting for the timeout to elapse.
+    let _ = document::eval(&format!("await new Promise(r => setTimeout(r, {ms}));")).await;
 }
 
 fn fuzzy_match(haystack: &str, needle: &str) -> bool {
@@ -108,6 +178,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
     let mut index: Signal<WikiLinkIndex> = use_signal(WikiLinkIndex::new);
     // Slash command query: Some("query") when `/query` is at cursor, None otherwise.
     let mut slash_query: Signal<Option<String>> = use_signal(|| None);
+    let mut templates: Signal<Vec<TemplateMeta>> = use_signal(Vec::new);
 
     // Load file list and bookmarks on mount.
     let cfg = config.clone();
@@ -122,6 +193,25 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
             }
             bookmarks.set(bm);
             loading_list.set(false);
+        });
+    });
+
+    // Load templates whenever the file list changes.
+    let cfg_tmpl = config.clone();
+    use_effect(move || {
+        let cfg = cfg_tmpl.clone();
+        let prefix = format!("{}/", cfg.templates_dir);
+        let paths: Vec<String> = files.read()
+            .iter()
+            .filter(|f| f.path.starts_with(&prefix))
+            .map(|f| f.path.clone())
+            .collect();
+        spawn(async move {
+            if paths.is_empty() { templates.set(vec![]); return; }
+            let contents = vault::dispatch::read_many(&cfg, &paths).await;
+            templates.set(contents.iter()
+                .map(|(p, c)| template::parse_template(p, c))
+                .collect());
         });
     });
 
@@ -189,8 +279,10 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
             loop {
                 sleep_ms(150).await;
                 if active_path().is_none() { slash_query.set(None); continue; }
-                let q = document::eval(JS_SLASH_QUERY)
-                    .join::<String>().await.unwrap_or(JS_NO_SLASH.to_string());
+                let q = {
+                    let mut e = document::eval(JS_SLASH_QUERY);
+                    e.recv::<String>().await.unwrap_or(JS_NO_SLASH.to_string())
+                };
                 if active_path().is_some() {
                     if q == JS_NO_SLASH {
                         slash_query.set(None);
@@ -254,22 +346,32 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                             title: "Today's note",
                             onclick: move |_| {
                                 let cfg = cfg_daily.clone();
+                                let tmpl_path = cfg.daily_note_template.clone();
+                                let tmpl = templates.read().iter()
+                                    .find(|t| t.source_path == tmpl_path)
+                                    .cloned();
                                 spawn(async move {
-                                    let date = document::eval(
-                                        "dioxus.send(new Date().toISOString().split('T')[0]);"
-                                    ).join::<String>().await.unwrap_or_default();
-                                    if date.is_empty() { return; }
-                                    let path = format!("{date}.md");
-                                    let _ = vault::dispatch::create_file(
-                                        &cfg, &path,
-                                        &format!("# {date}\n\n"),
-                                        &format!("Daily note {date}"),
-                                    ).await;
-                                    if let Ok(mut list) = vault::dispatch::list_files(&cfg).await {
-                                        list.sort_by(|a, b| a.path.cmp(&b.path));
-                                        files.set(list);
+                                    if let Some(meta) = tmpl {
+                                        apply_template(&meta, &cfg, files, active_path, load_error, "").await;
+                                    } else {
+                                        // Fallback: simple YYYY-MM-DD.md note
+                                        let date = {
+                                            let mut e = document::eval("dioxus.send(new Date().toISOString().split('T')[0]);");
+                                            e.recv::<String>().await.unwrap_or_default()
+                                        };
+                                        if date.is_empty() { return; }
+                                        let path = format!("{date}.md");
+                                        let _ = vault::dispatch::create_file(
+                                            &cfg, &path,
+                                            &format!("# {date}\n\n"),
+                                            &format!("Daily note {date}"),
+                                        ).await;
+                                        if let Ok(mut list) = vault::dispatch::list_files(&cfg).await {
+                                            list.sort_by(|a, b| a.path.cmp(&b.path));
+                                            files.set(list);
+                                        }
+                                        active_path.set(Some(path));
                                     }
-                                    active_path.set(Some(path));
                                     show_switcher.set(false);
                                     sidebar_open.set(false);
                                 });
@@ -305,19 +407,29 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                         Panel::Files => rsx! {
                             if loading_list() {
                                 div { class: "sidebar-status", "Loading…" }
-                            } else if let Some(err) = load_error() {
-                                div { class: "sidebar-error", "{err}" }
-                            } else if files.read().is_empty() {
-                                div { class: "sidebar-status", "No markdown files found." }
                             } else {
-                                FileTree {
-                                    files: files.read().clone(),
-                                    active: active_path.read().clone(),
-                                    on_select: move |path: String| {
-                                        active_path.set(Some(path));
-                                        show_switcher.set(false);
-                                        sidebar_open.set(false);
-                                    },
+                                if let Some(err) = load_error() {
+                                    div { class: "sidebar-error",
+                                        span { "{err}" }
+                                        button {
+                                            class: "sidebar-error-close",
+                                            onclick: move |_| load_error.set(None),
+                                            "✕"
+                                        }
+                                    }
+                                }
+                                if files.read().is_empty() {
+                                    div { class: "sidebar-status", "No markdown files found." }
+                                } else {
+                                    FileTree {
+                                        files: files.read().clone(),
+                                        active: active_path.read().clone(),
+                                        on_select: move |path: String| {
+                                            active_path.set(Some(path));
+                                            show_switcher.set(false);
+                                            sidebar_open.set(false);
+                                        },
+                                    }
                                 }
                             }
                             if has_file && !headings.is_empty() {
@@ -497,14 +609,43 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
 
             // ── Slash command menu ───────────────────────────────────────────
             if let Some(ref q) = slash_query() {
-                SlashMenu {
-                    query: q.clone(),
-                    on_select: move |insert: String| {
-                        let query_len = slash_query().unwrap_or_default().len();
-                        slash_query.set(None);
-                        document::eval(&js_apply_slash(&insert, 1 + query_len));
-                    },
-                    on_close: move |_| slash_query.set(None),
+                {
+                    let cfg_t = config.clone();
+                    rsx! {
+                        SlashMenu {
+                            query: q.clone(),
+                            templates: templates.read().clone(),
+                            on_select: move |insert: String| {
+                                let query_len = slash_query().unwrap_or_default().len();
+                                slash_query.set(None);
+                                document::eval(&js_apply_slash(&insert, 1 + query_len));
+                            },
+                            on_template: move |meta: TemplateMeta| {
+                                let query_len = slash_query().unwrap_or_default().len();
+                                slash_query.set(None);
+                                let cfg = cfg_t.clone();
+                                let current_dir = active_path().and_then(|p| {
+                                    p.rfind('/').map(|i| p[..i].to_string())
+                                }).unwrap_or_default();
+                                spawn(async move {
+                                    if meta.filepath.is_some() {
+                                        apply_template(&meta, &cfg, files, active_path, load_error, &current_dir).await;
+                                    } else {
+                                        // Insert-only: substitute vars and paste at cursor
+                                        let date_json = {
+                                            let mut e = document::eval(JS_DATE_VARS);
+                                            e.recv::<String>().await.unwrap_or_default()
+                                        };
+                                        let vars = template::TemplateVars::from_json(&date_json, "", &current_dir);
+                                        let body = template::strip_tabstops(
+                                            &template::substitute_vars(&meta.body, &vars));
+                                        document::eval(&js_apply_slash(&body, 1 + query_len));
+                                    }
+                                });
+                            },
+                            on_close: move |_| slash_query.set(None),
+                        }
+                    }
                 }
             }
 
@@ -874,32 +1015,55 @@ fn GraphPanel(
 
 // ── File tree ─────────────────────────────────────────────────────────────────
 
-#[component]
-fn FileTree(files: Vec<FileMeta>, active: Option<String>, on_select: EventHandler<String>) -> Element {
-    let mut root: Vec<&FileMeta> = Vec::new();
-    let mut dirs: Vec<(&str, Vec<&FileMeta>)> = Vec::new();
-    for file in &files {
-        let dir = file.dir();
-        if dir.is_empty() { root.push(file); }
-        else {
-            let top = dir.splitn(2, '/').next().unwrap_or(dir);
-            if let Some(g) = dirs.iter_mut().find(|(d, _)| *d == top) { g.1.push(file); }
-            else { dirs.push((top, vec![file])); }
+fn group_by_dir(files: &[FileMeta], prefix: &str) -> (Vec<FileMeta>, Vec<(String, Vec<FileMeta>)>) {
+    let strip = if prefix.is_empty() { String::new() } else { format!("{prefix}/") };
+    let mut root: Vec<FileMeta> = Vec::new();
+    let mut dirs: Vec<(String, Vec<FileMeta>)> = Vec::new();
+    for file in files {
+        let relative = if strip.is_empty() { file.path.as_str() }
+                       else { file.path.strip_prefix(&strip).unwrap_or(&file.path) };
+        if let Some(slash) = relative.find('/') {
+            let child_name = &relative[..slash];
+            let child_prefix = if prefix.is_empty() {
+                child_name.to_string()
+            } else {
+                format!("{prefix}/{child_name}")
+            };
+            if let Some(g) = dirs.iter_mut().find(|(p, _)| p == &child_prefix) {
+                g.1.push(file.clone());
+            } else {
+                dirs.push((child_prefix, vec![file.clone()]));
+            }
+        } else {
+            root.push(file.clone());
         }
     }
+    (root, dirs)
+}
+
+#[component]
+fn FileTree(files: Vec<FileMeta>, active: Option<String>, on_select: EventHandler<String>) -> Element {
+    let (root, dirs) = group_by_dir(&files, "");
     rsx! {
         div { class: "file-tree",
-            for file in root {
-                FileEntry { key: "{file.path}", file: file.clone(), active: active.as_deref() == Some(file.path.as_str()), on_select }
-            }
-            for (dir, dir_files) in dirs {
-                FileTreeDir {
-                    key: "{dir}",
-                    name: dir.to_string(),
-                    files: dir_files.into_iter().cloned().collect(),
-                    active: active.clone(),
-                    on_select,
+            for (dir_prefix, dir_files) in dirs {
+                {
+                    let name = dir_prefix.rsplit('/').next().unwrap_or(&dir_prefix).to_string();
+                    rsx! {
+                        FileTreeDir {
+                            key: "{dir_prefix}",
+                            name,
+                            prefix: dir_prefix,
+                            files: dir_files,
+                            active: active.clone(),
+                            on_select,
+                            depth: 0,
+                        }
+                    }
                 }
+            }
+            for file in root {
+                FileEntry { key: "{file.path}", file: file.clone(), active: active.as_deref() == Some(file.path.as_str()), on_select, depth: 0 }
             }
         }
     }
@@ -908,26 +1072,48 @@ fn FileTree(files: Vec<FileMeta>, active: Option<String>, on_select: EventHandle
 #[component]
 fn FileTreeDir(
     name: String,
+    prefix: String,
     files: Vec<FileMeta>,
     active: Option<String>,
     on_select: EventHandler<String>,
+    depth: u32,
 ) -> Element {
     let mut collapsed = use_signal(|| true);
+    let (root, subdirs) = group_by_dir(&files, &prefix);
+    let dir_pl = 14 + depth * 14;
     rsx! {
         div { class: "file-tree-dir",
             div {
                 class: "file-tree-dir-name",
+                style: "padding-left: {dir_pl}px",
                 onclick: move |_| collapsed.set(!collapsed()),
                 span { class: "file-tree-dir-chevron", if collapsed() { "▶" } else { "▼" } }
                 " 📁 {name}"
             }
             if !collapsed() {
-                for file in &files {
+                for (sub_prefix, sub_files) in subdirs {
+                    {
+                        let sub_name = sub_prefix.rsplit('/').next().unwrap_or(&sub_prefix).to_string();
+                        rsx! {
+                            FileTreeDir {
+                                key: "{sub_prefix}",
+                                name: sub_name,
+                                prefix: sub_prefix,
+                                files: sub_files,
+                                active: active.clone(),
+                                on_select,
+                                depth: depth + 1,
+                            }
+                        }
+                    }
+                }
+                for file in root {
                     FileEntry {
                         key: "{file.path}",
                         file: file.clone(),
                         active: active.as_deref() == Some(file.path.as_str()),
                         on_select,
+                        depth: depth + 1,
                     }
                 }
             }
@@ -936,11 +1122,13 @@ fn FileTreeDir(
 }
 
 #[component]
-fn FileEntry(file: FileMeta, active: bool, on_select: EventHandler<String>) -> Element {
+fn FileEntry(file: FileMeta, active: bool, on_select: EventHandler<String>, depth: u32) -> Element {
     let path = file.path.clone();
+    let file_pl = 22 + depth * 14;
     rsx! {
         div {
             class: if active { "file-entry file-entry--active" } else { "file-entry" },
+            style: "padding-left: {file_pl}px",
             onclick: move |_| on_select(path.clone()),
             "📄 {file.name()}"
         }

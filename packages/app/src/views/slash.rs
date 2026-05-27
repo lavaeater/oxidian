@@ -1,4 +1,5 @@
 use dioxus::prelude::*;
+use crate::template::TemplateMeta;
 
 // JS: returns the text typed after the most recent `/` on the current line,
 // or "" if the cursor is not right after a `/…` token.
@@ -99,25 +100,27 @@ const COMMANDS: &[(&str, &str, &str)] = &[
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-/// `on_select(insert_text)` is called when the user picks a command.
+/// `on_select(insert_text)` for built-in commands; `on_template(meta)` for templates.
 #[component]
 pub fn SlashMenu(
     query: String,
+    templates: Vec<TemplateMeta>,
     on_select: EventHandler<String>,
+    on_template: EventHandler<TemplateMeta>,
     on_close: EventHandler<()>,
 ) -> Element {
     let q = query.to_lowercase();
-    let filtered: Vec<(&str, &str, &str)> = COMMANDS.iter()
+    let cmds: Vec<(String, String, String)> = COMMANDS.iter()
         .filter(|(name, _, _)| q.is_empty() || name.to_lowercase().contains(&q))
-        .map(|(n, d, i)| (*n, *d, *i))
+        .map(|(n, d, i)| (n.to_string(), d.to_string(), i.to_string()))
         .take(8)
         .collect();
-
-    if filtered.is_empty() { return rsx! { div {} }; }
-
-    let items: Vec<(String, String, String)> = filtered.iter()
-        .map(|(n, d, i)| (n.to_string(), d.to_string(), i.to_string()))
+    let tmpls: Vec<TemplateMeta> = templates.into_iter()
+        .filter(|t| q.is_empty() || t.name.to_lowercase().contains(&q) || q.contains("template"))
+        .take(5)
         .collect();
+
+    if cmds.is_empty() && tmpls.is_empty() { return rsx! { div {} }; }
 
     rsx! {
         div {
@@ -126,12 +129,27 @@ pub fn SlashMenu(
             div {
                 class: "slash-menu",
                 onclick: move |e| e.stop_propagation(),
-                for (name, desc, insert) in items {
+                for (name, desc, insert) in cmds {
                     div {
                         class: "slash-item",
                         onclick: move |_| on_select(insert.clone()),
                         span { class: "slash-name", "{name}" }
                         span { class: "slash-desc", "{desc}" }
+                    }
+                }
+                for tmpl in tmpls {
+                    {
+                        let t = tmpl.clone();
+                        let name = tmpl.name.clone();
+                        let kind = if tmpl.filepath.is_some() { "→ new note" } else { "insert" };
+                        rsx! {
+                            div {
+                                class: "slash-item slash-item--template",
+                                onclick: move |_| on_template(t.clone()),
+                                span { class: "slash-name", "{name}" }
+                                span { class: "slash-desc", "Template · {kind}" }
+                            }
+                        }
                     }
                 }
             }

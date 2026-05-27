@@ -126,10 +126,14 @@ pub fn GraphView(
 "#);
         spawn(async move {
             // Small delay so the canvas is in the DOM
-            let _ = document::eval("await new Promise(r => setTimeout(r, 50)); dioxus.send(1);")
-                .join::<i32>().await;
-            if let Ok(id) = document::eval(&js).join::<String>().await {
-                if !id.is_empty() { on_select(id); }
+            let _ = document::eval("await new Promise(r => setTimeout(r, 50));").await;
+            // Loop receiving node-click events sent via dioxus.send(nodeId)
+            let mut graph_eval = document::eval(&js);
+            loop {
+                match graph_eval.recv::<String>().await {
+                    Ok(id) if !id.is_empty() => on_select(id),
+                    _ => break,
+                }
             }
         });
     });

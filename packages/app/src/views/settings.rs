@@ -8,7 +8,7 @@ use crate::state;
 #[derive(Clone, PartialEq)]
 enum OAuthPhase {
     Idle,
-    AwaitingAuth { user_code: String, verification_uri: String },
+    AwaitingAuth { user_code: String, verification_uri: String, verification_uri_complete: String },
     Done,
 }
 
@@ -20,8 +20,10 @@ pub fn Settings(
     let mut token    = use_signal(|| existing.as_ref().map(|c| c.token.clone()).unwrap_or_default());
     let mut owner    = use_signal(|| existing.as_ref().map(|c| c.owner.clone()).unwrap_or_default());
     let mut repo     = use_signal(|| existing.as_ref().map(|c| c.repo.clone()).unwrap_or_default());
-    let mut branch   = use_signal(|| existing.as_ref().map(|c| c.branch.clone()).unwrap_or_else(|| "main".to_string()));
-    let mut provider = use_signal(|| existing.as_ref().map(|c| c.provider.clone()).unwrap_or_default());
+    let mut branch        = use_signal(|| existing.as_ref().map(|c| c.branch.clone()).unwrap_or_else(|| "main".to_string()));
+    let mut provider      = use_signal(|| existing.as_ref().map(|c| c.provider.clone()).unwrap_or_default());
+    let mut templates_dir       = use_signal(|| existing.as_ref().map(|c| c.templates_dir.clone()).unwrap_or_else(|| ".oxidian/templates".to_string()));
+    let mut daily_note_template = use_signal(|| existing.as_ref().map(|c| c.daily_note_template.clone()).unwrap_or_else(|| ".oxidian/templates/daily-note.md".to_string()));
     let mut error    = use_signal(|| None::<String>);
     let mut saving   = use_signal(|| false);
     let mut show_token  = use_signal(|| false);
@@ -36,9 +38,12 @@ pub fn Settings(
                 Ok(dc) => {
                     let device_code = dc.device_code.clone();
                     let mut interval = dc.interval;
+                    let uri_complete = dc.verification_uri_complete
+                        .unwrap_or_else(|| format!("{}?user_code={}", dc.verification_uri, dc.user_code));
                     oauth_phase.set(OAuthPhase::AwaitingAuth {
                         user_code: dc.user_code,
                         verification_uri: dc.verification_uri,
+                        verification_uri_complete: uri_complete,
                     });
                     loop {
                         Delay::new(Duration::from_secs(interval as u64)).await;
@@ -83,7 +88,14 @@ pub fn Settings(
         }
         saving.set(true);
         error.set(None);
-        let cfg = GithubConfig { token: t, owner: o, repo: r, branch: b, provider: provider() };
+        let td  = templates_dir.read().trim().to_string();
+        let td  = if td.is_empty() { ".oxidian/templates".to_string() } else { td };
+        let dnt = daily_note_template.read().trim().to_string();
+        let dnt = if dnt.is_empty() { ".oxidian/templates/daily-note.md".to_string() } else { dnt };
+        let cfg = GithubConfig {
+            token: t, owner: o, repo: r, branch: b, provider: provider(),
+            templates_dir: td, daily_note_template: dnt,
+        };
         state::save_config(&cfg);
         on_save(cfg);
     };
@@ -97,15 +109,20 @@ pub fn Settings(
         Provider::GitLab => "glpat-xxxxxxxxxxxxxxxxxxxx",
     };
 
+    // github.com/login/... OAuth endpoints don't set CORS headers, so the device
+    // flow only works in native builds (desktop/mobile), not in the browser.
+    let is_wasm = cfg!(target_arch = "wasm32");
+
     // Extract OAuth phase data for the template
     let phase = oauth_phase();
     let is_awaiting = matches!(phase, OAuthPhase::AwaitingAuth { .. });
     let is_done = phase == OAuthPhase::Done;
-    let (user_code, verification_uri) = if let OAuthPhase::AwaitingAuth { ref user_code, ref verification_uri } = phase {
-        (user_code.clone(), verification_uri.clone())
-    } else {
-        (String::new(), String::new())
-    };
+    let (user_code, verification_uri, verification_uri_complete) =
+        if let OAuthPhase::AwaitingAuth { ref user_code, ref verification_uri, ref verification_uri_complete } = phase {
+            (user_code.clone(), verification_uri.clone(), verification_uri_complete.clone())
+        } else {
+            (String::new(), String::new(), String::new())
+        };
 
     rsx! {
         div { class: "settings-wrap",
@@ -129,18 +146,38 @@ pub fn Settings(
                     }
                 }
 
-                // GitHub OAuth Device Flow
-                if provider() == Provider::GitHub {
+                // GitHub OAuth Device Flow.
+                if provider() == Provider::GitHub && !is_wasm {
                     if is_awaiting {
                         div { class: "settings-device-box",
                             p { class: "settings-device-instruction",
-                                "Visit "
-                                a { href: "{verification_uri}", target: "_blank", rel: "noopener noreferrer",
-                                    "{verification_uri}"
-                                }
-                                " and enter this code:"
+                                "Click the link to authorize — the code will be pre-filled:"
                             }
-                            p { class: "settings-device-code", "{user_code}" }
+                            a {
+                                class: "settings-device-link",
+                                href: "{verification_uri_complete}",
+                                target: "_blank",
+                                rel: "noopener noreferrer",
+                                "{verification_uri}"
+                            }
+                            div { class: "settings-device-code-row",
+                                p { class: "settings-device-code", "{user_code}" }
+                                button {
+                                    class: "settings-copy-btn",
+                                    r#type: "button",
+                                    title: "Copy code",
+                                    onclick: move |_| {
+                                        let code = user_code.clone();
+                                        spawn(async move {
+                                            let _ = document::eval(&format!(
+                                                "navigator.clipboard.writeText('{}').catch(()=>{{}})",
+                                                code
+                                            )).await;
+                                        });
+                                    },
+                                    "Copy"
+                                }
+                            }
                             p { class: "settings-device-waiting", "Waiting for authorization…" }
                             button {
                                 class: "settings-cancel-btn",
@@ -155,6 +192,20 @@ pub fn Settings(
                             "Sign in with GitHub"
                         }
                         p { class: "settings-divider", "— or enter a token manually —" }
+                    }
+                }
+                if provider() == Provider::GitHub && is_wasm && !is_awaiting && !is_done {
+                    p { class: "settings-sub",
+                        "In the browser, paste a "
+                        a {
+                            href: "https://github.com/settings/tokens",
+                            target: "_blank",
+                            rel: "noopener noreferrer",
+                            "Personal Access Token"
+                        }
+                        " with "
+                        code { "repo" }
+                        " scope below."
                     }
                 }
 
@@ -206,6 +257,18 @@ pub fn Settings(
                     input {
                         class: "settings-input", placeholder: "main",
                         value: "{branch}", oninput: move |e| branch.set(e.value()),
+                    }
+                }
+                label { class: "settings-label", "Templates folder"
+                    input {
+                        class: "settings-input", placeholder: ".oxidian/templates",
+                        value: "{templates_dir}", oninput: move |e| templates_dir.set(e.value()),
+                    }
+                }
+                label { class: "settings-label", "Daily note template"
+                    input {
+                        class: "settings-input", placeholder: ".oxidian/templates/daily-note.md",
+                        value: "{daily_note_template}", oninput: move |e| daily_note_template.set(e.value()),
                     }
                 }
 
