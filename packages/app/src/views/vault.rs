@@ -1,4 +1,7 @@
+use std::time::Duration;
+
 use dioxus::prelude::*;
+use futures_timer::Delay;
 use ui::{MarkdownArea, MarkdownAreaVariant};
 use vault::{FileMeta, GithubConfig, SearchResult};
 
@@ -84,10 +87,8 @@ async fn apply_template(
     }
 }
 
-async fn sleep_ms(ms: u32) {
-    // join() awaits the JS async wrapper's return value (undefined → Err, ignored).
-    // No dioxus.send needed — just waiting for the timeout to elapse.
-    let _ = document::eval(&format!("await new Promise(r => setTimeout(r, {ms}));")).await;
+async fn sleep_ms(ms: u64) {
+    let _ = Delay::new(Duration::from_millis(ms)).await;
 }
 
 fn fuzzy_match(haystack: &str, needle: &str) -> bool {
@@ -178,6 +179,8 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
     let mut index: Signal<WikiLinkIndex> = use_signal(WikiLinkIndex::new);
     // Slash command query: Some("query") when `/query` is at cursor, None otherwise.
     let mut slash_query: Signal<Option<String>> = use_signal(|| None);
+    // Path of the file whose content is currently in the editor (set after successful load).
+    let mut loaded_path: Signal<Option<String>> = use_signal(|| None);
     let mut templates: Signal<Vec<TemplateMeta>> = use_signal(Vec::new);
 
     // Load file list and bookmarks on mount.
@@ -215,22 +218,39 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
         });
     });
 
-    // Load file content when active_path changes.
+    // Load file content when active_path changes; save any pending changes first.
     let cfg = config.clone();
     use_effect(move || {
-        let path = active_path.read().clone();
-        let Some(p) = path else { return };
+        let new_path = active_path.read().clone();
+        let Some(p) = new_path else { return };
         loading_file.set(true);
         save_status.set(SaveStatus::Idle);
         let cfg = cfg.clone();
         let mut content = content.clone();
+        // Capture state for potential pre-switch save.
+        let old_path = loaded_path();
+        let old_sha = file_sha();
+        let old_content = content();
+        let old_saved = saved_content();
         spawn(async move {
+            // Save pending changes for the previous file before switching.
+            if let Some(ref old_p) = old_path {
+                if !old_sha.is_empty() && old_content != old_saved {
+                    let name = old_p.rsplit('/').next().unwrap_or(old_p).to_string();
+                    if let Ok(new_sha) = vault::dispatch::write_file(
+                        &cfg, old_p, &old_content, &old_sha, &format!("Update {name}")
+                    ).await {
+                        file_sha.set(new_sha);
+                    }
+                }
+            }
             match vault::dispatch::read_file(&cfg, &p).await {
                 Ok(fc) => {
                     index.with_mut(|idx| idx.index_file(&p, &fc.content));
                     content.set(fc.content.clone());
                     saved_content.set(fc.content);
                     file_sha.set(fc.sha);
+                    loaded_path.set(Some(p));
                 }
                 Err(e) => load_error.set(Some(e.to_string())),
             }
@@ -252,7 +272,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
         let cfg = cfg.clone();
         spawn(async move {
             loop {
-                sleep_ms(2000).await;
+                sleep_ms(5000).await;
                 if save_status() != SaveStatus::Unsaved { continue; }
                 let Some(path) = active_path() else { continue };
                 let sha = file_sha();
