@@ -161,7 +161,7 @@ enum Panel { Files, Search, Backlinks, Graph, Bookmarks }
 pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Element {
     let mut files: Signal<Vec<FileMeta>> = use_signal(Vec::new);
     let mut active_path: Signal<Option<String>> = use_signal(|| None);
-    let content = use_signal(String::new);
+    let mut content = use_signal(String::new);
     let mut file_sha: Signal<String> = use_signal(String::new);
     let mut load_error: Signal<Option<String>> = use_signal(|| None);
     let mut loading_list = use_signal(|| true);
@@ -331,6 +331,12 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
         });
     });
 
+    // Scroll active file entry into view whenever the active path changes.
+    use_effect(move || {
+        let _ = active_path();
+        document::eval("setTimeout(() => { const el = document.querySelector('.file-entry--active'); if (el) el.scrollIntoView({ block: 'nearest' }); }, 50);");
+    });
+
     // Pre-compute values that can't borrow across rsx!.
     let status_class = save_status.read().css_class().to_string();
     let status_label = save_status.read().label().to_string();
@@ -346,6 +352,35 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
     let cfg_daily = config.clone();
     let cfg_search = config.clone();
     let cfg_newfile = config.clone();
+    let cfg_delete = config.clone();
+
+    let handle_delete = move |file: FileMeta| {
+        let cfg = cfg_delete.clone();
+        spawn(async move {
+            let name = file.name().to_string();
+            let confirmed = document::eval(&format!(
+                "dioxus.send(!!window.confirm('Delete \\'{name}\\'? This cannot be undone.'));"
+            ))
+            .join::<bool>()
+            .await
+            .unwrap_or(false);
+            if !confirmed { return; }
+            match vault::dispatch::delete_file(&cfg, &file.path, &file.sha, &format!("Delete {name}")).await {
+                Ok(()) => {
+                    files.with_mut(|f| f.retain(|fi| fi.path != file.path));
+                    if active_path().as_deref() == Some(file.path.as_str()) {
+                        active_path.set(None);
+                        content.set(String::new());
+                        saved_content.set(String::new());
+                        file_sha.set(String::new());
+                        loaded_path.set(None);
+                        save_status.set(SaveStatus::Idle);
+                    }
+                }
+                Err(e) => load_error.set(Some(format!("Delete failed: {e}"))),
+            }
+        });
+    };
 
     rsx! {
         div { class: "app-layout",
@@ -443,12 +478,13 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                                 } else {
                                     FileTree {
                                         files: files.read().clone(),
-                                        active: active_path.read().clone(),
+                                        active: active_path,
                                         on_select: move |path: String| {
                                             active_path.set(Some(path));
                                             show_switcher.set(false);
                                             sidebar_open.set(false);
                                         },
+                                        on_delete: handle_delete,
                                     }
                                 }
                             }
@@ -1062,7 +1098,12 @@ fn group_by_dir(files: &[FileMeta], prefix: &str) -> (Vec<FileMeta>, Vec<(String
 }
 
 #[component]
-fn FileTree(files: Vec<FileMeta>, active: Option<String>, on_select: EventHandler<String>) -> Element {
+fn FileTree(
+    files: Vec<FileMeta>,
+    active: ReadOnlySignal<Option<String>>,
+    on_select: EventHandler<String>,
+    on_delete: EventHandler<FileMeta>,
+) -> Element {
     let (root, dirs) = group_by_dir(&files, "");
     rsx! {
         div { class: "file-tree",
@@ -1075,15 +1116,23 @@ fn FileTree(files: Vec<FileMeta>, active: Option<String>, on_select: EventHandle
                             name,
                             prefix: dir_prefix,
                             files: dir_files,
-                            active: active.clone(),
+                            active,
                             on_select,
+                            on_delete,
                             depth: 0,
                         }
                     }
                 }
             }
             for file in root {
-                FileEntry { key: "{file.path}", file: file.clone(), active: active.as_deref() == Some(file.path.as_str()), on_select, depth: 0 }
+                FileEntry {
+                    key: "{file.path}",
+                    file: file.clone(),
+                    active: active().as_deref() == Some(file.path.as_str()),
+                    on_select,
+                    on_delete,
+                    depth: 0,
+                }
             }
         }
     }
@@ -1094,11 +1143,22 @@ fn FileTreeDir(
     name: String,
     prefix: String,
     files: Vec<FileMeta>,
-    active: Option<String>,
+    active: ReadOnlySignal<Option<String>>,
     on_select: EventHandler<String>,
+    on_delete: EventHandler<FileMeta>,
     depth: u32,
 ) -> Element {
-    let mut collapsed = use_signal(|| true);
+    let prefix_slash = format!("{prefix}/");
+    let contains_active = |a: &Option<String>| {
+        a.as_deref().map(|p| p.starts_with(&prefix_slash)).unwrap_or(false)
+    };
+    let mut collapsed = use_signal(|| !contains_active(&active()));
+    // Auto-expand when the active file moves into this directory.
+    use_effect(move || {
+        if active().as_deref().map(|a| a.starts_with(&prefix_slash)).unwrap_or(false) {
+            collapsed.set(false);
+        }
+    });
     let (root, subdirs) = group_by_dir(&files, &prefix);
     let dir_pl = 14 + depth * 14;
     rsx! {
@@ -1120,8 +1180,9 @@ fn FileTreeDir(
                                 name: sub_name,
                                 prefix: sub_prefix,
                                 files: sub_files,
-                                active: active.clone(),
+                                active,
                                 on_select,
+                                on_delete,
                                 depth: depth + 1,
                             }
                         }
@@ -1131,8 +1192,9 @@ fn FileTreeDir(
                     FileEntry {
                         key: "{file.path}",
                         file: file.clone(),
-                        active: active.as_deref() == Some(file.path.as_str()),
+                        active: active().as_deref() == Some(file.path.as_str()),
                         on_select,
+                        on_delete,
                         depth: depth + 1,
                     }
                 }
@@ -1142,15 +1204,38 @@ fn FileTreeDir(
 }
 
 #[component]
-fn FileEntry(file: FileMeta, active: bool, on_select: EventHandler<String>, depth: u32) -> Element {
+fn FileEntry(
+    file: FileMeta,
+    active: bool,
+    on_select: EventHandler<String>,
+    on_delete: EventHandler<FileMeta>,
+    depth: u32,
+) -> Element {
     let path = file.path.clone();
     let file_pl = 22 + depth * 14;
+    let file_clone = file.clone();
     rsx! {
         div {
             class: if active { "file-entry file-entry--active" } else { "file-entry" },
             style: "padding-left: {file_pl}px",
+            tabindex: "0",
             onclick: move |_| on_select(path.clone()),
-            "📄 {file.name()}"
+            onkeydown: move |e| {
+                if e.key() == Key::Delete || e.key() == Key::Backspace {
+                    on_delete(file_clone.clone());
+                }
+            },
+            span { class: "file-entry-name", "📄 {file.name()}" }
+            button {
+                class: "file-entry-delete",
+                title: "Delete file",
+                tabindex: "-1",
+                onclick: move |e| {
+                    e.stop_propagation();
+                    on_delete(file.clone());
+                },
+                "🗑"
+            }
         }
     }
 }
