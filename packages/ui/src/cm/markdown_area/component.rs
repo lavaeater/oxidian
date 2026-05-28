@@ -134,33 +134,6 @@ fn js_read_state(id: &str) -> String {
     )
 }
 
-// Fire-and-forget: places the cursor at `target` character offset.
-fn js_set_cursor(id: &str, target: usize) -> String {
-    format!(
-        r#"(function() {{
-    const el = document.getElementById({id:?});
-    if (!el) return;
-    let offset = 0;
-    const target = {target};
-    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
-    while (walker.nextNode()) {{
-        const node = walker.currentNode;
-        const len = node.textContent.length;
-        if (offset + len >= target) {{
-            const sel = window.getSelection();
-            const range = document.createRange();
-            range.setStart(node, target - offset);
-            range.collapse(true);
-            sel.removeAllRanges();
-            sel.addRange(range);
-            return;
-        }}
-        offset += len;
-    }}
-}})()"#
-    )
-}
-
 // ── HTML rendering ────────────────────────────────────────────────────────────
 
 fn tokens_to_html(source: &str, tokens: &[Token]) -> String {
@@ -443,13 +416,24 @@ pub fn MarkdownArea(
     onfocus: Option<EventHandler<FocusEvent>>,
     onblur: Option<EventHandler<FocusEvent>>,
 ) -> Element {
-    let mut cursor_pos: Signal<Option<usize>> = use_signal(|| None);
     let id = use_memo(|| next_editor_id());
+    let mut is_focused = use_signal(|| false);
 
-    let rendered_html = use_memo(move || {
-        let src = content.read();
+    // rendered_html is a manually-managed signal rather than a reactive memo.
+    // We only push updates when the editor is NOT focused, so that typing never
+    // replaces dangerous_inner_html under the user's cursor.
+    let mut rendered_html = use_signal(|| {
+        let src = content.peek();
         let tokens = tokenize(&src);
         tokens_to_html(&src, &tokens)
+    });
+
+    use_effect(move || {
+        let src = content();     // subscribe to content changes
+        if !is_focused() {       // also subscribe to focus changes
+            let tokens = tokenize(&src);
+            rendered_html.set(tokens_to_html(&src, &tokens));
+        }
     });
 
     use_effect(move || {
@@ -457,27 +441,19 @@ pub fn MarkdownArea(
         document::eval(&js_setup_selection(&id()));
     });
 
-    let saved_cursor = cursor_pos();
-    use_effect(move || {
-        if let Some(pos) = saved_cursor {
-            document::eval(&js_set_cursor(&id(), pos));
-        }
-    });
-
     let handle_input = move |_: Event<FormData>| {
         let editor_id = id();
         spawn(async move {
             if let Ok(payload) = document::eval(&js_read_state(&editor_id))
-                .join::<String>()
+                .recv::<String>()
                 .await
             {
-                if let Some((cursor_str, text)) = payload.split_once('\n') {
-                    let cursor = cursor_str.parse::<i64>().ok()
-                        .filter(|&c| c >= 0)
-                        .map(|c| c as usize);
-                    cursor_pos.set(cursor);
-                    content.set(text.to_string());
-                }
+                // Payload is "cursor\ntext"; we only need the text.
+                let text = payload.split_once('\n')
+                    .map(|(_, t)| t)
+                    .unwrap_or(&payload)
+                    .to_string();
+                content.set(text);
             }
         });
     };
@@ -486,7 +462,7 @@ pub fn MarkdownArea(
         let editor_id = id();
         spawn(async move {
             let Ok(payload) = document::eval(&js_read_state(&editor_id))
-                .join::<String>()
+                .recv::<String>()
                 .await
             else {
                 return;
@@ -511,28 +487,6 @@ pub fn MarkdownArea(
                         }
                     }
                 }
-            } else if let Some((cursor_str, _)) = payload.split_once('\n') {
-                let cursor = cursor_str.parse::<i64>().ok()
-                    .filter(|&c| c >= 0)
-                    .map(|c| c as usize);
-                cursor_pos.set(cursor);
-            }
-        });
-    };
-
-    let sync_cursor = move || {
-        let editor_id = id();
-        spawn(async move {
-            if let Ok(payload) = document::eval(&js_read_state(&editor_id))
-                .join::<String>()
-                .await
-            {
-                if let Some((cursor_str, _)) = payload.split_once('\n') {
-                    let cursor = cursor_str.parse::<i64>().ok()
-                        .filter(|&c| c >= 0)
-                        .map(|c| c as usize);
-                    cursor_pos.set(cursor);
-                }
             }
         });
     };
@@ -549,10 +503,12 @@ pub fn MarkdownArea(
             dangerous_inner_html: "{rendered_html}",
             oninput: handle_input,
             onclick: move |_: Event<MouseData>| handle_click(),
-            onkeyup: move |_: Event<KeyboardData>| sync_cursor(),
-            onfocus: move |e| { if let Some(cb) = onfocus { cb(e); } },
+            onfocus: move |e| {
+                is_focused.set(true);
+                if let Some(cb) = onfocus { cb(e); }
+            },
             onblur: move |e| {
-                cursor_pos.set(None);
+                is_focused.set(false);
                 if let Some(cb) = onblur { cb(e); }
             },
         }

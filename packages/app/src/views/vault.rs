@@ -2,6 +2,7 @@ use dioxus::prelude::*;
 use ui::{MarkdownArea, MarkdownAreaVariant};
 use vault::{FileMeta, GithubConfig, SearchResult};
 
+use crate::console_log;
 use crate::export;
 use crate::state;
 use crate::template::{self, TemplateMeta, JS_DATE_VARS};
@@ -126,22 +127,22 @@ fn word_count(text: &str) -> usize {
 // ── Save status ───────────────────────────────────────────────────────────────
 
 #[derive(Clone, PartialEq)]
-enum SaveStatus { Idle, Unsaved, Saving, Saved, Error(String) }
+enum SaveStatus { Idle, Countdown(u8), Saving, Saved, Error(String) }
 
 impl SaveStatus {
-    fn label(&self) -> &str {
+    fn label(&self) -> String {
         match self {
-            SaveStatus::Idle | SaveStatus::Saved => "Saved",
-            SaveStatus::Unsaved => "Unsaved changes",
-            SaveStatus::Saving  => "Saving…",
-            SaveStatus::Error(_) => "Save failed",
+            SaveStatus::Idle | SaveStatus::Saved => "Saved".into(),
+            SaveStatus::Countdown(n) => format!("Saving in {n}s…"),
+            SaveStatus::Saving  => "Saving…".into(),
+            SaveStatus::Error(_) => "Save failed".into(),
         }
     }
     fn css_class(&self) -> &str {
         match self {
-            SaveStatus::Error(_)  => "save-status save-status--error",
-            SaveStatus::Unsaved   => "save-status save-status--unsaved",
-            SaveStatus::Saving    => "save-status save-status--saving",
+            SaveStatus::Error(_)   => "save-status save-status--error",
+            SaveStatus::Countdown(_) => "save-status save-status--unsaved",
+            SaveStatus::Saving     => "save-status save-status--saving",
             _ => "save-status",
         }
     }
@@ -246,21 +247,25 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
             }
             match vault::dispatch::read_file(&cfg, &p).await {
                 Ok(fc) => {
+                    console_log(&format!("[oxidian] loaded {p} sha={}", fc.sha));
                     index.with_mut(|idx| idx.index_file(&p, &fc.content));
                     content.set(fc.content.clone());
                     saved_content.set(fc.content);
                     file_sha.set(fc.sha);
                     loaded_path.set(Some(p));
                 }
-                Err(e) => load_error.set(Some(e.to_string())),
+                Err(e) => {
+                    console_log(&format!("[oxidian] load error: {e}"));
+                    load_error.set(Some(e.to_string()));
+                }
             }
             loading_file.set(false);
         });
     });
 
     // Debounced auto-save: each edit increments edit_gen and spawns a one-shot
-    // save task.  The task sleeps 5 s, then bails if a newer edit arrived
-    // (higher generation), leaving only the last edit in a burst to actually save.
+    // save task.  The task counts down 5 s (1 s ticks), bailing if a newer edit
+    // arrived (higher generation), so only the last edit in a burst actually saves.
     let cfg = config.clone();
     use_effect(move || {
         let current = content();
@@ -270,27 +275,59 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
         // immediately re-trigger this effect.
         let this_gen = *edit_gen.peek() + 1;
         edit_gen.set(this_gen);
-        save_status.set(SaveStatus::Unsaved);
+        save_status.set(SaveStatus::Countdown(5));
+        tracing::debug!("auto-save: edit detected, gen={this_gen}, starting 5s countdown");
+        console_log(&format!("[oxidian] auto-save: edit detected gen={this_gen}"));
 
         let cfg = cfg.clone();
         spawn(async move {
-            sleep_ms(5000).await;
-            if edit_gen() != this_gen { return; }  // superseded by a newer edit
-            let Some(path) = active_path() else { return };
+            // Countdown 5→4→3→2→1 with 1-second ticks; bail if superseded.
+            for remaining in (1u8..5).rev() {
+                sleep_ms(1000).await;
+                if edit_gen() != this_gen {
+                    tracing::debug!("auto-save: superseded at countdown {remaining} (cur_gen={}, this_gen={this_gen})", edit_gen());
+                    return;
+                }
+                save_status.set(SaveStatus::Countdown(remaining));
+            }
+            sleep_ms(1000).await;
+            if edit_gen() != this_gen {
+                tracing::debug!("auto-save: superseded before save (cur_gen={}, this_gen={this_gen})", edit_gen());
+                return;
+            }
+
+            let Some(path) = active_path() else {
+                tracing::warn!("auto-save: no active path at save time, skipping (gen={this_gen})");
+                return;
+            };
             let sha = file_sha();
-            if sha.is_empty() { return; }
+            if sha.is_empty() {
+                tracing::warn!("auto-save: sha empty for {path}, skipping (gen={this_gen})");
+                return;
+            }
             let snapshot = content();
-            if snapshot == saved_content() { return; }
+            if snapshot == saved_content() {
+                tracing::debug!("auto-save: content unchanged for {path}, nothing to save (gen={this_gen})");
+                return;
+            }
+            tracing::debug!("auto-save: saving {path} (sha={sha}, gen={this_gen})");
+            console_log(&format!("[oxidian] auto-save: saving {path} sha={sha}"));
             save_status.set(SaveStatus::Saving);
             let name = path.rsplit('/').next().unwrap_or(&path).to_string();
             match vault::dispatch::write_file(&cfg, &path, &snapshot, &sha, &format!("Update {name}")).await {
                 Ok(new_sha) => {
+                    tracing::debug!("auto-save: saved {path}, new_sha={new_sha}");
+                    console_log(&format!("[oxidian] auto-save: OK new_sha={new_sha}"));
                     index.with_mut(|idx| idx.reindex_file(&path, &snapshot));
                     file_sha.set(new_sha);
                     saved_content.set(snapshot);
                     save_status.set(SaveStatus::Saved);
                 }
-                Err(e) => save_status.set(SaveStatus::Error(e.to_string())),
+                Err(e) => {
+                    tracing::error!("auto-save: write_file failed for {path}: {e}");
+                    console_log(&format!("[oxidian] auto-save: FAILED {e}"));
+                    save_status.set(SaveStatus::Error(e.to_string()));
+                }
             }
         });
     });
@@ -341,7 +378,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
 
     // Pre-compute values that can't borrow across rsx!.
     let status_class = save_status.read().css_class().to_string();
-    let status_label = save_status.read().label().to_string();
+    let status_label = save_status.read().label();
     let status_title = match &*save_status.read() { SaveStatus::Error(e) => e.clone(), _ => String::new() };
     let words = word_count(&content.read());
     let headings = extract_headings(&content.read());
