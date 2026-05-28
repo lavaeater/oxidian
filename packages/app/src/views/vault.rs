@@ -1,7 +1,4 @@
-use std::time::Duration;
-
 use dioxus::prelude::*;
-use futures_timer::Delay;
 use ui::{MarkdownArea, MarkdownAreaVariant};
 use vault::{FileMeta, GithubConfig, SearchResult};
 
@@ -87,9 +84,7 @@ async fn apply_template(
     }
 }
 
-async fn sleep_ms(ms: u64) {
-    let _ = Delay::new(Duration::from_millis(ms)).await;
-}
+use crate::sleep_ms;
 
 fn fuzzy_match(haystack: &str, needle: &str) -> bool {
     let mut it = haystack.chars();
@@ -168,6 +163,9 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
     let mut loading_file = use_signal(|| false);
     let mut save_status: Signal<SaveStatus> = use_signal(|| SaveStatus::Idle);
     let mut saved_content: Signal<String> = use_signal(String::new);
+    // Incremented on every edit; used to debounce saves — a spawned save task
+    // that finds a higher generation than it captured knows a newer edit supersedes it.
+    let mut edit_gen: Signal<u64> = use_signal(|| 0);
     let mut panel: Signal<Panel> = use_signal(|| Panel::Files);
     // Mobile: controls whether the sidebar drawer is visible.
     // Web CSS ignores this class; mobile CSS uses it to slide the sidebar in/out.
@@ -227,11 +225,13 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
         save_status.set(SaveStatus::Idle);
         let cfg = cfg.clone();
         let mut content = content.clone();
-        // Capture state for potential pre-switch save.
-        let old_path = loaded_path();
-        let old_sha = file_sha();
-        let old_content = content();
-        let old_saved = saved_content();
+        // peek() reads without creating reactive subscriptions — these signals are
+        // written by the async block below, and subscribing would re-run this
+        // effect after every load, causing an infinite reload loop.
+        let old_path = loaded_path.peek().clone();
+        let old_sha = file_sha.peek().clone();
+        let old_content = content.peek().clone();
+        let old_saved = saved_content.peek().clone();
         spawn(async move {
             // Save pending changes for the previous file before switching.
             if let Some(ref old_p) = old_path {
@@ -258,37 +258,39 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
         });
     });
 
-    // Mark unsaved when content diverges from last save.
-    use_effect(move || {
-        let current = content();
-        if !loading_file() && !current.is_empty() && current != saved_content() {
-            save_status.set(SaveStatus::Unsaved);
-        }
-    });
-
-    // Auto-save every 2 seconds when unsaved.
+    // Debounced auto-save: each edit increments edit_gen and spawns a one-shot
+    // save task.  The task sleeps 5 s, then bails if a newer edit arrived
+    // (higher generation), leaving only the last edit in a burst to actually save.
     let cfg = config.clone();
     use_effect(move || {
+        let current = content();
+        if loading_file() || current.is_empty() || current == saved_content() { return; }
+
+        // peek() avoids subscribing to edit_gen — writing it would otherwise
+        // immediately re-trigger this effect.
+        let this_gen = *edit_gen.peek() + 1;
+        edit_gen.set(this_gen);
+        save_status.set(SaveStatus::Unsaved);
+
         let cfg = cfg.clone();
         spawn(async move {
-            loop {
-                sleep_ms(5000).await;
-                if save_status() != SaveStatus::Unsaved { continue; }
-                let Some(path) = active_path() else { continue };
-                let sha = file_sha();
-                let current = content();
-                if sha.is_empty() || current == saved_content() { continue; }
-                save_status.set(SaveStatus::Saving);
-                let name = path.rsplit('/').next().unwrap_or(&path).to_string();
-                match vault::dispatch::write_file(&cfg, &path, &current, &sha, &format!("Update {name}")).await {
-                    Ok(new_sha) => {
-                        index.with_mut(|idx| idx.reindex_file(&path, &current));
-                        file_sha.set(new_sha);
-                        saved_content.set(current);
-                        save_status.set(SaveStatus::Saved);
-                    }
-                    Err(e) => save_status.set(SaveStatus::Error(e.to_string())),
+            sleep_ms(5000).await;
+            if edit_gen() != this_gen { return; }  // superseded by a newer edit
+            let Some(path) = active_path() else { return };
+            let sha = file_sha();
+            if sha.is_empty() { return; }
+            let snapshot = content();
+            if snapshot == saved_content() { return; }
+            save_status.set(SaveStatus::Saving);
+            let name = path.rsplit('/').next().unwrap_or(&path).to_string();
+            match vault::dispatch::write_file(&cfg, &path, &snapshot, &sha, &format!("Update {name}")).await {
+                Ok(new_sha) => {
+                    index.with_mut(|idx| idx.reindex_file(&path, &snapshot));
+                    file_sha.set(new_sha);
+                    saved_content.set(snapshot);
+                    save_status.set(SaveStatus::Saved);
                 }
+                Err(e) => save_status.set(SaveStatus::Error(e.to_string())),
             }
         });
     });
