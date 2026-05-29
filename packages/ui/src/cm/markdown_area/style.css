@@ -169,6 +169,14 @@
 .md-list-item {
   display: block;
 }
+.md-list-unordered::before {
+  content: '•';
+  margin-right: 0.4em;
+  color: var(--secondary-color-5, #888);
+}
+.md-line--active .md-list-unordered::before {
+  display: none;
+}
 .md-li-marker {
   color: var(--secondary-color-5);
   user-select: none;
