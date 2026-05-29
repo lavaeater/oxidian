@@ -45,7 +45,6 @@ fn js_setup_tasks(id: &str) -> String {
     el.addEventListener('mousedown', function(e) {{
         const cb = e.target.closest('.md-task-checkbox');
         if (cb) {{
-            e.preventDefault();
             el._taskClick = {{
                 pos: parseInt(cb.dataset.pos),
                 checked: cb.dataset.checked === 'true'
@@ -268,7 +267,7 @@ fn push_token_html(source: &str, token: &Token, out: &mut String) {
             ));
             marker(&raw[..prefix_len], out);
             out.push_str(&format!(
-                "<span class=\"md-task-checkbox\" contenteditable=\"false\" \
+                "<span class=\"md-task-checkbox\" \
                  data-pos=\"{}\" data-checked=\"{}\">{} </span>",
                 bracket_pos,
                 checked,
@@ -477,13 +476,31 @@ pub fn MarkdownArea(
 
             if let Some(rest) = payload.strip_prefix("cb:") {
                 if let Some((pos_str, was_checked_str)) = rest.split_once(':') {
-                    if let Ok(bracket_pos) = pos_str.parse::<usize>() {
+                    if let Ok(hint_pos) = pos_str.parse::<usize>() {
                         let was_checked = was_checked_str == "1";
                         let new_bracket = if was_checked { "[ ]" } else { "[x]" };
                         let mut src = content.read().clone();
-                        if bracket_pos + 3 <= src.len() {
-                            src.replace_range(bracket_pos..bracket_pos + 3, new_bracket);
-                            content.set(src);
+                        // Re-tokenize current content to find the actual bracket
+                        // position — the hint from data-pos may be stale if the
+                        // user edited above this line while focused.
+                        let tokens = tokenize(&src);
+                        let actual_pos = tokens.iter()
+                            .filter_map(|t| match &t.kind {
+                                TokenKind::TaskItem { checked, bracket_pos, .. }
+                                    if *checked == was_checked => Some(*bracket_pos),
+                                _ => None,
+                            })
+                            .min_by_key(|&p| p.abs_diff(hint_pos));
+                        if let Some(pos) = actual_pos {
+                            if pos + 3 <= src.len() {
+                                src.replace_range(pos..pos + 3, new_bracket);
+                                // Update rendered_html immediately so the toggle
+                                // is visible without waiting for blur — the
+                                // use_effect guard skips updates while focused.
+                                let new_html = tokens_to_html(&src, &tokenize(&src));
+                                rendered_html.set(new_html);
+                                content.set(src);
+                            }
                         }
                     }
                 }
