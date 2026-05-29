@@ -169,6 +169,14 @@
 .md-list-item {
   display: block;
 }
+.md-list-unordered::before {
+  content: '•';
+  margin-right: 0.4em;
+  color: var(--secondary-color-5, #888);
+}
+.md-line--active .md-list-unordered::before {
+  display: none;
+}
 .md-li-marker {
   color: var(--secondary-color-5);
   user-select: none;
@@ -232,6 +240,20 @@
   border-right: 2px solid white;
   border-bottom: 2px solid white;
   transform: rotate(40deg) translate(-1px, -2px);
+}
+
+/* On the active line, show raw [ ] / [x] text and hide the visual checkbox. */
+.md-line--active .md-task-checkbox {
+  font-size: 1em;
+  line-height: normal;
+  color: var(--secondary-color-5, #888);
+  width: auto;
+  height: auto;
+  cursor: text;
+}
+.md-line--active .md-task-checkbox::before,
+.md-line--active .md-task-checkbox::after {
+  display: none;
 }
 
 /* Wikilink target (the part before | in [[target|display]]) — collapses like a marker */

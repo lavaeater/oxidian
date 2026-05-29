@@ -135,3 +135,9 @@ M0 (vault backend + file tree)
                     └── M7 (multi-provider, mobile)
                           └── M8 (publish + export)
 ```
+
+My most wanted feature:
+
+Delete file / folder
+File and folder sync
+Keyboard shortcuts

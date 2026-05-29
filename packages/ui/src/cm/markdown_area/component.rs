@@ -45,7 +45,6 @@ fn js_setup_tasks(id: &str) -> String {
     el.addEventListener('mousedown', function(e) {{
         const cb = e.target.closest('.md-task-checkbox');
         if (cb) {{
-            e.preventDefault();
             el._taskClick = {{
                 pos: parseInt(cb.dataset.pos),
                 checked: cb.dataset.checked === 'true'
@@ -85,9 +84,75 @@ fn js_setup_selection(id: &str) -> String {
             }}
         }}
         if (prev !== next) {{
-            if (prev) prev.classList.remove('md-line--active');
+            if (prev) {{
+                // Sync data-checked from actual text before the line goes inactive.
+                const cb = prev.querySelector('.md-task-checkbox');
+                if (cb) {{
+                    const t = cb.textContent;
+                    cb.dataset.checked = (t.startsWith('[x]') || t.startsWith('[X]')) ? 'true' : 'false';
+                }}
+                prev.classList.remove('md-line--active');
+                // Skip if we're mid-render (innerHTML was just set by us).
+                if (!el.dataset.rendering) {{
+                    el.dataset.lineChange = '1';
+                    el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                }}
+            }}
             if (next) next.classList.add('md-line--active');
         }}
+    }});
+}})()"#
+    )
+}
+
+// Intercepts Enter on list lines and inserts the correct continuation prefix.
+fn js_setup_keyboard(id: &str) -> String {
+    format!(
+        r#"(function() {{
+    const el = document.getElementById({id:?});
+    if (!el || el.dataset.kbSetup) return;
+    el.dataset.kbSetup = '1';
+    el.addEventListener('keydown', function(e) {{
+        if (e.key !== 'Enter' || e.shiftKey || e.ctrlKey || e.metaKey) return;
+        const sel = window.getSelection();
+        if (!sel || !sel.rangeCount) return;
+        // Walk up to the containing md-line div.
+        let node = sel.anchorNode;
+        if (node && node.nodeType !== 1) node = node.parentElement;
+        while (node && node !== el) {{
+            if (node.classList && node.classList.contains('md-line')) break;
+            node = node.parentElement;
+        }}
+        if (!node || node === el) return;
+        // textContent includes hidden marker text regardless of font-size CSS.
+        const line = node.textContent;
+        let prefix = null;
+        let markerLen = 0;
+        // Task item: `- [ ] ` / `- [x] ` (with optional indent).
+        const taskM = line.match(/^(\s*[-*+] )\[[ xX]\] /);
+        if (taskM) {{
+            markerLen = taskM[0].length;
+            prefix = '\n' + taskM[1] + '[ ] ';
+        }} else {{
+            // Ordered list: `1. ` `2. ` …
+            const olM = line.match(/^(\s*)(\d+)\. /);
+            if (olM) {{
+                markerLen = olM[0].length;
+                prefix = '\n' + olM[1] + (parseInt(olM[2]) + 1) + '. ';
+            }} else {{
+                // Unordered list: `- ` / `* ` / `+ `
+                const ulM = line.match(/^(\s*)([-*+]) /);
+                if (ulM) {{
+                    markerLen = ulM[0].length;
+                    prefix = '\n' + ulM[1] + ulM[2] + ' ';
+                }}
+            }}
+        }}
+        if (!prefix) return;
+        // If the line has no content beyond the marker, exit the list instead.
+        if (line.slice(markerLen).trim() === '') return;
+        e.preventDefault();
+        document.execCommand('insertText', false, prefix);
     }});
 }})()"#
     )
@@ -129,34 +194,66 @@ fn js_read_state(id: &str) -> String {
             }}
         }}
     }}
+    if (el.dataset.lineChange) {{
+        el.dataset.lineChange = '';
+        dioxus.send('linechange\n' + cursor + '\n' + text);
+        return;
+    }}
     dioxus.send(cursor + "\n" + text);
 }})()"#
     )
 }
 
-// Fire-and-forget: places the cursor at `target` character offset.
-fn js_set_cursor(id: &str, target: usize) -> String {
+// Escapes a Rust string for use as a JS double-quoted string literal.
+fn js_str(s: &str) -> String {
+    let mut out = String::from('"');
+    for ch in s.chars() {
+        match ch {
+            '"'  => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            c if (c as u32) < 0x20 => {
+                use std::fmt::Write;
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+// Sets innerHTML directly (bypassing the Dioxus render cycle) and immediately
+// restores the cursor — both synchronously, so they can't race each other.
+fn js_apply_html_and_restore_cursor(id: &str, new_html: &str, cursor: i64) -> String {
+    let html_js = js_str(new_html);
     format!(
         r#"(function() {{
     const el = document.getElementById({id:?});
     if (!el) return;
-    let offset = 0;
-    const target = {target};
-    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
-    while (walker.nextNode()) {{
-        const node = walker.currentNode;
-        const len = node.textContent.length;
-        if (offset + len >= target) {{
-            const sel = window.getSelection();
-            const range = document.createRange();
-            range.setStart(node, target - offset);
-            range.collapse(true);
-            sel.removeAllRanges();
-            sel.addRange(range);
-            return;
+    el.dataset.rendering = '1';
+    el.innerHTML = {html_js};
+    if ({cursor} >= 0) {{
+        let remaining = {cursor};
+        const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
+        while (walker.nextNode()) {{
+            const len = walker.currentNode.textContent.length;
+            if (remaining <= len) {{
+                try {{
+                    const range = document.createRange();
+                    range.setStart(walker.currentNode, remaining);
+                    range.collapse(true);
+                    window.getSelection().removeAllRanges();
+                    window.getSelection().addRange(range);
+                }} catch(_) {{}}
+                return;
+            }}
+            remaining -= len;
         }}
-        offset += len;
     }}
+    // Clear the flag after the selectionchange triggered by innerHTML has fired.
+    setTimeout(function() {{ el.dataset.rendering = ''; }}, 0);
 }})()"#
     )
 }
@@ -295,7 +392,7 @@ fn push_token_html(source: &str, token: &Token, out: &mut String) {
             ));
             marker(&raw[..prefix_len], out);
             out.push_str(&format!(
-                "<span class=\"md-task-checkbox\" contenteditable=\"false\" \
+                "<span class=\"md-task-checkbox\" \
                  data-pos=\"{}\" data-checked=\"{}\">{} </span>",
                 bracket_pos,
                 checked,
@@ -443,41 +540,72 @@ pub fn MarkdownArea(
     onfocus: Option<EventHandler<FocusEvent>>,
     onblur: Option<EventHandler<FocusEvent>>,
 ) -> Element {
-    let mut cursor_pos: Signal<Option<usize>> = use_signal(|| None);
     let id = use_memo(|| next_editor_id());
+    let mut is_focused = use_signal(|| false);
 
-    let rendered_html = use_memo(move || {
-        let src = content.read();
+    // rendered_html is a manually-managed signal rather than a reactive memo.
+    // We only push updates when the editor is NOT focused, so that typing never
+    // replaces dangerous_inner_html under the user's cursor.
+    let mut rendered_html = use_signal(|| {
+        let src = content.peek();
         let tokens = tokenize(&src);
         tokens_to_html(&src, &tokens)
     });
 
     use_effect(move || {
-        document::eval(&js_setup_tasks(&id()));
-        document::eval(&js_setup_selection(&id()));
+        let src = content();     // subscribe to content changes
+        if !is_focused() {       // also subscribe to focus changes
+            let tokens = tokenize(&src);
+            rendered_html.set(tokens_to_html(&src, &tokens));
+        }
     });
 
-    let saved_cursor = cursor_pos();
     use_effect(move || {
-        if let Some(pos) = saved_cursor {
-            document::eval(&js_set_cursor(&id(), pos));
-        }
+        document::eval(&js_setup_tasks(&id()));
+        document::eval(&js_setup_selection(&id()));
+        document::eval(&js_setup_keyboard(&id()));
     });
 
     let handle_input = move |_: Event<FormData>| {
         let editor_id = id();
         spawn(async move {
-            if let Ok(payload) = document::eval(&js_read_state(&editor_id))
-                .join::<String>()
+            let Ok(payload) = document::eval(&js_read_state(&editor_id))
+                .recv::<String>()
                 .await
-            {
-                if let Some((cursor_str, text)) = payload.split_once('\n') {
-                    let cursor = cursor_str.parse::<i64>().ok()
-                        .filter(|&c| c >= 0)
-                        .map(|c| c as usize);
-                    cursor_pos.set(cursor);
-                    content.set(text.to_string());
+            else {
+                return;
+            };
+
+            if let Some(rest) = payload.strip_prefix("linechange\n") {
+                // Active line changed: re-render so block tokens (headings,
+                // lists, …) reformat immediately.
+                // We set innerHTML directly + restore cursor in one synchronous
+                // JS call to avoid a race with Dioxus's own render cycle.
+                // rendered_html is intentionally left alone — the use_effect
+                // will sync it on the next blur.
+                let (cursor_str, text) = rest.split_once('\n').unwrap_or(("-1", rest));
+                let cursor: i64 = cursor_str.parse().unwrap_or(-1);
+                // Chrome appends a trailing \n to innerText of contenteditable
+                // divs; strip it to avoid accumulating blank lines.
+                let text = text.trim_end_matches('\n').to_string();
+                content.set(text.clone());
+                // cursor = -1 means the selection is in an element with no
+                // text nodes (e.g. a freshly Enter-created empty line).
+                // Skip the re-render in that case — the DOM is untouched so
+                // the cursor stays put, and formatting syncs on blur.
+                if cursor >= 0 {
+                    let tokens = tokenize(&text);
+                    let new_html = tokens_to_html(&text, &tokens);
+                    document::eval(&js_apply_html_and_restore_cursor(&editor_id, &new_html, cursor));
                 }
+            } else {
+                // Normal keystroke: update content only; rendered_html stays
+                // untouched while focused to avoid resetting the cursor.
+                let text = payload.split_once('\n')
+                    .map(|(_, t)| t)
+                    .unwrap_or(&payload)
+                    .to_string();
+                content.set(text);
             }
         });
     };
@@ -486,7 +614,7 @@ pub fn MarkdownArea(
         let editor_id = id();
         spawn(async move {
             let Ok(payload) = document::eval(&js_read_state(&editor_id))
-                .join::<String>()
+                .recv::<String>()
                 .await
             else {
                 return;
@@ -501,37 +629,33 @@ pub fn MarkdownArea(
 
             if let Some(rest) = payload.strip_prefix("cb:") {
                 if let Some((pos_str, was_checked_str)) = rest.split_once(':') {
-                    if let Ok(bracket_pos) = pos_str.parse::<usize>() {
+                    if let Ok(hint_pos) = pos_str.parse::<usize>() {
                         let was_checked = was_checked_str == "1";
                         let new_bracket = if was_checked { "[ ]" } else { "[x]" };
                         let mut src = content.read().clone();
-                        if bracket_pos + 3 <= src.len() {
-                            src.replace_range(bracket_pos..bracket_pos + 3, new_bracket);
-                            content.set(src);
+                        // Re-tokenize current content to find the actual bracket
+                        // position — the hint from data-pos may be stale if the
+                        // user edited above this line while focused.
+                        let tokens = tokenize(&src);
+                        let actual_pos = tokens.iter()
+                            .filter_map(|t| match &t.kind {
+                                TokenKind::TaskItem { checked, bracket_pos, .. }
+                                    if *checked == was_checked => Some(*bracket_pos),
+                                _ => None,
+                            })
+                            .min_by_key(|&p| p.abs_diff(hint_pos));
+                        if let Some(pos) = actual_pos {
+                            if pos + 3 <= src.len() {
+                                src.replace_range(pos..pos + 3, new_bracket);
+                                // Update rendered_html immediately so the toggle
+                                // is visible without waiting for blur — the
+                                // use_effect guard skips updates while focused.
+                                let new_html = tokens_to_html(&src, &tokenize(&src));
+                                rendered_html.set(new_html);
+                                content.set(src);
+                            }
                         }
                     }
-                }
-            } else if let Some((cursor_str, _)) = payload.split_once('\n') {
-                let cursor = cursor_str.parse::<i64>().ok()
-                    .filter(|&c| c >= 0)
-                    .map(|c| c as usize);
-                cursor_pos.set(cursor);
-            }
-        });
-    };
-
-    let sync_cursor = move || {
-        let editor_id = id();
-        spawn(async move {
-            if let Ok(payload) = document::eval(&js_read_state(&editor_id))
-                .join::<String>()
-                .await
-            {
-                if let Some((cursor_str, _)) = payload.split_once('\n') {
-                    let cursor = cursor_str.parse::<i64>().ok()
-                        .filter(|&c| c >= 0)
-                        .map(|c| c as usize);
-                    cursor_pos.set(cursor);
                 }
             }
         });
@@ -549,10 +673,12 @@ pub fn MarkdownArea(
             dangerous_inner_html: "{rendered_html}",
             oninput: handle_input,
             onclick: move |_: Event<MouseData>| handle_click(),
-            onkeyup: move |_: Event<KeyboardData>| sync_cursor(),
-            onfocus: move |e| { if let Some(cb) = onfocus { cb(e); } },
+            onfocus: move |e| {
+                is_focused.set(true);
+                if let Some(cb) = onfocus { cb(e); }
+            },
             onblur: move |e| {
-                cursor_pos.set(None);
+                is_focused.set(false);
                 if let Some(cb) = onblur { cb(e); }
             },
         }

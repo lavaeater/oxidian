@@ -110,6 +110,12 @@ pub mod dispatch {
             Provider::GitLab  => gitlab::create_file(cfg, path, content, msg).await,
         }
     }
+    pub async fn delete_file(cfg: &GithubConfig, path: &str, sha: &str, msg: &str) -> Result<(), VaultError> {
+        match cfg.provider {
+            Provider::GitHub  => github::delete_file(cfg, path, sha, msg).await,
+            Provider::GitLab  => gitlab::delete_file(cfg, path, sha, msg).await,
+        }
+    }
     pub async fn read_many(cfg: &GithubConfig, paths: &[String]) -> Vec<(String, String)> {
         match cfg.provider {
             Provider::GitHub  => github::read_many(cfg, paths).await,

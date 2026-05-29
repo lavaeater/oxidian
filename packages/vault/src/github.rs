@@ -274,6 +274,29 @@ pub async fn create_file(
     Ok(written.content.sha)
 }
 
+// ── delete_file ───────────────────────────────────────────────────────────────
+
+pub async fn delete_file(
+    cfg: &GithubConfig,
+    path: &str,
+    sha: &str,
+    message: &str,
+) -> Result<(), VaultError> {
+    let url = format!("{API}/repos/{}/{}/contents/{path}", cfg.owner, cfg.repo);
+    let body = serde_json::json!({
+        "message": message,
+        "sha": sha,
+        "branch": cfg.branch,
+    });
+    let resp = request(reqwest::Method::DELETE, &url, &cfg.token)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| VaultError::Http(e.to_string()))?;
+    check(resp).await?;
+    Ok(())
+}
+
 // ── OAuth Device Flow ─────────────────────────────────────────────────────────
 
 pub const GITHUB_CLIENT_ID: &str = "Ov23li0fTUa8YSbUsWwI";

@@ -1,9 +1,7 @@
 use dioxus::prelude::*;
-use futures_timer::Delay;
-use std::time::Duration;
 use vault::{GithubConfig, Provider, poll_device_token, request_device_code, get_username, PollOutcome};
 
-use crate::state;
+use crate::{sleep_ms, state};
 
 #[derive(Clone, PartialEq)]
 enum OAuthPhase {
@@ -46,7 +44,7 @@ pub fn Settings(
                         verification_uri_complete: uri_complete,
                     });
                     loop {
-                        Delay::new(Duration::from_secs(interval as u64)).await;
+                        sleep_ms(interval as u32 * 1000).await;
                         // User may have cancelled
                         if !matches!(oauth_phase(), OAuthPhase::AwaitingAuth { .. }) { break; }
                         match poll_device_token(&device_code).await {

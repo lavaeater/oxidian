@@ -1,4 +1,5 @@
 use dioxus::prelude::*;
+use tracing::Level;
 use vault::GithubConfig;
 
 use app::state;
@@ -8,6 +9,12 @@ const FAVICON: Asset = asset!("/assets/favicon.ico");
 const MAIN_CSS: Asset = asset!("/assets/main.css");
 
 fn main() {
+    console_error_panic_hook::set_once();
+    tracing_wasm::set_as_global_default_with_config(
+        tracing_wasm::WASMLayerConfigBuilder::new()
+            .set_max_level(Level::WARN)
+            .build(),
+    );
     dioxus::launch(App);
 }
 

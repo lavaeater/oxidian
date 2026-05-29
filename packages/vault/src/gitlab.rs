@@ -140,6 +140,30 @@ pub async fn create_file(cfg: &GithubConfig, path: &str, content: &str, message:
     Ok(String::new())
 }
 
+// ── delete_file ───────────────────────────────────────────────────────────────
+
+pub async fn delete_file(cfg: &GithubConfig, path: &str, sha: &str, message: &str) -> Result<(), VaultError> {
+    let base = api(cfg);
+    let project = urlencoded(&format!("{}/{}", cfg.owner, cfg.repo));
+    let file_path = encoded_path(path);
+    let url = format!("{base}/projects/{project}/repository/files/{file_path}");
+    let body = serde_json::json!({
+        "branch": cfg.branch,
+        "commit_message": message,
+        "last_commit_id": sha,
+    });
+    let resp = reqwest::Client::new()
+        .delete(&url)
+        .header("PRIVATE-TOKEN", &cfg.token)
+        .header("User-Agent", "Oxidian/0.1")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| VaultError::Http(e.to_string()))?;
+    check(resp).await?;
+    Ok(())
+}
+
 fn urlencoded(s: &str) -> String {
     s.chars().flat_map(|c| match c {
         '/' => "%2F".chars().collect::<Vec<_>>(),
