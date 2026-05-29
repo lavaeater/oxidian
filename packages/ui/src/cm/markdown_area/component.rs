@@ -105,6 +105,59 @@ fn js_setup_selection(id: &str) -> String {
     )
 }
 
+// Intercepts Enter on list lines and inserts the correct continuation prefix.
+fn js_setup_keyboard(id: &str) -> String {
+    format!(
+        r#"(function() {{
+    const el = document.getElementById({id:?});
+    if (!el || el.dataset.kbSetup) return;
+    el.dataset.kbSetup = '1';
+    el.addEventListener('keydown', function(e) {{
+        if (e.key !== 'Enter' || e.shiftKey || e.ctrlKey || e.metaKey) return;
+        const sel = window.getSelection();
+        if (!sel || !sel.rangeCount) return;
+        // Walk up to the containing md-line div.
+        let node = sel.anchorNode;
+        if (node && node.nodeType !== 1) node = node.parentElement;
+        while (node && node !== el) {{
+            if (node.classList && node.classList.contains('md-line')) break;
+            node = node.parentElement;
+        }}
+        if (!node || node === el) return;
+        // textContent includes hidden marker text regardless of font-size CSS.
+        const line = node.textContent;
+        let prefix = null;
+        let markerLen = 0;
+        // Task item: `- [ ] ` / `- [x] ` (with optional indent).
+        const taskM = line.match(/^(\s*[-*+] )\[[ xX]\] /);
+        if (taskM) {{
+            markerLen = taskM[0].length;
+            prefix = '\n' + taskM[1] + '[ ] ';
+        }} else {{
+            // Ordered list: `1. ` `2. ` …
+            const olM = line.match(/^(\s*)(\d+)\. /);
+            if (olM) {{
+                markerLen = olM[0].length;
+                prefix = '\n' + olM[1] + (parseInt(olM[2]) + 1) + '. ';
+            }} else {{
+                // Unordered list: `- ` / `* ` / `+ `
+                const ulM = line.match(/^(\s*)([-*+]) /);
+                if (ulM) {{
+                    markerLen = ulM[0].length;
+                    prefix = '\n' + ulM[1] + ulM[2] + ' ';
+                }}
+            }}
+        }}
+        if (!prefix) return;
+        // If the line has no content beyond the marker, exit the list instead.
+        if (line.slice(markerLen).trim() === '') return;
+        e.preventDefault();
+        document.execCommand('insertText', false, prefix);
+    }});
+}})()"#
+    )
+}
+
 // Reads innerText and cursor offset together, then sends "cursor_offset\ntext".
 // If a navigate or task-checkbox click was recorded, sends those first.
 fn js_read_state(id: &str) -> String {
@@ -510,6 +563,7 @@ pub fn MarkdownArea(
     use_effect(move || {
         document::eval(&js_setup_tasks(&id()));
         document::eval(&js_setup_selection(&id()));
+        document::eval(&js_setup_keyboard(&id()));
     });
 
     let handle_input = move |_: Event<FormData>| {
