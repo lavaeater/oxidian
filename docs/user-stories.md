@@ -134,3 +134,4 @@ Since the Git/GitHub synchronization is the underlying infrastructure, this spec
 
 * **US 19.1:** As a user, I want to convert a standard Markdown document containing lists (e.g., `# To Do`, `# Doing`, `# Done`) into a visual Kanban board view.
 * **US 19.2:** As a user, I want to drag and drop tasks (markdown list items) between columns in the visual view, and have the underlying markdown file update automatically to reflect the move.
+* **US 19.3:** As a user, I want the different "lanes" of the KanBan board to be represented by folders in the Vault. So, ToDo is a folder, Doing is a folder, etc. The board is basically a visualisation of what is in each folder + ordering them.
