@@ -84,7 +84,16 @@ fn js_setup_selection(id: &str) -> String {
             }}
         }}
         if (prev !== next) {{
-            if (prev) prev.classList.remove('md-line--active');
+            if (prev) {{
+                // Sync data-checked from actual text before the line goes
+                // inactive — the user may have typed [x]/[ ] directly.
+                const cb = prev.querySelector('.md-task-checkbox');
+                if (cb) {{
+                    const t = cb.textContent;
+                    cb.dataset.checked = (t.startsWith('[x]') || t.startsWith('[X]')) ? 'true' : 'false';
+                }}
+                prev.classList.remove('md-line--active');
+            }}
             if (next) next.classList.add('md-line--active');
         }}
     }});
