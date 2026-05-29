@@ -85,14 +85,18 @@ fn js_setup_selection(id: &str) -> String {
         }}
         if (prev !== next) {{
             if (prev) {{
-                // Sync data-checked from actual text before the line goes
-                // inactive — the user may have typed [x]/[ ] directly.
+                // Sync data-checked from actual text before the line goes inactive.
                 const cb = prev.querySelector('.md-task-checkbox');
                 if (cb) {{
                     const t = cb.textContent;
                     cb.dataset.checked = (t.startsWith('[x]') || t.startsWith('[X]')) ? 'true' : 'false';
                 }}
                 prev.classList.remove('md-line--active');
+                // Skip if we're mid-render (innerHTML was just set by us).
+                if (!el.dataset.rendering) {{
+                    el.dataset.lineChange = '1';
+                    el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                }}
             }}
             if (next) next.classList.add('md-line--active');
         }}
@@ -137,7 +141,66 @@ fn js_read_state(id: &str) -> String {
             }}
         }}
     }}
+    if (el.dataset.lineChange) {{
+        el.dataset.lineChange = '';
+        dioxus.send('linechange\n' + cursor + '\n' + text);
+        return;
+    }}
     dioxus.send(cursor + "\n" + text);
+}})()"#
+    )
+}
+
+// Escapes a Rust string for use as a JS double-quoted string literal.
+fn js_str(s: &str) -> String {
+    let mut out = String::from('"');
+    for ch in s.chars() {
+        match ch {
+            '"'  => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            c if (c as u32) < 0x20 => {
+                use std::fmt::Write;
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+// Sets innerHTML directly (bypassing the Dioxus render cycle) and immediately
+// restores the cursor — both synchronously, so they can't race each other.
+fn js_apply_html_and_restore_cursor(id: &str, new_html: &str, cursor: i64) -> String {
+    let html_js = js_str(new_html);
+    format!(
+        r#"(function() {{
+    const el = document.getElementById({id:?});
+    if (!el) return;
+    el.dataset.rendering = '1';
+    el.innerHTML = {html_js};
+    if ({cursor} >= 0) {{
+        let remaining = {cursor};
+        const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
+        while (walker.nextNode()) {{
+            const len = walker.currentNode.textContent.length;
+            if (remaining <= len) {{
+                try {{
+                    const range = document.createRange();
+                    range.setStart(walker.currentNode, remaining);
+                    range.collapse(true);
+                    window.getSelection().removeAllRanges();
+                    window.getSelection().addRange(range);
+                }} catch(_) {{}}
+                return;
+            }}
+            remaining -= len;
+        }}
+    }}
+    // Clear the flag after the selectionchange triggered by innerHTML has fired.
+    setTimeout(function() {{ el.dataset.rendering = ''; }}, 0);
 }})()"#
     )
 }
@@ -452,11 +515,38 @@ pub fn MarkdownArea(
     let handle_input = move |_: Event<FormData>| {
         let editor_id = id();
         spawn(async move {
-            if let Ok(payload) = document::eval(&js_read_state(&editor_id))
+            let Ok(payload) = document::eval(&js_read_state(&editor_id))
                 .recv::<String>()
                 .await
-            {
-                // Payload is "cursor\ntext"; we only need the text.
+            else {
+                return;
+            };
+
+            if let Some(rest) = payload.strip_prefix("linechange\n") {
+                // Active line changed: re-render so block tokens (headings,
+                // lists, …) reformat immediately.
+                // We set innerHTML directly + restore cursor in one synchronous
+                // JS call to avoid a race with Dioxus's own render cycle.
+                // rendered_html is intentionally left alone — the use_effect
+                // will sync it on the next blur.
+                let (cursor_str, text) = rest.split_once('\n').unwrap_or(("-1", rest));
+                let cursor: i64 = cursor_str.parse().unwrap_or(-1);
+                // Chrome appends a trailing \n to innerText of contenteditable
+                // divs; strip it to avoid accumulating blank lines.
+                let text = text.trim_end_matches('\n').to_string();
+                content.set(text.clone());
+                // cursor = -1 means the selection is in an element with no
+                // text nodes (e.g. a freshly Enter-created empty line).
+                // Skip the re-render in that case — the DOM is untouched so
+                // the cursor stays put, and formatting syncs on blur.
+                if cursor >= 0 {
+                    let tokens = tokenize(&text);
+                    let new_html = tokens_to_html(&text, &tokens);
+                    document::eval(&js_apply_html_and_restore_cursor(&editor_id, &new_html, cursor));
+                }
+            } else {
+                // Normal keystroke: update content only; rendered_html stays
+                // untouched while focused to avoid resetting the cursor.
                 let text = payload.split_once('\n')
                     .map(|(_, t)| t)
                     .unwrap_or(&payload)
