@@ -52,7 +52,7 @@ pub async fn list_files(cfg: &GithubConfig) -> Result<Vec<FileMeta>, VaultError>
     let entries: Vec<TreeEntry> = check(resp).await?.json().await.map_err(|e| VaultError::Http(e.to_string()))?;
 
     Ok(entries.into_iter()
-        .filter(|e| e.kind == "blob" && e.path.ends_with(".md"))
+        .filter(|e| e.kind == "blob" && (e.path.ends_with(".md") || e.path.ends_with(".gitkeep")))
         .map(|e| FileMeta { path: e.path, sha: e.id, size: 0 })
         .collect())
 }

@@ -185,6 +185,9 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
     let mut templates: Signal<Vec<TemplateMeta>> = use_signal(Vec::new);
     let mut board_root: Signal<String> = use_signal(String::new);
     let mut board_input: Signal<String> = use_signal(String::new);
+    // The "current" folder: set when a folder is clicked or derived from the
+    // folder of the currently open file. Drives the new-folder default parent.
+    let mut selected_dir: Signal<Option<String>> = use_signal(|| None);
 
     // Load file list and bookmarks on mount.
     let cfg = config.clone();
@@ -389,6 +392,16 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
         document::eval("setTimeout(() => { const el = document.querySelector('.file-entry--active'); if (el) el.scrollIntoView({ block: 'nearest' }); }, 50);");
     });
 
+    // Keep the "current folder" in sync with the open file's folder. A folder
+    // click overrides this (writes selected_dir directly); since this effect
+    // only re-runs when active_path changes, it won't clobber that.
+    use_effect(move || {
+        if let Some(p) = active_path() {
+            let dir = p.rfind('/').map(|i| p[..i].to_string());
+            selected_dir.set(dir.filter(|d| !d.is_empty()));
+        }
+    });
+
     // Pre-compute values that can't borrow across rsx!.
     let status_class = save_status.read().css_class().to_string();
     let status_label = save_status.read().label();
@@ -538,10 +551,14 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                                     FileTree {
                                         files: files.read().clone(),
                                         active: active_path,
+                                        selected_dir,
                                         on_select: move |path: String| {
                                             active_path.set(Some(path));
                                             show_switcher.set(false);
                                             sidebar_open.set(false);
+                                        },
+                                        on_select_dir: move |dir: String| {
+                                            selected_dir.set(if dir.is_empty() { None } else { Some(dir) });
                                         },
                                         on_delete: handle_delete,
                                     }
@@ -856,6 +873,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
             if show_new_folder() {
                 NewFolderModal {
                     config: cfg_newfile,
+                    parent: selected_dir.read().clone(),
                     on_created: move |_| {
                         show_new_folder.set(false);
                         let cfg = config.clone();
@@ -945,9 +963,26 @@ fn NewFileModal(
 
 // ── New folder modal ──────────────────────────────────────────────────────────
 
+/// Resolve a folder-name input into a full vault path:
+///  - leading "/"  → root-relative (ignore the current folder)
+///  - otherwise    → relative to `parent` (the current folder) if present
+/// Intermediate folders are created implicitly (mkdir -p style) since git
+/// derives directories from the blob path.
+fn resolve_folder_path(parent: &Option<String>, raw: &str) -> String {
+    let raw = raw.trim();
+    if let Some(stripped) = raw.strip_prefix('/') {
+        stripped.trim_matches('/').to_string()
+    } else if let Some(p) = parent {
+        format!("{}/{}", p.trim_end_matches('/'), raw.trim_matches('/'))
+    } else {
+        raw.trim_matches('/').to_string()
+    }
+}
+
 #[component]
 fn NewFolderModal(
     config: GithubConfig,
+    parent: Option<String>,
     on_created: EventHandler<()>,
     on_close: EventHandler<()>,
 ) -> Element {
@@ -956,12 +991,14 @@ fn NewFolderModal(
     let mut error = use_signal(|| None::<String>);
     let mut trigger = use_signal(|| false);
 
+    let parent_effect = parent.clone();
     use_effect(move || {
         if !trigger() { return; }
         trigger.set(false);
         let raw = name.read().trim().to_string();
         if raw.is_empty() { error.set(Some("Enter a folder name.".into())); return; }
-        let folder = raw.trim_end_matches('/').to_string();
+        let folder = resolve_folder_path(&parent_effect, &raw);
+        if folder.is_empty() { error.set(Some("Enter a folder name.".into())); return; }
         let path = format!("{folder}/.gitkeep");
         let cfg = config.clone();
         creating.set(true);
@@ -974,6 +1011,12 @@ fn NewFolderModal(
         });
     });
 
+    let preview = {
+        let raw = name.read();
+        let r = raw.trim();
+        if r.is_empty() { String::new() } else { resolve_folder_path(&parent, r) }
+    };
+
     rsx! {
         div {
             class: "qs-overlay",
@@ -982,9 +1025,14 @@ fn NewFolderModal(
                 class: "qs-modal", style: "max-width: 400px;",
                 onclick: move |e| e.stop_propagation(),
                 div { style: "padding: 16px 16px 8px; font-weight: 600;", "New folder" }
+                if let Some(ref p) = parent {
+                    div { style: "padding: 0 16px 8px; font-size: 0.8rem; color: var(--text-muted);",
+                        "Creating inside " code { "{p}/" } " — start with " code { "/" } " for vault root."
+                    }
+                }
                 input {
                     class: "qs-input",
-                    placeholder: "folder-name  (or  parent/folder-name)",
+                    placeholder: "folder-name  (or  /root-level  or  a/b/c)",
                     autofocus: true,
                     value: "{name}",
                     oninput: move |e| name.set(e.value()),
@@ -992,6 +1040,11 @@ fn NewFolderModal(
                         if e.key() == Key::Enter  { trigger.set(true); }
                         if e.key() == Key::Escape { on_close(()); }
                     },
+                }
+                if !preview.is_empty() {
+                    div { style: "padding: 4px 16px 0; font-size: 0.8rem; color: var(--text-muted);",
+                        "Will create: " code { "{preview}/" }
+                    }
                 }
                 if let Some(ref err) = error() {
                     div { style: "padding: 0 16px 8px; color: var(--danger); font-size: 0.85rem;", "{err}" }
@@ -1323,7 +1376,9 @@ fn group_by_dir(files: &[FileMeta], prefix: &str) -> (Vec<FileMeta>, Vec<(String
 fn FileTree(
     files: Vec<FileMeta>,
     active: ReadOnlySignal<Option<String>>,
+    selected_dir: ReadOnlySignal<Option<String>>,
     on_select: EventHandler<String>,
+    on_select_dir: EventHandler<String>,
     on_delete: EventHandler<FileMeta>,
 ) -> Element {
     let (root, dirs) = group_by_dir(&files, "");
@@ -1339,7 +1394,9 @@ fn FileTree(
                             prefix: dir_prefix,
                             files: dir_files,
                             active,
+                            selected_dir,
                             on_select,
+                            on_select_dir,
                             on_delete,
                             depth: 0,
                         }
@@ -1347,13 +1404,15 @@ fn FileTree(
                 }
             }
             for file in root {
-                FileEntry {
-                    key: "{file.path}",
-                    file: file.clone(),
-                    active: active().as_deref() == Some(file.path.as_str()),
-                    on_select,
-                    on_delete,
-                    depth: 0,
+                if file.name() != ".gitkeep" {
+                    FileEntry {
+                        key: "{file.path}",
+                        file: file.clone(),
+                        active: active().as_deref() == Some(file.path.as_str()),
+                        on_select,
+                        on_delete,
+                        depth: 0,
+                    }
                 }
             }
         }
@@ -1366,7 +1425,9 @@ fn FileTreeDir(
     prefix: String,
     files: Vec<FileMeta>,
     active: ReadOnlySignal<Option<String>>,
+    selected_dir: ReadOnlySignal<Option<String>>,
     on_select: EventHandler<String>,
+    on_select_dir: EventHandler<String>,
     on_delete: EventHandler<FileMeta>,
     depth: u32,
 ) -> Element {
@@ -1376,19 +1437,25 @@ fn FileTreeDir(
     };
     let mut collapsed = use_signal(|| !contains_active(&active()));
     // Auto-expand when the active file moves into this directory.
+    let prefix_slash_effect = prefix_slash.clone();
     use_effect(move || {
-        if active().as_deref().map(|a| a.starts_with(&prefix_slash)).unwrap_or(false) {
+        if active().as_deref().map(|a| a.starts_with(&prefix_slash_effect)).unwrap_or(false) {
             collapsed.set(false);
         }
     });
     let (root, subdirs) = group_by_dir(&files, &prefix);
     let dir_pl = 14 + depth * 14;
+    let is_selected = selected_dir().as_deref() == Some(prefix.as_str());
+    let prefix_click = prefix.clone();
     rsx! {
         div { class: "file-tree-dir",
             div {
-                class: "file-tree-dir-name",
+                class: if is_selected { "file-tree-dir-name file-tree-dir-name--active" } else { "file-tree-dir-name" },
                 style: "padding-left: {dir_pl}px",
-                onclick: move |_| collapsed.set(!collapsed()),
+                onclick: move |_| {
+                    collapsed.set(!collapsed());
+                    on_select_dir(prefix_click.clone());
+                },
                 span { class: "file-tree-dir-chevron", if collapsed() { "▶" } else { "▼" } }
                 " 📁 {name}"
             }
@@ -1403,7 +1470,9 @@ fn FileTreeDir(
                                 prefix: sub_prefix,
                                 files: sub_files,
                                 active,
+                                selected_dir,
                                 on_select,
+                                on_select_dir,
                                 on_delete,
                                 depth: depth + 1,
                             }
@@ -1411,13 +1480,15 @@ fn FileTreeDir(
                     }
                 }
                 for file in root {
-                    FileEntry {
-                        key: "{file.path}",
-                        file: file.clone(),
-                        active: active().as_deref() == Some(file.path.as_str()),
-                        on_select,
-                        on_delete,
-                        depth: depth + 1,
+                    if file.name() != ".gitkeep" {
+                        FileEntry {
+                            key: "{file.path}",
+                            file: file.clone(),
+                            active: active().as_deref() == Some(file.path.as_str()),
+                            on_select,
+                            on_delete,
+                            depth: depth + 1,
+                        }
                     }
                 }
             }
