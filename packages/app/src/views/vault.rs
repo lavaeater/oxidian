@@ -625,7 +625,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                                 div { class: "kanban-panel-header",
                                     input {
                                         class: "kanban-root-input",
-                                        placeholder: "Board folder (e.g. Projects)",
+                                        placeholder: "Board (e.g. kanban or kanban/board.md)",
                                         value: "{board_input}",
                                         oninput: move |e| board_input.set(e.value()),
                                         onkeydown: move |e| {
@@ -655,7 +655,9 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                                 }
                                 if board_root.read().is_empty() {
                                     div { class: "kanban-hint",
-                                        "Enter a folder path above to open it as a Kanban board."
+                                        "Enter a board name and press Enter. Oxidian creates/opens a "
+                                        code { "kanban.md" }
+                                        " document that defines the columns and card order; cards are notes in per-column subfolders."
                                     }
                                 }
                             }
@@ -693,18 +695,27 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
             // ── Editor pane ─────────────────────────────────────────────────
             main { class: "editor-pane",
                 if panel() == Panel::Kanban && !board_root.read().is_empty() {
-                    KanbanBoard {
-                        config: config.clone(),
-                        board_root: board_root.read().clone(),
-                        files: files.read().clone(),
-                        on_open: move |path: String| {
-                            active_path.set(Some(path));
-                            panel.set(Panel::Files);
-                            sidebar_open.set(false);
-                        },
-                        on_files_changed: move |updated: Vec<FileMeta>| {
-                            files.set(updated);
-                        },
+                    {
+                        // Resolve the input into a board *document* path. A bare
+                        // folder name (e.g. "kanban") maps to "kanban/kanban.md".
+                        let raw = board_root.read().trim().trim_matches('/').to_string();
+                        let board_path = if raw.ends_with(".md") { raw } else { format!("{raw}/kanban.md") };
+                        rsx! {
+                            KanbanBoard {
+                                key: "{board_path}",
+                                config: config.clone(),
+                                board_path,
+                                files: files.read().clone(),
+                                on_open: move |path: String| {
+                                    active_path.set(Some(path));
+                                    panel.set(Panel::Files);
+                                    sidebar_open.set(false);
+                                },
+                                on_files_changed: move |updated: Vec<FileMeta>| {
+                                    files.set(updated);
+                                },
+                            }
+                        }
                     }
                 } else if let Some(ref path) = active_path() {
                     div { class: "editor-titlebar",

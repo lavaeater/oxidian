@@ -1,12 +1,40 @@
 # Kanban Board — Design
 
-## Model (US 19.3: folder-based)
+## Model: board-as-document (folder-backed cards)
 
-A **board** is a vault folder. Each direct subfolder is a **column**. Each `.md`
-file inside a column folder is a **card**. Example:
+A **board is a markdown document** (e.g. `kanban/kanban.md`) that owns the board's
+structure and ordering. The individual note files stay clean — their position is
+tracked by the board doc, not by frontmatter in each note.
+
+```markdown
+---
+kanban-plugin: board
+---
+
+## Todo
+
+- [[redesign-homepage]]
+- [[fix-login-bug]]
+
+## Doing
+
+- [[write-tests]]
+
+## Done
+
+- [[setup-ci]]
+```
+
+- Each `## heading` is a **column** (in document order).
+- Each `- [[Title]]` item is a **card** (in document order).
+- A card's note lives at `<board-dir>/<Column>/<Title>.md`, where `<board-dir>` is
+  the folder containing the board doc.
+
+So for the example above (board at `kanban/kanban.md`), the vault holds:
 
 ```
-Projects/
+kanban/
+  kanban.md            ← the board document
   Todo/
     redesign-homepage.md
     fix-login-bug.md
@@ -16,56 +44,66 @@ Projects/
     setup-ci.md
 ```
 
-Opening `Projects/` as a board renders three columns: Todo, Doing, Done.
+### Why a document, not just folders
 
-Cards are sorted alphabetically (prototype). Future: front-matter `order` field
-or numbered prefixes (e.g. `01-task.md`).
+Git does not track empty directories, so a pure "columns = subfolders" model can't
+represent an empty column or column order. The board document is the source of
+truth for **which columns exist** and **in what order**, and for **card ordering**
+within each column. Folders still back the cards (US 19.3), giving the best of
+both: clean notes, real version-controlled structure.
 
 ## Accessing the board
 
-A **Kanban tab** (🗂) is added to the sidebar panel tabs in `VaultBrowser`. When
-selected, a small text input lets the user type the board root folder path (e.g.
-`Projects`). The input is persisted in `localStorage` so it survives page
-reloads.
+A **Kanban tab** (🗂) in the sidebar panel tabs takes a board name. The input is
+resolved to a document path:
 
-The main editor pane is replaced by the full-width `KanbanBoard` component when
-the Kanban panel is active and a board path is set.
+- `kanban`            → `kanban/kanban.md`
+- `kanban/board.md`   → used as-is
 
-## Card display
+The value is persisted in `localStorage`. The main editor pane is replaced by the
+full-width `KanbanBoard` component (keyed on the board path, so switching boards
+remounts cleanly).
 
-Each card shows the filename without the `.md` extension. Clicking a card opens
-it in the normal editor (sets `active_path`).
+### First open / bootstrapping
 
-## Drag and drop — cross-column move
+If the board document doesn't exist yet, it is **created automatically**. Any
+existing subfolders of the board directory that already contain notes are imported
+as columns (with their notes as cards), so pointing the board at an existing
+folder structure "just works". Empty folders cannot be detected (git doesn't store
+them) — use **+ New column** to add them.
 
-HTML5 drag API (`draggable`, `ondragstart`, `ondragover`, `ondrop`).
+## Operations
 
-- `dragstart` records `(src_column, filename)` in JS `dataTransfer`.
-- `dragover` on a column header/body accepts the drop.
-- `drop` triggers a Rust callback that:
-  1. Reads the file content + SHA from the vault.
-  2. Creates the file at `<board>/<dst_column>/<filename>` (same content).
-  3. Deletes the original at `<board>/<src_column>/<filename>`.
-  4. Refreshes the file list signal.
+All mutating actions update the board document **and** the underlying files, then
+commit:
 
-This approach works on both WASM and WebView since it only uses standard DOM
-events. No extra JS shim needed.
+| Action | File effect | Board-doc effect |
+|--------|-------------|------------------|
+| Drag card A→B | move `dir/A/Title.md` → `dir/B/Title.md` (read→create→delete) | remove from column A's list, append to column B's |
+| Add card | create `dir/Column/Title.md` with `# Title` | append `- [[Title]]` under the column |
+| New column | create `dir/Column/.gitkeep` | append `## Column` |
 
-## Out of scope (prototype)
+The board doc is re-serialised from the in-memory model (preamble/frontmatter
+preserved verbatim) and written back with its tracked SHA.
 
-- US 19.1: single-file Kanban (headings → columns, list items → cards).
-- Card ordering within a column.
-- Creating/renaming columns.
-- Card creation directly from the board (use the normal New Note button and place
-  the file in the correct column folder).
-- Optimistic UI during move (card briefly disappears; reload shows it in the new
-  column).
+## Drag and drop
 
-## Files changed
+Standard HTML5 drag API. On `dragstart` a card stores `"<column>\x1e<title>"` in
+`window.__oxidianDragData`; the destination column's `ondrop` reads it back and
+fires the move. Works on both WASM and the native WebView with no extra shim.
 
-| File | Change |
-|------|--------|
-| `packages/app/src/views/kanban.rs` | New `KanbanBoard` component |
-| `packages/app/src/views/mod.rs` | Expose `kanban` module |
-| `packages/app/src/views/vault.rs` | Add `Panel::Kanban`, wire board pane |
-| `packages/web/assets/main.css` | Kanban board CSS |
+## Out of scope (for now)
+
+- US 19.1: single-file Kanban (one document whose `## headings`/list items are the
+  whole board, with no backing folders).
+- Reordering cards *within* a column by dragging (order currently follows the doc;
+  moving across columns appends to the end of the target).
+- Renaming/deleting columns from the UI.
+
+## Files
+
+| File | Role |
+|------|------|
+| `packages/app/src/views/kanban.rs` | `KanbanBoard` + `KanbanColumn`; board parse/serialize |
+| `packages/app/src/views/vault.rs` | `Panel::Kanban`, board-path input, board pane |
+| `packages/web/assets/main.css` (+ desktop/mobile) | Kanban CSS |

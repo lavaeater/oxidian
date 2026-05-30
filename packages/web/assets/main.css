@@ -792,3 +792,9 @@ kbd {
 }
 .sidebar-resize-handle:hover,
 .sidebar-resize-handle:active { background: var(--accent); }
+.kanban-add-card-btn {
+  width: 100%; padding: 6px; background: none; border: 1px dashed var(--border);
+  border-radius: 4px; color: var(--text-muted); font-size: 0.8rem; cursor: pointer;
+  margin-top: 2px;
+}
+.kanban-add-card-btn:hover { color: var(--text); border-color: var(--text-muted); }
