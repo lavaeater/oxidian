@@ -22,14 +22,11 @@ if [[ ! -d "$FOLDER" ]]; then
   exit 1
 fi
 
-# === ZOLA Build === #
-zola build
-
 # === PACKAGE DIRECTORY ===
 echo "📦 Zipping contents of '$FOLDER'..."
-rm -f "$ZIP_FILE"
 (
   cd "$FOLDER"
+  rm -f "../$ZIP_FILE"
   zip -r "../$ZIP_FILE" . -x "*.git*" -x "../$ZIP_FILE"
 )
 
@@ -41,7 +38,8 @@ JOB_ID=$(echo "$DEPLOYMENT" | jq -r '.jobId')
 
 # === UPLOAD FILE ===
 echo "⬆️ Uploading build to Amplify (via pre-signed S3 URL)..."
-curl -s -T "$ZIP_FILE" "$UPLOAD_URL"
+
+curl -s -T "../$ZIP_FILE" "$UPLOAD_URL"
 
 # === START DEPLOYMENT ===
 echo "▶️ Starting deployment job..."
