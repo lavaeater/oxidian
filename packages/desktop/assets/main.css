@@ -128,3 +128,24 @@ body {
 .col-crumb:hover { color: var(--text); background: var(--bg3); }
 .col-crumb--active { color: var(--text); font-weight: 600; cursor: default; }
 .col-crumb-sep { color: var(--text-muted); opacity: 0.5; }
+
+/* ── Icon alignment helpers ── */
+.file-entry-icon {
+  display: flex; align-items: center; flex-shrink: 0;
+  opacity: 0.55; margin-right: 5px;
+}
+.file-tree-dir-label {
+  flex: 1; min-width: 0; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+/* SVG icons in buttons should inherit color and be vertically centred */
+.sidebar-icon-btn svg,
+.editor-icon-btn svg,
+.panel-tab svg,
+.nav-style-btn svg,
+.bottom-nav-btn svg,
+.file-entry-delete svg,
+.bookmark-remove svg,
+.sidebar-error-close svg {
+  display: block;
+}

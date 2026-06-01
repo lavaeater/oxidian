@@ -1,4 +1,10 @@
 use dioxus::prelude::*;
+use crate::icons::{
+    IcoBookmark, IcoBookmarkCheck, IcoCalendar, IcoChevronDown, IcoChevronLeft,
+    IcoChevronRight, IcoDownload, IcoFileText, IcoFilePlus, IcoFolderClosed,
+    IcoFolderOpen, IcoFolderPlus, IcoFolderTree, IcoLayoutList, IcoLink2,
+    IcoNetwork, IcoSearch, IcoSettings, IcoTrash2, IcoX, IcoFolderKanban,
+};
 use ui::{MarkdownArea, MarkdownAreaVariant};
 use vault::{FileMeta, GithubConfig, SearchResult};
 
@@ -165,14 +171,12 @@ enum Panel { Files, Search, Backlinks, Graph, Bookmarks, Kanban }
 
 pub struct NavPlugin {
     pub id: &'static str,
-    pub icon: &'static str,
     pub label: &'static str,
 }
 
 static NAV_PLUGINS: &[NavPlugin] = &[
-    NavPlugin { id: "tree",    icon: "🌲", label: "Tree" },
-    NavPlugin { id: "flat",    icon: "≡",  label: "Flat list" },
-    NavPlugin { id: "columns", icon: "⫼", label: "Columns" },
+    NavPlugin { id: "tree", label: "Tree" },
+    NavPlugin { id: "flat", label: "Flat list" },
 ];
 
 // ── VaultBrowser ──────────────────────────────────────────────────────────────
@@ -483,13 +487,13 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                             class: "sidebar-icon-btn",
                             title: "New note",
                             onclick: move |_| show_new_file.set(true),
-                            "✏"
+                            IcoFilePlus { size: 16 }
                         }
                         button {
                             class: "sidebar-icon-btn",
                             title: "New folder",
                             onclick: move |_| show_new_folder.set(true),
-                            "📁+"
+                            IcoFolderPlus { size: 16 }
                         }
                         button {
                             class: "sidebar-icon-btn",
@@ -526,51 +530,49 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                                     sidebar_open.set(false);
                                 });
                             },
-                            "📅"
+                            IcoCalendar { size: 16 }
                         }
                         button {
                             class: "sidebar-icon-btn",
                             title: "Disconnect vault",
                             onclick: move |_| { state::clear_config(); on_logout(()); },
-                            "⚙"
+                            IcoSettings { size: 16 }
                         }
                         // Close button — hidden on desktop via web CSS, visible on mobile
                         button {
                             class: "sidebar-icon-btn sidebar-close-btn",
                             title: "Close",
                             onclick: move |_| sidebar_open.set(false),
-                            "✕"
+                            IcoX { size: 16 }
                         }
                     }
                 }
 
                 div { class: "panel-tabs",
-                    button { class: if panel() == Panel::Files { "panel-tab panel-tab--active" } else { "panel-tab" }, onclick: move |_| panel.set(Panel::Files), title: "Files", "📁" }
-                    button { class: if panel() == Panel::Search { "panel-tab panel-tab--active" } else { "panel-tab" }, onclick: move |_| panel.set(Panel::Search), title: "Search", "🔍" }
-                    button { class: if panel() == Panel::Backlinks { "panel-tab panel-tab--active" } else { "panel-tab" }, onclick: move |_| panel.set(Panel::Backlinks), title: "Backlinks", "↩" }
-                    button { class: if panel() == Panel::Graph { "panel-tab panel-tab--active" } else { "panel-tab" }, onclick: move |_| panel.set(Panel::Graph), title: "Graph", "◉" }
-                    button { class: if panel() == Panel::Bookmarks { "panel-tab panel-tab--active" } else { "panel-tab" }, onclick: move |_| panel.set(Panel::Bookmarks), title: "Bookmarks", "🔖" }
-                    button { class: if panel() == Panel::Kanban { "panel-tab panel-tab--active" } else { "panel-tab" }, onclick: move |_| panel.set(Panel::Kanban), title: "Kanban", "🗂" }
+                    button { class: if panel() == Panel::Files { "panel-tab panel-tab--active" } else { "panel-tab" }, onclick: move |_| panel.set(Panel::Files), title: "Files", IcoFolderTree { size: 15 } }
+                    button { class: if panel() == Panel::Search { "panel-tab panel-tab--active" } else { "panel-tab" }, onclick: move |_| panel.set(Panel::Search), title: "Search", IcoSearch { size: 15 } }
+                    button { class: if panel() == Panel::Backlinks { "panel-tab panel-tab--active" } else { "panel-tab" }, onclick: move |_| panel.set(Panel::Backlinks), title: "Backlinks", IcoLink2 { size: 15 } }
+                    button { class: if panel() == Panel::Graph { "panel-tab panel-tab--active" } else { "panel-tab" }, onclick: move |_| panel.set(Panel::Graph), title: "Graph", IcoNetwork { size: 15 } }
+                    button { class: if panel() == Panel::Bookmarks { "panel-tab panel-tab--active" } else { "panel-tab" }, onclick: move |_| panel.set(Panel::Bookmarks), title: "Bookmarks", IcoBookmark { size: 15 } }
+                    button { class: if panel() == Panel::Kanban { "panel-tab panel-tab--active" } else { "panel-tab" }, onclick: move |_| panel.set(Panel::Kanban), title: "Kanban", IcoFolderKanban { size: 15 } }
                 }
 
                 div { class: "panel-content",
                     match panel() {
                         Panel::Files => rsx! {
-                            // Plugin picker — driven by NAV_PLUGINS registry
+                            // Plugin picker — icons hardcoded for builtins; label from registry
                             div { class: "nav-style-picker",
-                                for plugin in NAV_PLUGINS {
-                                    {
-                                        let id = plugin.id;
-                                        rsx! {
-                                            button {
-                                                key: "{id}",
-                                                class: if nav_style() == id { "nav-style-btn nav-style-btn--active" } else { "nav-style-btn" },
-                                                title: "{plugin.label}",
-                                                onclick: move |_| nav_style.set(id),
-                                                "{plugin.icon}"
-                                            }
-                                        }
-                                    }
+                                button {
+                                    class: if nav_style() == "tree" { "nav-style-btn nav-style-btn--active" } else { "nav-style-btn" },
+                                    title: "Tree",
+                                    onclick: move |_| nav_style.set("tree"),
+                                    IcoFolderTree { size: 14 }
+                                }
+                                button {
+                                    class: if nav_style() == "flat" { "nav-style-btn nav-style-btn--active" } else { "nav-style-btn" },
+                                    title: "Flat list",
+                                    onclick: move |_| nav_style.set("flat"),
+                                    IcoLayoutList { size: 14 }
                                 }
                             }
                             if loading_list() {
@@ -582,7 +584,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                                         button {
                                             class: "sidebar-error-close",
                                             onclick: move |_| load_error.set(None),
-                                            "✕"
+                                            IcoX { size: 13 }
                                         }
                                     }
                                 }
@@ -765,7 +767,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                             class: "editor-icon-btn editor-back-btn",
                             title: "Back to files",
                             onclick: move |_| sidebar_open.set(true),
-                            "‹"
+                            IcoChevronLeft { size: 18 }
                         }
                         span { class: "editor-filename", "{path}" }
                         div { class: "editor-meta",
@@ -782,7 +784,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                                         state::save_bookmarks(&bookmarks.read());
                                     }
                                 },
-                                "🔖"
+                                if is_bookmarked { IcoBookmarkCheck { size: 15 } } else { IcoBookmark { size: 15 } }
                             }
                             if loading_file() {
                                 span { class: "save-status", "Loading…" }
@@ -801,7 +803,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                                             document::eval(&export::download_html(&filename, &html));
                                         }
                                     },
-                                    "↓"
+                                    IcoDownload { size: 15 }
                                 }
                             }
                         }
@@ -830,31 +832,31 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                 button {
                     class: if panel() == Panel::Files { "bottom-nav-btn bottom-nav-btn--active" } else { "bottom-nav-btn" },
                     onclick: move |_| { panel.set(Panel::Files); sidebar_open.set(true); },
-                    span { "📁" }
+                    IcoFolderTree { size: 18 }
                     span { class: "bottom-nav-label", "Files" }
                 }
                 button {
                     class: if panel() == Panel::Search { "bottom-nav-btn bottom-nav-btn--active" } else { "bottom-nav-btn" },
                     onclick: move |_| { panel.set(Panel::Search); sidebar_open.set(true); },
-                    span { "🔍" }
-                    span { class: "bottom-nav-label", "Search" }
+                    IcoSearch { size: 18 }
+                    span { class: "bottom-nav-label", "IcoSearch" }
                 }
                 button {
                     class: if panel() == Panel::Backlinks { "bottom-nav-btn bottom-nav-btn--active" } else { "bottom-nav-btn" },
                     onclick: move |_| { panel.set(Panel::Backlinks); sidebar_open.set(true); },
-                    span { "↩" }
+                    IcoLink2 { size: 18 }
                     span { class: "bottom-nav-label", "Links" }
                 }
                 button {
                     class: if panel() == Panel::Graph { "bottom-nav-btn bottom-nav-btn--active" } else { "bottom-nav-btn" },
                     onclick: move |_| { panel.set(Panel::Graph); sidebar_open.set(true); },
-                    span { "◉" }
+                    IcoNetwork { size: 18 }
                     span { class: "bottom-nav-label", "Graph" }
                 }
                 button {
                     class: if panel() == Panel::Bookmarks { "bottom-nav-btn bottom-nav-btn--active" } else { "bottom-nav-btn" },
                     onclick: move |_| { panel.set(Panel::Bookmarks); sidebar_open.set(true); },
-                    span { "🔖" }
+                    IcoBookmark { size: 18 }
                     span { class: "bottom-nav-label", "Saved" }
                 }
             }
@@ -1138,7 +1140,7 @@ fn NewFolderModal(
     }
 }
 
-// ── Search panel ──────────────────────────────────────────────────────────────
+// ── IcoSearch panel ──────────────────────────────────────────────────────────────
 
 #[component]
 fn SearchPanel(config: GithubConfig, on_select: EventHandler<String>) -> Element {
@@ -1179,7 +1181,7 @@ fn SearchPanel(config: GithubConfig, on_select: EventHandler<String>) -> Element
             div { class: "search-input-wrap",
                 input {
                     class: "search-input",
-                    placeholder: "Search notes…",
+                    placeholder: "IcoSearch notes…",
                     value: "{query}",
                     oninput: move |e| query.set(e.value()),
                 }
@@ -1235,12 +1237,13 @@ fn BookmarksPanel(
                             div {
                                 class: if is_active { "bookmark-item bookmark-item--active" } else { "bookmark-item" },
                                 onclick: move |_| on_select(p.clone()),
-                                span { class: "bookmark-name", "🔖 {name}" }
+                                IcoBookmark { size: 13 }
+                                span { class: "bookmark-name", "{name}" }
                                 button {
                                     class: "bookmark-remove",
                                     title: "Remove bookmark",
                                     onclick: move |e| { e.stop_propagation(); on_remove(p2.clone()); },
-                                    "×"
+                                    IcoX { size: 12 }
                                 }
                             }
                         }
@@ -1573,7 +1576,7 @@ fn FileTreeDir(
         }
     });
     let (root, subdirs) = group_by_dir(&files, &prefix);
-    let dir_pl = 14 + depth * 14;
+    let dir_pl = 10 + depth * 10;
     let is_selected = selected_dir().as_deref() == Some(prefix.as_str());
     let prefix_click = prefix.clone();
     rsx! {
@@ -1585,8 +1588,9 @@ fn FileTreeDir(
                     collapsed.set(!collapsed());
                     on_select_dir(prefix_click.clone());
                 },
-                span { class: "file-tree-dir-chevron", if collapsed() { "▶" } else { "▼" } }
-                " 📁 {name}"
+                span { class: "file-tree-dir-chevron", if collapsed() { IcoChevronRight { size: 11 } } else { IcoChevronDown { size: 11 } } }
+                if collapsed() { IcoFolderClosed { size: 14 } } else { IcoFolderOpen { size: 14 } }
+                span { class: "file-tree-dir-label", "{name}" }
             }
             if !collapsed() {
                 for (sub_prefix, sub_files) in subdirs {
@@ -1634,7 +1638,7 @@ fn FileEntry(
     depth: u32,
 ) -> Element {
     let path = file.path.clone();
-    let file_pl = 22 + depth * 14;
+    let file_pl = 18 + depth * 10;
     let file_clone = file.clone();
     rsx! {
         div {
@@ -1647,7 +1651,8 @@ fn FileEntry(
                     on_delete(file_clone.clone());
                 }
             },
-            span { class: "file-entry-name", "📄 {file.name()}" }
+            span { class: "file-entry-icon", IcoFileText { size: 13 } }
+            span { class: "file-entry-name", "{file.name()}" }
             button {
                 class: "file-entry-delete",
                 title: "Delete file",
@@ -1656,7 +1661,7 @@ fn FileEntry(
                     e.stop_propagation();
                     on_delete(file.clone());
                 },
-                "🗑"
+                IcoTrash2 { size: 12 }
             }
         }
     }
@@ -1719,7 +1724,8 @@ fn FlatList(
                                 div {
                                     class: if is_sel { "flat-list-dir flat-list-dir--active" } else { "flat-list-dir" },
                                     onclick: move |_| on_select_dir(dir_clone.clone()),
-                                    "📁 {dir}"
+                                    IcoFolderClosed { size: 12 }
+                                    " {dir}"
                                 }
                             }
                             for file in dir_files {
@@ -1731,13 +1737,14 @@ fn FlatList(
                                         div {
                                             class: if is_active { "flat-list-item flat-list-item--active" } else { "flat-list-item" },
                                             onclick: move |_| on_select(p.clone()),
-                                            span { class: "flat-list-name", "📄 {file.name()}" }
+                                            span { class: "file-entry-icon", IcoFileText { size: 12 } }
+                                            span { class: "flat-list-name", "{file.name()}" }
                                             button {
                                                 class: "file-entry-delete",
                                                 title: "Delete",
                                                 tabindex: "-1",
                                                 onclick: move |e| { e.stop_propagation(); on_delete(file_clone.clone()); },
-                                                "🗑"
+                                                IcoTrash2 { size: 12 }
                                             }
                                         }
                                     }
