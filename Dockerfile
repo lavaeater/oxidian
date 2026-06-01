@@ -22,9 +22,9 @@ FROM ghcr.io/static-web-server/static-web-server:2 AS runtime
 COPY --from=builder /app/target/dx/web/release/web/public /public
 
 ENV SERVER_ROOT=/public \
-    SERVER_PORT=8888 \
+    SERVER_PORT=5173 \
     SERVER_HOST=0.0.0.0
 # SPA fallback: serve index.html for unknown routes (client-side router)
 ENV SERVER_FALLBACK_PAGE=/public/index.html
 
-EXPOSE 8888
+EXPOSE 5173
