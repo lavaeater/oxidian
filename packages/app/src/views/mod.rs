@@ -1,4 +1,5 @@
 mod graph;
+pub mod kanban;
 mod properties;
 mod settings;
 mod slash;

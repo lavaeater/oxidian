@@ -61,7 +61,9 @@ pub async fn list_files(cfg: &GithubConfig) -> Result<Vec<FileMeta>, VaultError>
     Ok(tree
         .tree
         .into_iter()
-        .filter(|e| e.kind == "blob" && e.path.ends_with(".md"))
+        // Keep markdown notes plus `.gitkeep` placeholders so empty folders
+        // (created via "New folder" / Kanban columns) still appear in the tree.
+        .filter(|e| e.kind == "blob" && (e.path.ends_with(".md") || e.path.ends_with(".gitkeep")))
         .map(|e| FileMeta {
             path: e.path,
             sha: e.sha,
