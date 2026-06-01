@@ -1,0 +1,21 @@
+# Rust build artifacts
+/target
+
+# dx output
+/dist
+
+# Git
+.git
+.gitignore
+
+# Editor / OS cruft
+.vscode
+.idea
+.DS_Store
+
+# Docker
+Dockerfile
+.dockerignore
+
+# Docs / misc not needed in the image build
+*.md
