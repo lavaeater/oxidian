@@ -113,3 +113,18 @@ body {
 .col-item--dir:hover, .col-item--open { color: var(--text); }
 .col-item--open { font-weight: 600; background: var(--bg2); }
 .col-chevron { font-size: 0.9rem; opacity: 0.5; margin-left: 4px; }
+
+/* ── Column view breadcrumb ── */
+.col-view-wrap { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
+.col-breadcrumb {
+  display: flex; align-items: center; flex-wrap: wrap;
+  padding: 4px 8px; gap: 2px; border-bottom: 1px solid var(--border);
+  font-size: 0.78rem; flex-shrink: 0;
+}
+.col-crumb {
+  cursor: pointer; color: var(--text-muted); padding: 1px 4px;
+  border-radius: 3px;
+}
+.col-crumb:hover { color: var(--text); background: var(--bg3); }
+.col-crumb--active { color: var(--text); font-weight: 600; cursor: default; }
+.col-crumb-sep { color: var(--text-muted); opacity: 0.5; }

@@ -16,7 +16,9 @@ The directory tree view is a bit clunky and doesn't feel that modern. I would li
 
 - **🌲 Tree** (existing): collapsible folder tree with depth-indented nodes.
 - **≡ Flat list**: all files shown as a flat, sorted list with folder name headers. A filter box at the top narrows by path substring. Clicking a folder header sets it as the current dir.
-- **⫼ Column view** (Miller columns): two-pane layout. Left column shows top-level dirs + root files; clicking a folder reveals its contents in the right column. Clicking a subfolder in the right pane updates `selected_dir`.
+- **⫼ Column view** (Miller columns): two-pane layout with a breadcrumb bar at the top. Left column shows the current level; clicking a folder in the left pane opens it in the right column. Clicking a folder in the RIGHT pane drills down — that folder becomes the new left column. The breadcrumb lets you jump back to any ancestor or vault root.
+
+**Nav plugin architecture:** `NAV_PLUGINS` is a static registry of `NavPlugin { id, icon, label }` entries. The picker iterates it. Adding a nav view requires: (1) pushing to `NAV_PLUGINS`, (2) adding one `match` arm in `nav_dispatch`. For runtime-loaded (third-party) plugins the next step is a `NavPluginRegistry` Dioxus Context holding `Vec<Box<dyn NavPluginDyn>>` — documented in code as future work.
 
 ### 3. Autocomplete For Paths
 
