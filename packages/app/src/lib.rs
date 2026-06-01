@@ -1,4 +1,5 @@
 pub mod export;
+pub mod icons;
 pub mod state;
 pub mod template;
 pub mod views;

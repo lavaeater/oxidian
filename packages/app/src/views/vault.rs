@@ -1,4 +1,10 @@
 use dioxus::prelude::*;
+use crate::icons::{
+    IcoBookmark, IcoBookmarkCheck, IcoCalendar, IcoChevronDown, IcoChevronLeft,
+    IcoChevronRight, IcoDownload, IcoFileText, IcoFilePlus, IcoFolderClosed,
+    IcoFolderOpen, IcoFolderPlus, IcoFolderTree, IcoLayoutList, IcoLink2,
+    IcoNetwork, IcoSearch, IcoSettings, IcoTrash2, IcoX, IcoFolderKanban,
+};
 use ui::{MarkdownArea, MarkdownAreaVariant};
 use vault::{FileMeta, GithubConfig, SearchResult};
 
@@ -152,6 +158,27 @@ impl SaveStatus {
 #[derive(Clone, PartialEq)]
 enum Panel { Files, Search, Backlinks, Graph, Bookmarks, Kanban }
 
+// ── Nav plugin registry ───────────────────────────────────────────────────────
+//
+// Each nav view is a `NavPlugin` entry in the static registry below.
+// To add a new view: (1) push an entry here, (2) add a match arm in
+// `nav_dispatch` at the bottom of this file.
+//
+// For runtime-loaded (truly third-party) plugins, the next step is to expose a
+// `NavPluginRegistry` Dioxus Context holding `Vec<Box<dyn NavPluginDyn>>` where
+// the trait has a `render(&self, props: NavPluginProps) -> Element` method using
+// Dioxus's `VNode` API. That is left as future work.
+
+pub struct NavPlugin {
+    pub id: &'static str,
+    pub label: &'static str,
+}
+
+static NAV_PLUGINS: &[NavPlugin] = &[
+    NavPlugin { id: "tree", label: "Tree" },
+    NavPlugin { id: "flat", label: "Flat list" },
+];
+
 // ── VaultBrowser ──────────────────────────────────────────────────────────────
 
 #[component]
@@ -188,6 +215,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
     // The "current" folder: set when a folder is clicked or derived from the
     // folder of the currently open file. Drives the new-folder default parent.
     let mut selected_dir: Signal<Option<String>> = use_signal(|| None);
+    let mut nav_style: Signal<&'static str> = use_signal(|| "tree");
 
     // Load file list and bookmarks on mount.
     let cfg = config.clone();
@@ -459,13 +487,13 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                             class: "sidebar-icon-btn",
                             title: "New note",
                             onclick: move |_| show_new_file.set(true),
-                            "✏"
+                            IcoFilePlus { size: 16 }
                         }
                         button {
                             class: "sidebar-icon-btn",
                             title: "New folder",
                             onclick: move |_| show_new_folder.set(true),
-                            "📁+"
+                            IcoFolderPlus { size: 16 }
                         }
                         button {
                             class: "sidebar-icon-btn",
@@ -502,36 +530,51 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                                     sidebar_open.set(false);
                                 });
                             },
-                            "📅"
+                            IcoCalendar { size: 16 }
                         }
                         button {
                             class: "sidebar-icon-btn",
                             title: "Disconnect vault",
                             onclick: move |_| { state::clear_config(); on_logout(()); },
-                            "⚙"
+                            IcoSettings { size: 16 }
                         }
                         // Close button — hidden on desktop via web CSS, visible on mobile
                         button {
                             class: "sidebar-icon-btn sidebar-close-btn",
                             title: "Close",
                             onclick: move |_| sidebar_open.set(false),
-                            "✕"
+                            IcoX { size: 16 }
                         }
                     }
                 }
 
                 div { class: "panel-tabs",
-                    button { class: if panel() == Panel::Files { "panel-tab panel-tab--active" } else { "panel-tab" }, onclick: move |_| panel.set(Panel::Files), title: "Files", "📁" }
-                    button { class: if panel() == Panel::Search { "panel-tab panel-tab--active" } else { "panel-tab" }, onclick: move |_| panel.set(Panel::Search), title: "Search", "🔍" }
-                    button { class: if panel() == Panel::Backlinks { "panel-tab panel-tab--active" } else { "panel-tab" }, onclick: move |_| panel.set(Panel::Backlinks), title: "Backlinks", "↩" }
-                    button { class: if panel() == Panel::Graph { "panel-tab panel-tab--active" } else { "panel-tab" }, onclick: move |_| panel.set(Panel::Graph), title: "Graph", "◉" }
-                    button { class: if panel() == Panel::Bookmarks { "panel-tab panel-tab--active" } else { "panel-tab" }, onclick: move |_| panel.set(Panel::Bookmarks), title: "Bookmarks", "🔖" }
-                    button { class: if panel() == Panel::Kanban { "panel-tab panel-tab--active" } else { "panel-tab" }, onclick: move |_| panel.set(Panel::Kanban), title: "Kanban", "🗂" }
+                    button { class: if panel() == Panel::Files { "panel-tab panel-tab--active" } else { "panel-tab" }, onclick: move |_| panel.set(Panel::Files), title: "Files", IcoFolderTree { size: 15 } }
+                    button { class: if panel() == Panel::Search { "panel-tab panel-tab--active" } else { "panel-tab" }, onclick: move |_| panel.set(Panel::Search), title: "Search", IcoSearch { size: 15 } }
+                    button { class: if panel() == Panel::Backlinks { "panel-tab panel-tab--active" } else { "panel-tab" }, onclick: move |_| panel.set(Panel::Backlinks), title: "Backlinks", IcoLink2 { size: 15 } }
+                    button { class: if panel() == Panel::Graph { "panel-tab panel-tab--active" } else { "panel-tab" }, onclick: move |_| panel.set(Panel::Graph), title: "Graph", IcoNetwork { size: 15 } }
+                    button { class: if panel() == Panel::Bookmarks { "panel-tab panel-tab--active" } else { "panel-tab" }, onclick: move |_| panel.set(Panel::Bookmarks), title: "Bookmarks", IcoBookmark { size: 15 } }
+                    button { class: if panel() == Panel::Kanban { "panel-tab panel-tab--active" } else { "panel-tab" }, onclick: move |_| panel.set(Panel::Kanban), title: "Kanban", IcoFolderKanban { size: 15 } }
                 }
 
                 div { class: "panel-content",
                     match panel() {
                         Panel::Files => rsx! {
+                            // Plugin picker — icons hardcoded for builtins; label from registry
+                            div { class: "nav-style-picker",
+                                button {
+                                    class: if nav_style() == "tree" { "nav-style-btn nav-style-btn--active" } else { "nav-style-btn" },
+                                    title: "Tree",
+                                    onclick: move |_| nav_style.set("tree"),
+                                    IcoFolderTree { size: 14 }
+                                }
+                                button {
+                                    class: if nav_style() == "flat" { "nav-style-btn nav-style-btn--active" } else { "nav-style-btn" },
+                                    title: "Flat list",
+                                    onclick: move |_| nav_style.set("flat"),
+                                    IcoLayoutList { size: 14 }
+                                }
+                            }
                             if loading_list() {
                                 div { class: "sidebar-status", "Loading…" }
                             } else {
@@ -541,27 +584,27 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                                         button {
                                             class: "sidebar-error-close",
                                             onclick: move |_| load_error.set(None),
-                                            "✕"
+                                            IcoX { size: 13 }
                                         }
                                     }
                                 }
                                 if files.read().is_empty() {
                                     div { class: "sidebar-status", "No markdown files found." }
                                 } else {
-                                    FileTree {
+                                    { nav_dispatch(nav_style(), NavCallbacks {
                                         files: files.read().clone(),
                                         active: active_path,
                                         selected_dir,
-                                        on_select: move |path: String| {
+                                        on_select: EventHandler::new(move |path: String| {
                                             active_path.set(Some(path));
                                             show_switcher.set(false);
                                             sidebar_open.set(false);
-                                        },
-                                        on_select_dir: move |dir: String| {
+                                        }),
+                                        on_select_dir: EventHandler::new(move |dir: String| {
                                             selected_dir.set(if dir.is_empty() { None } else { Some(dir) });
-                                        },
-                                        on_delete: handle_delete,
-                                    }
+                                        }),
+                                        on_delete: EventHandler::new(handle_delete),
+                                    }) }
                                 }
                             }
                             if has_file && !headings.is_empty() {
@@ -724,7 +767,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                             class: "editor-icon-btn editor-back-btn",
                             title: "Back to files",
                             onclick: move |_| sidebar_open.set(true),
-                            "‹"
+                            IcoChevronLeft { size: 18 }
                         }
                         span { class: "editor-filename", "{path}" }
                         div { class: "editor-meta",
@@ -741,7 +784,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                                         state::save_bookmarks(&bookmarks.read());
                                     }
                                 },
-                                "🔖"
+                                if is_bookmarked { IcoBookmarkCheck { size: 15 } } else { IcoBookmark { size: 15 } }
                             }
                             if loading_file() {
                                 span { class: "save-status", "Loading…" }
@@ -760,7 +803,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                                             document::eval(&export::download_html(&filename, &html));
                                         }
                                     },
-                                    "↓"
+                                    IcoDownload { size: 15 }
                                 }
                             }
                         }
@@ -789,31 +832,31 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                 button {
                     class: if panel() == Panel::Files { "bottom-nav-btn bottom-nav-btn--active" } else { "bottom-nav-btn" },
                     onclick: move |_| { panel.set(Panel::Files); sidebar_open.set(true); },
-                    span { "📁" }
+                    IcoFolderTree { size: 18 }
                     span { class: "bottom-nav-label", "Files" }
                 }
                 button {
                     class: if panel() == Panel::Search { "bottom-nav-btn bottom-nav-btn--active" } else { "bottom-nav-btn" },
                     onclick: move |_| { panel.set(Panel::Search); sidebar_open.set(true); },
-                    span { "🔍" }
-                    span { class: "bottom-nav-label", "Search" }
+                    IcoSearch { size: 18 }
+                    span { class: "bottom-nav-label", "IcoSearch" }
                 }
                 button {
                     class: if panel() == Panel::Backlinks { "bottom-nav-btn bottom-nav-btn--active" } else { "bottom-nav-btn" },
                     onclick: move |_| { panel.set(Panel::Backlinks); sidebar_open.set(true); },
-                    span { "↩" }
+                    IcoLink2 { size: 18 }
                     span { class: "bottom-nav-label", "Links" }
                 }
                 button {
                     class: if panel() == Panel::Graph { "bottom-nav-btn bottom-nav-btn--active" } else { "bottom-nav-btn" },
                     onclick: move |_| { panel.set(Panel::Graph); sidebar_open.set(true); },
-                    span { "◉" }
+                    IcoNetwork { size: 18 }
                     span { class: "bottom-nav-label", "Graph" }
                 }
                 button {
                     class: if panel() == Panel::Bookmarks { "bottom-nav-btn bottom-nav-btn--active" } else { "bottom-nav-btn" },
                     onclick: move |_| { panel.set(Panel::Bookmarks); sidebar_open.set(true); },
-                    span { "🔖" }
+                    IcoBookmark { size: 18 }
                     span { class: "bottom-nav-label", "Saved" }
                 }
             }
@@ -877,6 +920,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                 NewFileModal {
                     config: cfg_newfile.clone(),
                     result: new_file_result,
+                    current_dir: selected_dir.read().clone(),
                     on_close: move |_| show_new_file.set(false),
                 }
             }
@@ -908,6 +952,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
 fn NewFileModal(
     config: GithubConfig,
     result: Signal<Option<String>>,
+    current_dir: Option<String>,
     on_close: EventHandler<()>,
 ) -> Element {
     let mut name = use_signal(String::new);
@@ -917,12 +962,15 @@ fn NewFileModal(
     // without needing to move a non-Copy closure into two places.
     let mut trigger = use_signal(|| false);
 
+    let current_dir_effect = current_dir.clone();
     use_effect(move || {
         if !trigger() { return; }
         trigger.set(false);
         let raw = name.read().trim().to_string();
         if raw.is_empty() { error.set(Some("Enter a file name.".into())); return; }
-        let path = if raw.ends_with(".md") { raw } else { format!("{raw}.md") };
+        // Leading "/" means root-relative; otherwise place in current_dir.
+        let resolved = resolve_folder_path(&current_dir_effect, &raw);
+        let path = if resolved.ends_with(".md") { resolved } else { format!("{resolved}.md") };
         let title = path.trim_end_matches(".md").to_string();
         let cfg = config.clone();
         creating.set(true);
@@ -937,6 +985,15 @@ fn NewFileModal(
         });
     });
 
+    let preview = {
+        let raw = name.read();
+        let r = raw.trim();
+        if r.is_empty() { String::new() } else {
+            let resolved = resolve_folder_path(&current_dir, r);
+            if resolved.ends_with(".md") { resolved } else { format!("{resolved}.md") }
+        }
+    };
+
     rsx! {
         div {
             class: "qs-overlay",
@@ -945,9 +1002,14 @@ fn NewFileModal(
                 class: "qs-modal", style: "max-width: 400px;",
                 onclick: move |e| e.stop_propagation(),
                 div { style: "padding: 16px 16px 8px; font-weight: 600;", "New note" }
+                if let Some(ref p) = current_dir {
+                    div { style: "padding: 0 16px 8px; font-size: 0.8rem; color: var(--text-muted);",
+                        "Creating inside " code { "{p}/" } " — start with " code { "/" } " for vault root."
+                    }
+                }
                 input {
                     class: "qs-input",
-                    placeholder: "note-name  (or  folder/note-name)",
+                    placeholder: "note-name  (or  /root-level  or  a/b/c)",
                     autofocus: true,
                     value: "{name}",
                     oninput: move |e| name.set(e.value()),
@@ -955,6 +1017,11 @@ fn NewFileModal(
                         if e.key() == Key::Enter  { trigger.set(true); }
                         if e.key() == Key::Escape { on_close(()); }
                     },
+                }
+                if !preview.is_empty() {
+                    div { style: "padding: 4px 16px 0; font-size: 0.8rem; color: var(--text-muted);",
+                        "Will create: " code { "{preview}" }
+                    }
                 }
                 if let Some(ref err) = error() {
                     div { style: "padding: 0 16px 8px; color: var(--danger); font-size: 0.85rem;", "{err}" }
@@ -1073,7 +1140,7 @@ fn NewFolderModal(
     }
 }
 
-// ── Search panel ──────────────────────────────────────────────────────────────
+// ── IcoSearch panel ──────────────────────────────────────────────────────────────
 
 #[component]
 fn SearchPanel(config: GithubConfig, on_select: EventHandler<String>) -> Element {
@@ -1114,7 +1181,7 @@ fn SearchPanel(config: GithubConfig, on_select: EventHandler<String>) -> Element
             div { class: "search-input-wrap",
                 input {
                     class: "search-input",
-                    placeholder: "Search notes…",
+                    placeholder: "IcoSearch notes…",
                     value: "{query}",
                     oninput: move |e| query.set(e.value()),
                 }
@@ -1170,12 +1237,13 @@ fn BookmarksPanel(
                             div {
                                 class: if is_active { "bookmark-item bookmark-item--active" } else { "bookmark-item" },
                                 onclick: move |_| on_select(p.clone()),
-                                span { class: "bookmark-name", "🔖 {name}" }
+                                IcoBookmark { size: 13 }
+                                span { class: "bookmark-name", "{name}" }
                                 button {
                                     class: "bookmark-remove",
                                     title: "Remove bookmark",
                                     onclick: move |e| { e.stop_propagation(); on_remove(p2.clone()); },
-                                    "×"
+                                    IcoX { size: 12 }
                                 }
                             }
                         }
@@ -1355,6 +1423,59 @@ fn GraphPanel(
     }
 }
 
+// ── Nav dispatch ─────────────────────────────────────────────────────────────
+//
+// Central routing point for the nav plugin system. Accepts the active plugin id
+// and a `NavCallbacks` bag, returns the right component. When adding a plugin:
+//  1. Push a `NavPlugin` to `NAV_PLUGINS`.
+//  2. Add a match arm here.
+
+struct NavCallbacks {
+    files: Vec<FileMeta>,
+    active: Signal<Option<String>>,
+    selected_dir: Signal<Option<String>>,
+    on_select: EventHandler<String>,
+    on_select_dir: EventHandler<String>,
+    on_delete: EventHandler<FileMeta>,
+}
+
+fn nav_dispatch(id: &'static str, cb: NavCallbacks) -> Element {
+    let NavCallbacks { files, active, selected_dir, on_select, on_select_dir, on_delete } = cb;
+    match id {
+        "flat" => rsx! {
+            FlatList {
+                files,
+                active,
+                selected_dir,
+                on_select,
+                on_select_dir,
+                on_delete,
+            }
+        },
+        "columns" => rsx! {
+            ColumnView {
+                files,
+                active,
+                selected_dir,
+                on_select,
+                on_select_dir,
+                on_delete,
+            }
+        },
+        // "tree" is the default / fallback
+        _ => rsx! {
+            FileTree {
+                files,
+                active,
+                selected_dir,
+                on_select,
+                on_select_dir,
+                on_delete,
+            }
+        },
+    }
+}
+
 // ── File tree ─────────────────────────────────────────────────────────────────
 
 fn group_by_dir(files: &[FileMeta], prefix: &str) -> (Vec<FileMeta>, Vec<(String, Vec<FileMeta>)>) {
@@ -1386,8 +1507,8 @@ fn group_by_dir(files: &[FileMeta], prefix: &str) -> (Vec<FileMeta>, Vec<(String
 #[component]
 fn FileTree(
     files: Vec<FileMeta>,
-    active: ReadOnlySignal<Option<String>>,
-    selected_dir: ReadOnlySignal<Option<String>>,
+    active: Signal<Option<String>>,
+    selected_dir: Signal<Option<String>>,
     on_select: EventHandler<String>,
     on_select_dir: EventHandler<String>,
     on_delete: EventHandler<FileMeta>,
@@ -1435,8 +1556,8 @@ fn FileTreeDir(
     name: String,
     prefix: String,
     files: Vec<FileMeta>,
-    active: ReadOnlySignal<Option<String>>,
-    selected_dir: ReadOnlySignal<Option<String>>,
+    active: Signal<Option<String>>,
+    selected_dir: Signal<Option<String>>,
     on_select: EventHandler<String>,
     on_select_dir: EventHandler<String>,
     on_delete: EventHandler<FileMeta>,
@@ -1455,7 +1576,7 @@ fn FileTreeDir(
         }
     });
     let (root, subdirs) = group_by_dir(&files, &prefix);
-    let dir_pl = 14 + depth * 14;
+    let dir_pl = 10 + depth * 10;
     let is_selected = selected_dir().as_deref() == Some(prefix.as_str());
     let prefix_click = prefix.clone();
     rsx! {
@@ -1467,8 +1588,9 @@ fn FileTreeDir(
                     collapsed.set(!collapsed());
                     on_select_dir(prefix_click.clone());
                 },
-                span { class: "file-tree-dir-chevron", if collapsed() { "▶" } else { "▼" } }
-                " 📁 {name}"
+                span { class: "file-tree-dir-chevron", if collapsed() { IcoChevronRight { size: 11 } } else { IcoChevronDown { size: 11 } } }
+                if collapsed() { IcoFolderClosed { size: 14 } } else { IcoFolderOpen { size: 14 } }
+                span { class: "file-tree-dir-label", "{name}" }
             }
             if !collapsed() {
                 for (sub_prefix, sub_files) in subdirs {
@@ -1516,7 +1638,7 @@ fn FileEntry(
     depth: u32,
 ) -> Element {
     let path = file.path.clone();
-    let file_pl = 22 + depth * 14;
+    let file_pl = 18 + depth * 10;
     let file_clone = file.clone();
     rsx! {
         div {
@@ -1529,7 +1651,8 @@ fn FileEntry(
                     on_delete(file_clone.clone());
                 }
             },
-            span { class: "file-entry-name", "📄 {file.name()}" }
+            span { class: "file-entry-icon", IcoFileText { size: 13 } }
+            span { class: "file-entry-name", "{file.name()}" }
             button {
                 class: "file-entry-delete",
                 title: "Delete file",
@@ -1538,7 +1661,291 @@ fn FileEntry(
                     e.stop_propagation();
                     on_delete(file.clone());
                 },
-                "🗑"
+                IcoTrash2 { size: 12 }
+            }
+        }
+    }
+}
+
+// ── Flat list navigation ───────────────────────────────────────────────────────
+//
+// Shows all files as a flat, filtered list with sticky folder headers.
+// Clicking a folder header selects it as the current dir (does not expand/collapse).
+
+#[component]
+fn FlatList(
+    files: Vec<FileMeta>,
+    active: Signal<Option<String>>,
+    selected_dir: Signal<Option<String>>,
+    on_select: EventHandler<String>,
+    on_select_dir: EventHandler<String>,
+    on_delete: EventHandler<FileMeta>,
+) -> Element {
+    let mut filter = use_signal(String::new);
+    let q = filter.read().to_lowercase();
+
+    // Build sorted, filtered file list.
+    let filtered: Vec<&FileMeta> = files.iter()
+        .filter(|f| f.name() != ".gitkeep")
+        .filter(|f| q.is_empty() || f.path.to_lowercase().contains(&q))
+        .collect();
+
+    // Group into (folder_or_root, files) sections preserving sort order.
+    let mut sections: Vec<(String, Vec<FileMeta>)> = Vec::new();
+    for file in &filtered {
+        let dir = file.path.rfind('/').map(|i| file.path[..i].to_string()).unwrap_or_default();
+        if let Some(s) = sections.iter_mut().find(|(d, _)| d == &dir) {
+            s.1.push((*file).clone());
+        } else {
+            sections.push((dir, vec![(*file).clone()]));
+        }
+    }
+
+    rsx! {
+        div { class: "flat-list",
+            div { class: "flat-list-search",
+                input {
+                    class: "flat-list-input",
+                    placeholder: "Filter…",
+                    value: "{filter}",
+                    oninput: move |e| filter.set(e.value()),
+                }
+            }
+            if filtered.is_empty() && !q.is_empty() {
+                div { class: "sidebar-status", "No matches." }
+            } else {
+                for (dir, dir_files) in sections {
+                    {
+                        let dir_clone = dir.clone();
+                        let is_sel = selected_dir().as_deref() == Some(dir.as_str())
+                            || (dir.is_empty() && selected_dir().is_none());
+                        rsx! {
+                            if !dir.is_empty() {
+                                div {
+                                    class: if is_sel { "flat-list-dir flat-list-dir--active" } else { "flat-list-dir" },
+                                    onclick: move |_| on_select_dir(dir_clone.clone()),
+                                    IcoFolderClosed { size: 12 }
+                                    " {dir}"
+                                }
+                            }
+                            for file in dir_files {
+                                {
+                                    let p = file.path.clone();
+                                    let is_active = active().as_deref() == Some(p.as_str());
+                                    let file_clone = file.clone();
+                                    rsx! {
+                                        div {
+                                            class: if is_active { "flat-list-item flat-list-item--active" } else { "flat-list-item" },
+                                            onclick: move |_| on_select(p.clone()),
+                                            span { class: "file-entry-icon", IcoFileText { size: 12 } }
+                                            span { class: "flat-list-name", "{file.name()}" }
+                                            button {
+                                                class: "file-entry-delete",
+                                                title: "Delete",
+                                                tabindex: "-1",
+                                                onclick: move |e| { e.stop_propagation(); on_delete(file_clone.clone()); },
+                                                IcoTrash2 { size: 12 }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ── Column / Miller-columns navigation ────────────────────────────────────────
+//
+// Two-pane view. `col_path` is the directory whose contents appear in the LEFT
+// column (empty = vault root). The RIGHT column shows the direct children of
+// whichever folder is selected in the left column.
+//
+// Clicking a folder in the RIGHT pane advances `col_path` to that folder (the
+// right column becomes the new left) and clears the inner selection.
+// A breadcrumb bar at the top lets you jump back to any ancestor, including root.
+
+#[component]
+fn ColumnView(
+    files: Vec<FileMeta>,
+    active: Signal<Option<String>>,
+    selected_dir: Signal<Option<String>>,
+    on_select: EventHandler<String>,
+    on_select_dir: EventHandler<String>,
+    on_delete: EventHandler<FileMeta>,
+) -> Element {
+    // The directory currently shown in the LEFT column. Empty = vault root.
+    let mut col_path: Signal<String> = use_signal(String::new);
+    // Which item in the left column is "open" (shown in the right column).
+    let mut open_child: Signal<Option<String>> = use_signal(|| None);
+
+    // Sync open_child with external selected_dir when col_path is root (initial load).
+    use_effect(move || {
+        if !col_path.read().is_empty() { return; }
+        if let Some(ref s) = selected_dir() {
+            // If s is a direct child of root (no second slash), open it.
+            if !s.contains('/') {
+                open_child.set(Some(s.clone()));
+            } else {
+                // Ancestor is the first path segment.
+                let anc = s.split('/').next().unwrap_or("").to_string();
+                if !anc.is_empty() { open_child.set(Some(anc)); }
+            }
+        }
+    });
+
+    let cp = col_path.read().clone();
+
+    // Build breadcrumb segments from col_path (e.g. "a/b/c" → ["a", "a/b", "a/b/c"]).
+    let crumbs: Vec<(String, String)> = {
+        let mut acc = String::new();
+        let mut v = vec![("⌂".to_string(), String::new())]; // root
+        for seg in cp.split('/').filter(|s| !s.is_empty()) {
+            if !acc.is_empty() { acc.push('/'); }
+            acc.push_str(seg);
+            v.push((seg.to_string(), acc.clone()));
+        }
+        v
+    };
+
+    let (left_root, left_dirs) = group_by_dir(&files, &cp);
+
+    // Right-column contents: the open child directory.
+    let oc = open_child.read().clone();
+    let (right_root, right_dirs, right_base) = if let Some(ref child) = oc {
+        let right_files: Vec<FileMeta> = left_dirs.iter()
+            .find(|(p, _)| p == child)
+            .map(|(_, f)| f.clone())
+            .unwrap_or_default();
+        let (rr, rd) = group_by_dir(&right_files, child);
+        (rr, rd, child.clone())
+    } else {
+        (vec![], vec![], String::new())
+    };
+
+    rsx! {
+        div { class: "col-view-wrap",
+            // Breadcrumb bar
+            div { class: "col-breadcrumb",
+                for (label, path) in crumbs {
+                    {
+                        let p = path.clone();
+                        let is_last = p == cp;
+                        rsx! {
+                            span {
+                                key: "{p}-crumb",
+                                class: if is_last { "col-crumb col-crumb--active" } else { "col-crumb" },
+                                onclick: move |_| {
+                                    col_path.set(p.clone());
+                                    open_child.set(None);
+                                    on_select_dir(p.clone());
+                                },
+                                "{label}"
+                            }
+                            if !is_last { span { class: "col-crumb-sep", "/" } }
+                        }
+                    }
+                }
+            }
+            div { class: "col-view",
+                // Left column
+                div { class: "col-view-col col-view-left",
+                    for (dir_prefix, _) in &left_dirs {
+                        {
+                            let dp = dir_prefix.clone();
+                            let name = dir_prefix.rsplit('/').next().unwrap_or(dir_prefix).to_string();
+                            let is_open = oc.as_deref() == Some(dir_prefix.as_str());
+                            rsx! {
+                                div {
+                                    key: "{dir_prefix}",
+                                    class: if is_open { "col-item col-item--dir col-item--open" } else { "col-item col-item--dir" },
+                                    onclick: move |_| {
+                                        open_child.set(Some(dp.clone()));
+                                        on_select_dir(dp.clone());
+                                    },
+                                    span { "📁 {name}" }
+                                    span { class: "col-chevron", "›" }
+                                }
+                            }
+                        }
+                    }
+                    for file in &left_root {
+                        if file.name() != ".gitkeep" {
+                            {
+                                let p = file.path.clone();
+                                let is_active = active().as_deref() == Some(p.as_str());
+                                let fc = file.clone();
+                                rsx! {
+                                    div {
+                                        key: "{p}",
+                                        class: if is_active { "col-item col-item--active" } else { "col-item" },
+                                        onclick: move |_| on_select(p.clone()),
+                                        span { "📄 {file.name()}" }
+                                        button {
+                                            class: "file-entry-delete",
+                                            tabindex: "-1",
+                                            onclick: move |e| { e.stop_propagation(); on_delete(fc.clone()); },
+                                            "🗑"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                // Right column — only shown when a folder is open in the left
+                if oc.is_some() {
+                    div { class: "col-view-col col-view-right",
+                        for (sub_prefix, _) in &right_dirs {
+                            {
+                                let sp = sub_prefix.clone();
+                                let name = sub_prefix.rsplit('/').next().unwrap_or(sub_prefix).to_string();
+                                // Clicking a subfolder in the right pane drills down:
+                                // it becomes the new left column.
+                                let sp_drill = sp.clone();
+                                rsx! {
+                                    div {
+                                        key: "{sp}",
+                                        class: "col-item col-item--dir",
+                                        onclick: move |_| {
+                                            col_path.set(sp_drill.clone());
+                                            open_child.set(None);
+                                            on_select_dir(sp_drill.clone());
+                                        },
+                                        span { "📁 {name}" }
+                                        span { class: "col-chevron", "›" }
+                                    }
+                                }
+                            }
+                        }
+                        for file in &right_root {
+                            if file.name() != ".gitkeep" {
+                                {
+                                    let p = file.path.clone();
+                                    let is_active = active().as_deref() == Some(p.as_str());
+                                    let fc = file.clone();
+                                    rsx! {
+                                        div {
+                                            key: "{p}",
+                                            class: if is_active { "col-item col-item--active" } else { "col-item" },
+                                            onclick: move |_| on_select(p.clone()),
+                                            span { "📄 {file.name()}" }
+                                            button {
+                                                class: "file-entry-delete",
+                                                tabindex: "-1",
+                                                onclick: move |e| { e.stop_propagation(); on_delete(fc.clone()); },
+                                                "🗑"
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
