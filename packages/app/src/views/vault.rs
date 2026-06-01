@@ -152,6 +152,9 @@ impl SaveStatus {
 #[derive(Clone, PartialEq)]
 enum Panel { Files, Search, Backlinks, Graph, Bookmarks, Kanban }
 
+#[derive(Clone, PartialEq, Copy)]
+enum NavStyle { Tree, Flat, Columns }
+
 // ── VaultBrowser ──────────────────────────────────────────────────────────────
 
 #[component]
@@ -188,6 +191,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
     // The "current" folder: set when a folder is clicked or derived from the
     // folder of the currently open file. Drives the new-folder default parent.
     let mut selected_dir: Signal<Option<String>> = use_signal(|| None);
+    let mut nav_style: Signal<NavStyle> = use_signal(|| NavStyle::Tree);
 
     // Load file list and bookmarks on mount.
     let cfg = config.clone();
@@ -532,6 +536,26 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                 div { class: "panel-content",
                     match panel() {
                         Panel::Files => rsx! {
+                            div { class: "nav-style-picker",
+                                button {
+                                    class: if nav_style() == NavStyle::Tree { "nav-style-btn nav-style-btn--active" } else { "nav-style-btn" },
+                                    title: "Tree view",
+                                    onclick: move |_| nav_style.set(NavStyle::Tree),
+                                    "🌲"
+                                }
+                                button {
+                                    class: if nav_style() == NavStyle::Flat { "nav-style-btn nav-style-btn--active" } else { "nav-style-btn" },
+                                    title: "Flat list",
+                                    onclick: move |_| nav_style.set(NavStyle::Flat),
+                                    "≡"
+                                }
+                                button {
+                                    class: if nav_style() == NavStyle::Columns { "nav-style-btn nav-style-btn--active" } else { "nav-style-btn" },
+                                    title: "Column view",
+                                    onclick: move |_| nav_style.set(NavStyle::Columns),
+                                    "⫼"
+                                }
+                            }
                             if loading_list() {
                                 div { class: "sidebar-status", "Loading…" }
                             } else {
@@ -548,19 +572,55 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                                 if files.read().is_empty() {
                                     div { class: "sidebar-status", "No markdown files found." }
                                 } else {
-                                    FileTree {
-                                        files: files.read().clone(),
-                                        active: active_path,
-                                        selected_dir,
-                                        on_select: move |path: String| {
-                                            active_path.set(Some(path));
-                                            show_switcher.set(false);
-                                            sidebar_open.set(false);
+                                    match nav_style() {
+                                        NavStyle::Tree => rsx! {
+                                            FileTree {
+                                                files: files.read().clone(),
+                                                active: active_path,
+                                                selected_dir,
+                                                on_select: move |path: String| {
+                                                    active_path.set(Some(path));
+                                                    show_switcher.set(false);
+                                                    sidebar_open.set(false);
+                                                },
+                                                on_select_dir: move |dir: String| {
+                                                    selected_dir.set(if dir.is_empty() { None } else { Some(dir) });
+                                                },
+                                                on_delete: handle_delete,
+                                            }
                                         },
-                                        on_select_dir: move |dir: String| {
-                                            selected_dir.set(if dir.is_empty() { None } else { Some(dir) });
+                                        NavStyle::Flat => rsx! {
+                                            FlatList {
+                                                files: files.read().clone(),
+                                                active: active_path,
+                                                selected_dir,
+                                                on_select: move |path: String| {
+                                                    active_path.set(Some(path));
+                                                    show_switcher.set(false);
+                                                    sidebar_open.set(false);
+                                                },
+                                                on_select_dir: move |dir: String| {
+                                                    selected_dir.set(if dir.is_empty() { None } else { Some(dir) });
+                                                },
+                                                on_delete: handle_delete,
+                                            }
                                         },
-                                        on_delete: handle_delete,
+                                        NavStyle::Columns => rsx! {
+                                            ColumnView {
+                                                files: files.read().clone(),
+                                                active: active_path,
+                                                selected_dir,
+                                                on_select: move |path: String| {
+                                                    active_path.set(Some(path));
+                                                    show_switcher.set(false);
+                                                    sidebar_open.set(false);
+                                                },
+                                                on_select_dir: move |dir: String| {
+                                                    selected_dir.set(if dir.is_empty() { None } else { Some(dir) });
+                                                },
+                                                on_delete: handle_delete,
+                                            }
+                                        },
                                     }
                                 }
                             }
@@ -877,6 +937,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                 NewFileModal {
                     config: cfg_newfile.clone(),
                     result: new_file_result,
+                    current_dir: selected_dir.read().clone(),
                     on_close: move |_| show_new_file.set(false),
                 }
             }
@@ -908,6 +969,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
 fn NewFileModal(
     config: GithubConfig,
     result: Signal<Option<String>>,
+    current_dir: Option<String>,
     on_close: EventHandler<()>,
 ) -> Element {
     let mut name = use_signal(String::new);
@@ -917,12 +979,15 @@ fn NewFileModal(
     // without needing to move a non-Copy closure into two places.
     let mut trigger = use_signal(|| false);
 
+    let current_dir_effect = current_dir.clone();
     use_effect(move || {
         if !trigger() { return; }
         trigger.set(false);
         let raw = name.read().trim().to_string();
         if raw.is_empty() { error.set(Some("Enter a file name.".into())); return; }
-        let path = if raw.ends_with(".md") { raw } else { format!("{raw}.md") };
+        // Leading "/" means root-relative; otherwise place in current_dir.
+        let resolved = resolve_folder_path(&current_dir_effect, &raw);
+        let path = if resolved.ends_with(".md") { resolved } else { format!("{resolved}.md") };
         let title = path.trim_end_matches(".md").to_string();
         let cfg = config.clone();
         creating.set(true);
@@ -937,6 +1002,15 @@ fn NewFileModal(
         });
     });
 
+    let preview = {
+        let raw = name.read();
+        let r = raw.trim();
+        if r.is_empty() { String::new() } else {
+            let resolved = resolve_folder_path(&current_dir, r);
+            if resolved.ends_with(".md") { resolved } else { format!("{resolved}.md") }
+        }
+    };
+
     rsx! {
         div {
             class: "qs-overlay",
@@ -945,9 +1019,14 @@ fn NewFileModal(
                 class: "qs-modal", style: "max-width: 400px;",
                 onclick: move |e| e.stop_propagation(),
                 div { style: "padding: 16px 16px 8px; font-weight: 600;", "New note" }
+                if let Some(ref p) = current_dir {
+                    div { style: "padding: 0 16px 8px; font-size: 0.8rem; color: var(--text-muted);",
+                        "Creating inside " code { "{p}/" } " — start with " code { "/" } " for vault root."
+                    }
+                }
                 input {
                     class: "qs-input",
-                    placeholder: "note-name  (or  folder/note-name)",
+                    placeholder: "note-name  (or  /root-level  or  a/b/c)",
                     autofocus: true,
                     value: "{name}",
                     oninput: move |e| name.set(e.value()),
@@ -955,6 +1034,11 @@ fn NewFileModal(
                         if e.key() == Key::Enter  { trigger.set(true); }
                         if e.key() == Key::Escape { on_close(()); }
                     },
+                }
+                if !preview.is_empty() {
+                    div { style: "padding: 4px 16px 0; font-size: 0.8rem; color: var(--text-muted);",
+                        "Will create: " code { "{preview}" }
+                    }
                 }
                 if let Some(ref err) = error() {
                     div { style: "padding: 0 16px 8px; color: var(--danger); font-size: 0.85rem;", "{err}" }
@@ -1539,6 +1623,224 @@ fn FileEntry(
                     on_delete(file.clone());
                 },
                 "🗑"
+            }
+        }
+    }
+}
+
+// ── Flat list navigation ───────────────────────────────────────────────────────
+//
+// Shows all files as a flat, filtered list with sticky folder headers.
+// Clicking a folder header selects it as the current dir (does not expand/collapse).
+
+#[component]
+fn FlatList(
+    files: Vec<FileMeta>,
+    active: ReadOnlySignal<Option<String>>,
+    selected_dir: ReadOnlySignal<Option<String>>,
+    on_select: EventHandler<String>,
+    on_select_dir: EventHandler<String>,
+    on_delete: EventHandler<FileMeta>,
+) -> Element {
+    let mut filter = use_signal(String::new);
+    let q = filter.read().to_lowercase();
+
+    // Build sorted, filtered file list.
+    let filtered: Vec<&FileMeta> = files.iter()
+        .filter(|f| f.name() != ".gitkeep")
+        .filter(|f| q.is_empty() || f.path.to_lowercase().contains(&q))
+        .collect();
+
+    // Group into (folder_or_root, files) sections preserving sort order.
+    let mut sections: Vec<(String, Vec<FileMeta>)> = Vec::new();
+    for file in &filtered {
+        let dir = file.path.rfind('/').map(|i| file.path[..i].to_string()).unwrap_or_default();
+        if let Some(s) = sections.iter_mut().find(|(d, _)| d == &dir) {
+            s.1.push((*file).clone());
+        } else {
+            sections.push((dir, vec![(*file).clone()]));
+        }
+    }
+
+    rsx! {
+        div { class: "flat-list",
+            div { class: "flat-list-search",
+                input {
+                    class: "flat-list-input",
+                    placeholder: "Filter…",
+                    value: "{filter}",
+                    oninput: move |e| filter.set(e.value()),
+                }
+            }
+            if filtered.is_empty() && !q.is_empty() {
+                div { class: "sidebar-status", "No matches." }
+            } else {
+                for (dir, dir_files) in sections {
+                    {
+                        let dir_clone = dir.clone();
+                        let is_sel = selected_dir().as_deref() == Some(dir.as_str())
+                            || (dir.is_empty() && selected_dir().is_none());
+                        rsx! {
+                            if !dir.is_empty() {
+                                div {
+                                    class: if is_sel { "flat-list-dir flat-list-dir--active" } else { "flat-list-dir" },
+                                    onclick: move |_| on_select_dir(dir_clone.clone()),
+                                    "📁 {dir}"
+                                }
+                            }
+                            for file in dir_files {
+                                {
+                                    let p = file.path.clone();
+                                    let is_active = active().as_deref() == Some(p.as_str());
+                                    let file_clone = file.clone();
+                                    rsx! {
+                                        div {
+                                            class: if is_active { "flat-list-item flat-list-item--active" } else { "flat-list-item" },
+                                            onclick: move |_| on_select(p.clone()),
+                                            span { class: "flat-list-name", "📄 {file.name()}" }
+                                            button {
+                                                class: "file-entry-delete",
+                                                title: "Delete",
+                                                tabindex: "-1",
+                                                onclick: move |e| { e.stop_propagation(); on_delete(file_clone.clone()); },
+                                                "🗑"
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ── Column / Miller-columns navigation ────────────────────────────────────────
+//
+// Renders two panes side-by-side: left shows top-level folders + root files,
+// right shows the contents of the selected folder (one level deep).
+// Clicking a subfolder in the right pane drills into it (updating selected_dir).
+
+#[component]
+fn ColumnView(
+    files: Vec<FileMeta>,
+    active: ReadOnlySignal<Option<String>>,
+    selected_dir: ReadOnlySignal<Option<String>>,
+    on_select: EventHandler<String>,
+    on_select_dir: EventHandler<String>,
+    on_delete: EventHandler<FileMeta>,
+) -> Element {
+    let (root_files, top_dirs) = group_by_dir(&files, "");
+
+    // Determine which column is currently "selected" (for highlight).
+    let sel = selected_dir();
+
+    // For the right column, show the contents of `sel` if it is one of the top-level dirs.
+    // If sel is a subdir of a top-level dir, highlight the top-level dir and show its contents.
+    let right_prefix: Option<String> = sel.clone().and_then(|s| {
+        // Find the top-level ancestor.
+        let top = top_dirs.iter().find(|(p, _)| s.starts_with(p.as_str()));
+        top.map(|(p, _)| p.clone())
+    }).or_else(|| sel.clone().and_then(|s| {
+        if top_dirs.iter().any(|(p, _)| p == &s) { Some(s) } else { None }
+    }));
+
+    let right_files: Vec<FileMeta> = right_prefix.as_ref()
+        .and_then(|p| top_dirs.iter().find(|(tp, _)| tp == p).map(|(_, f)| f.clone()))
+        .unwrap_or_default();
+
+    let (right_root, right_subdirs) = if let Some(ref p) = right_prefix {
+        group_by_dir(&right_files, p)
+    } else {
+        (vec![], vec![])
+    };
+
+    rsx! {
+        div { class: "col-view",
+            // Left column: top-level dirs + root files
+            div { class: "col-view-col col-view-left",
+                for (dir_prefix, _) in &top_dirs {
+                    {
+                        let dp = dir_prefix.clone();
+                        let dp2 = dir_prefix.clone();
+                        let name = dir_prefix.rsplit('/').next().unwrap_or(dir_prefix).to_string();
+                        let is_open = right_prefix.as_deref() == Some(dir_prefix.as_str());
+                        rsx! {
+                            div {
+                                class: if is_open { "col-item col-item--dir col-item--open" } else { "col-item col-item--dir" },
+                                onclick: move |_| on_select_dir(dp.clone()),
+                                span { "📁 {name}" }
+                                span { class: "col-chevron", if is_open { "›" } else { "›" } }
+                            }
+                        }
+                    }
+                }
+                for file in &root_files {
+                    if file.name() != ".gitkeep" {
+                        {
+                            let p = file.path.clone();
+                            let is_active = active().as_deref() == Some(p.as_str());
+                            let fc = file.clone();
+                            rsx! {
+                                div {
+                                    class: if is_active { "col-item col-item--active" } else { "col-item" },
+                                    onclick: move |_| on_select(p.clone()),
+                                    span { "📄 {file.name()}" }
+                                    button {
+                                        class: "file-entry-delete",
+                                        tabindex: "-1",
+                                        onclick: move |e| { e.stop_propagation(); on_delete(fc.clone()); },
+                                        "🗑"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // Right column: contents of selected top-level dir
+            if right_prefix.is_some() {
+                div { class: "col-view-col col-view-right",
+                    for (sub_prefix, _) in &right_subdirs {
+                        {
+                            let sp = sub_prefix.clone();
+                            let name = sub_prefix.rsplit('/').next().unwrap_or(sub_prefix).to_string();
+                            let is_sel = sel.as_deref() == Some(sub_prefix.as_str());
+                            rsx! {
+                                div {
+                                    class: if is_sel { "col-item col-item--dir col-item--open" } else { "col-item col-item--dir" },
+                                    onclick: move |_| on_select_dir(sp.clone()),
+                                    span { "📁 {name}" }
+                                    span { class: "col-chevron", "›" }
+                                }
+                            }
+                        }
+                    }
+                    for file in &right_root {
+                        if file.name() != ".gitkeep" {
+                            {
+                                let p = file.path.clone();
+                                let is_active = active().as_deref() == Some(p.as_str());
+                                let fc = file.clone();
+                                rsx! {
+                                    div {
+                                        class: if is_active { "col-item col-item--active" } else { "col-item" },
+                                        onclick: move |_| on_select(p.clone()),
+                                        span { "📄 {file.name()}" }
+                                        button {
+                                            class: "file-entry-delete",
+                                            tabindex: "-1",
+                                            onclick: move |e| { e.stop_propagation(); on_delete(fc.clone()); },
+                                            "🗑"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
