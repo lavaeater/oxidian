@@ -1,16 +1,12 @@
-use dioxus::prelude::*;
 use vault::GithubConfig;
+
+use crate::js;
 
 const STORAGE_KEY: &str = "oxidian_cfg";
 
-/// Load config from localStorage via JS eval. Returns None if nothing is stored.
+/// Load config from localStorage. Returns None if nothing is stored.
 pub async fn load_config() -> Option<GithubConfig> {
-    let mut eval = document::eval(&format!(
-        "dioxus.send(localStorage.getItem({:?}) || '')",
-        STORAGE_KEY
-    ));
-    let json = eval.recv::<String>().await.unwrap_or_default();
-
+    let json = js::ls_get(STORAGE_KEY).await;
     if json.is_empty() {
         None
     } else {
@@ -21,35 +17,25 @@ pub async fn load_config() -> Option<GithubConfig> {
 /// Persist config to localStorage.
 pub fn save_config(cfg: &GithubConfig) {
     let json = serde_json::to_string(cfg).unwrap_or_default();
-    // Escape for JS string literal — use JSON.parse so no escaping needed.
-    document::eval(&format!(
-        "localStorage.setItem({:?}, {})",
-        STORAGE_KEY,
-        serde_json::to_string(&json).unwrap_or_default()
-    ));
+    js::ls_set(STORAGE_KEY, json);
 }
 
 /// Remove config from localStorage (logout).
 pub fn clear_config() {
-    document::eval(&format!("localStorage.removeItem({:?})", STORAGE_KEY));
+    js::ls_remove(STORAGE_KEY);
 }
 
 const BOOKMARKS_KEY: &str = "oxidian_bookmarks";
 
 pub async fn load_bookmarks() -> Vec<String> {
-    let mut eval = document::eval(&format!(
-        "dioxus.send(localStorage.getItem({:?}) || '[]')",
-        BOOKMARKS_KEY
-    ));
-    let json = eval.recv::<String>().await.unwrap_or_default();
+    let json = js::ls_get(BOOKMARKS_KEY).await;
+    if json.is_empty() {
+        return Vec::new();
+    }
     serde_json::from_str(&json).unwrap_or_default()
 }
 
 pub fn save_bookmarks(bookmarks: &[String]) {
     let json = serde_json::to_string(bookmarks).unwrap_or_default();
-    document::eval(&format!(
-        "localStorage.setItem({:?}, {})",
-        BOOKMARKS_KEY,
-        serde_json::to_string(&json).unwrap_or_default()
-    ));
+    js::ls_set(BOOKMARKS_KEY, json);
 }

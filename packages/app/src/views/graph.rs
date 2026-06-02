@@ -125,6 +125,11 @@ pub fn GraphView(
 }})();
 "#);
         spawn(async move {
+            // NOTE: this view intentionally stays on `document::eval` rather than
+            // the `js::*` `use_js!` bindings. The canvas streams an unbounded
+            // series of node-click events back via `dioxus.send(nodeId)`, consumed
+            // by the `recv()` loop below — a long-lived channel, not the one-shot
+            // call/return shape that `use_js!` generates.
             // Small delay so the canvas is in the DOM
             let _ = document::eval("await new Promise(r => setTimeout(r, 50));").await;
             // Loop receiving node-click events sent via dioxus.send(nodeId)

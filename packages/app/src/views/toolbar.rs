@@ -1,33 +1,11 @@
 use dioxus::prelude::*;
 
-const JS_GET_SEL: &str = r#"
-(function() {
-    const el = document.querySelector('.md-area[contenteditable="true"]');
-    if (!el) { dioxus.send('[-1,-1]'); return; }
-    const sel = window.getSelection();
-    if (!sel || !sel.rangeCount || !el.contains(sel.anchorNode)) {
-        dioxus.send('[-1,-1]'); return;
-    }
-    const range = sel.getRangeAt(0);
-    let start = -1, end = -1, off = 0;
-    const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
-    while (walk.nextNode()) {
-        const n = walk.currentNode, len = n.textContent.length;
-        if (start < 0 && n === range.startContainer) start = off + range.startOffset;
-        if (end   < 0 && n === range.endContainer)   end   = off + range.endOffset;
-        off += len;
-    }
-    if (start < 0) start = off;
-    if (end   < 0) end   = off;
-    dioxus.send(JSON.stringify([start, end]));
-})();
-"#;
+use crate::js;
 
+/// `(start, end)` selection offsets in the active editor. Thin wrapper around
+/// `js::get_selection()` (DOM glue lives in `assets/oxidian.js`).
 pub async fn get_sel() -> (usize, usize) {
-    let mut eval = document::eval(JS_GET_SEL);
-    let json = eval.recv::<String>().await.unwrap_or_default();
-    let v: [i64; 2] = serde_json::from_str(&json).unwrap_or([-1, -1]);
-    if v[0] < 0 { (0, 0) } else { (v[0] as usize, v[1] as usize) }
+    js::get_selection().await
 }
 
 pub fn wrap(source: &str, start: usize, end: usize, prefix: &str, suffix: &str) -> String {

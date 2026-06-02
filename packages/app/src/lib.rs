@@ -1,5 +1,6 @@
 pub mod export;
 pub mod icons;
+pub mod js;
 pub mod state;
 pub mod template;
 pub mod views;

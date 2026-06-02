@@ -10,13 +10,14 @@ use vault::{FileMeta, GithubConfig, SearchResult};
 
 use crate::console_log;
 use crate::export;
+use crate::js;
 use crate::state;
-use crate::template::{self, TemplateMeta, JS_DATE_VARS};
+use crate::template::{self, TemplateMeta};
 use crate::wikilink_index::WikiLinkIndex;
 use super::graph::GraphView;
 use super::kanban::KanbanBoard;
 use super::properties::PropertiesPanel;
-use super::slash::{SlashMenu, JS_NO_SLASH, JS_SLASH_QUERY, js_apply_slash};
+use super::slash::SlashMenu;
 use super::toolbar::FormattingToolbar;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -31,8 +32,7 @@ async fn apply_template(
     mut load_error: Signal<Option<String>>,
     current_dir: &str,
 ) {
-    let mut eval = document::eval(JS_DATE_VARS);
-    let date_json = eval.recv::<String>().await.unwrap_or_default();
+    let date_json = js::date_vars().await;
     let vars = template::TemplateVars::from_json(&date_json, "", current_dir);
 
     if vars.year.is_empty() || vars.month.is_empty() || vars.date.is_empty() {
@@ -69,9 +69,8 @@ async fn apply_template(
     } else {
         // Insert-only template: open as a new untitled note pre-filled with body.
         let body = template::strip_tabstops(&template::substitute_vars(&meta.body, &vars));
-        let mut eval2 = document::eval("dioxus.send(new Date().toISOString().split('T')[0]);");
-        let date_json2 = eval2.recv::<String>().await.unwrap_or_default();
-        let path = format!("{date_json2}-note.md");
+        let today = js::today().await;
+        let path = format!("{today}-note.md");
         match vault::dispatch::create_file(cfg, &path, &body, &format!("Create {path}")).await {
             Ok(_) => {
                 if let Ok(mut list) = vault::dispatch::list_files(cfg).await {
@@ -231,10 +230,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
             bookmarks.set(bm);
             loading_list.set(false);
             // Load saved kanban board root.
-            let saved_board = {
-                let mut ev = document::eval("dioxus.send(localStorage.getItem('oxidian_board') || '');");
-                ev.recv::<String>().await.unwrap_or_default()
-            };
+            let saved_board = js::ls_get("oxidian_board").await;
             if !saved_board.is_empty() {
                 board_root.set(saved_board.clone());
                 board_input.set(saved_board);
@@ -382,12 +378,9 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
             loop {
                 sleep_ms(150).await;
                 if active_path().is_none() { slash_query.set(None); continue; }
-                let q = {
-                    let mut e = document::eval(JS_SLASH_QUERY);
-                    e.recv::<String>().await.unwrap_or(JS_NO_SLASH.to_string())
-                };
+                let q = js::slash_query().await;
                 if active_path().is_some() {
-                    if q == JS_NO_SLASH {
+                    if q == js::NO_SLASH {
                         slash_query.set(None);
                     } else {
                         slash_query.set(Some(q));
@@ -417,7 +410,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
     // Scroll active file entry into view whenever the active path changes.
     use_effect(move || {
         let _ = active_path();
-        document::eval("setTimeout(() => { const el = document.querySelector('.file-entry--active'); if (el) el.scrollIntoView({ block: 'nearest' }); }, 50);");
+        js::scroll_active_into_view();
     });
 
     // Keep the "current folder" in sync with the open file's folder. A folder
@@ -451,12 +444,9 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
         let cfg = cfg_delete.clone();
         spawn(async move {
             let name = file.name().to_string();
-            let confirmed = document::eval(&format!(
-                "dioxus.send(!!window.confirm('Delete \\'{name}\\'? This cannot be undone.'));"
-            ))
-            .join::<bool>()
-            .await
-            .unwrap_or(false);
+            let confirmed = js::confirm_dialog(
+                &format!("Delete '{name}'? This cannot be undone.")
+            ).await;
             if !confirmed { return; }
             match vault::dispatch::delete_file(&cfg, &file.path, &file.sha, &format!("Delete {name}")).await {
                 Ok(()) => {
@@ -509,10 +499,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                                         apply_template(&meta, &cfg, files, active_path, load_error, "").await;
                                     } else {
                                         // Fallback: simple YYYY-MM-DD.md note
-                                        let date = {
-                                            let mut e = document::eval("dioxus.send(new Date().toISOString().split('T')[0]);");
-                                            e.recv::<String>().await.unwrap_or_default()
-                                        };
+                                        let date = js::today().await;
                                         if date.is_empty() { return; }
                                         let path = format!("{date}.md");
                                         let _ = vault::dispatch::create_file(
@@ -675,10 +662,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                                             if e.key() == Key::Enter {
                                                 let v = board_input.read().trim().to_string();
                                                 board_root.set(v.clone());
-                                                document::eval(&format!(
-                                                    "localStorage.setItem('oxidian_board', {})",
-                                                    serde_json::to_string(&v).unwrap_or_default()
-                                                ));
+                                                js::ls_set("oxidian_board", v);
                                             }
                                         },
                                     }
@@ -688,10 +672,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                                         onclick: move |_| {
                                             let v = board_input.read().trim().to_string();
                                             board_root.set(v.clone());
-                                            document::eval(&format!(
-                                                "localStorage.setItem('oxidian_board', {})",
-                                                serde_json::to_string(&v).unwrap_or_default()
-                                            ));
+                                            js::ls_set("oxidian_board", v);
                                         },
                                         "→"
                                     }
@@ -712,27 +693,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
             // ── Sidebar resize handle ────────────────────────────────────────
             div {
                 class: "sidebar-resize-handle",
-                onpointerdown: move |_| {
-                    document::eval(r#"
-                        (function() {
-                            const root = document.documentElement;
-                            function onMove(e) {
-                                const w = Math.max(160, Math.min(600, e.clientX));
-                                root.style.setProperty('--sidebar-w', w + 'px');
-                            }
-                            function onUp() {
-                                window.removeEventListener('pointermove', onMove);
-                                window.removeEventListener('pointerup', onUp);
-                                document.body.style.cursor = '';
-                                document.body.style.userSelect = '';
-                            }
-                            document.body.style.cursor = 'col-resize';
-                            document.body.style.userSelect = 'none';
-                            window.addEventListener('pointermove', onMove);
-                            window.addEventListener('pointerup', onUp);
-                        })();
-                    "#);
-                },
+                onpointerdown: move |_| js::start_sidebar_resize(),
             }
 
             // ── Editor pane ─────────────────────────────────────────────────
@@ -800,7 +761,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                                                 .trim_end_matches(".md").to_string();
                                             let filename = format!("{title}.html");
                                             let html = export::to_html(&title, &content.read());
-                                            document::eval(&export::download_html(&filename, &html));
+                                            js::download_file(filename, html);
                                         }
                                     },
                                     IcoDownload { size: 15 }
@@ -884,7 +845,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                             on_select: move |insert: String| {
                                 let query_len = slash_query().unwrap_or_default().len();
                                 slash_query.set(None);
-                                document::eval(&js_apply_slash(&insert, 1 + query_len));
+                                js::apply_slash(insert, 1 + query_len);
                             },
                             on_template: move |meta: TemplateMeta| {
                                 let query_len = slash_query().unwrap_or_default().len();
@@ -898,14 +859,11 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                                         apply_template(&meta, &cfg, files, active_path, load_error, &current_dir).await;
                                     } else {
                                         // Insert-only: substitute vars and paste at cursor
-                                        let date_json = {
-                                            let mut e = document::eval(JS_DATE_VARS);
-                                            e.recv::<String>().await.unwrap_or_default()
-                                        };
+                                        let date_json = js::date_vars().await;
                                         let vars = template::TemplateVars::from_json(&date_json, "", &current_dir);
                                         let body = template::strip_tabstops(
                                             &template::substitute_vars(&meta.body, &vars));
-                                        document::eval(&js_apply_slash(&body, 1 + query_len));
+                                        js::apply_slash(body, 1 + query_len);
                                     }
                                 });
                             },
@@ -1150,9 +1108,7 @@ fn SearchPanel(config: GithubConfig, on_select: EventHandler<String>) -> Element
     let mut search_error: Signal<Option<String>> = use_signal(|| None);
 
     use_effect(move || {
-        document::eval(
-            "requestAnimationFrame(() => { document.querySelector('.search-input')?.focus(); });"
-        );
+        js::focus_selector(".search-input");
     });
 
     use_effect(move || {
@@ -1283,9 +1239,7 @@ fn QuickSwitcher(
     let mut query = use_signal(String::new);
 
     use_effect(move || {
-        document::eval(
-            "requestAnimationFrame(() => { document.querySelector('.qs-input')?.focus(); });"
-        );
+        js::focus_selector(".qs-input");
     });
 
     let q = query.read().to_lowercase();
