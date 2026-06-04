@@ -4,6 +4,7 @@ use dioxus::prelude::{Asset, asset};
 /// platform shells (web/desktop/mobile) link the exact same file and can't drift.
 pub const MAIN_CSS: Asset = asset!("/assets/main.css");
 
+pub mod dates;
 pub mod export;
 pub mod icons;
 pub mod js;

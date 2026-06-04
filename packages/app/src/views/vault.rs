@@ -33,7 +33,7 @@ async fn apply_template(
     mut load_error: Signal<Option<String>>,
     current_dir: &str,
 ) {
-    let date_json = js::date_vars().await;
+    let date_json = crate::dates::date_vars_json().await;
     let vars = template::TemplateVars::from_json(&date_json, "", current_dir);
 
     if vars.year.is_empty() || vars.month.is_empty() || vars.date.is_empty() {
@@ -70,7 +70,7 @@ async fn apply_template(
     } else {
         // Insert-only template: open as a new untitled note pre-filled with body.
         let body = template::strip_tabstops(&template::substitute_vars(&meta.body, &vars));
-        let today = js::today().await;
+        let today = crate::dates::today().await;
         let path = format!("{today}-note.md");
         match vault::dispatch::create_file(cfg, &path, &body, &format!("Create {path}")).await {
             Ok(_) => {
@@ -474,7 +474,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                                         apply_template(&meta, &cfg, files, open_mbx, load_error, "").await;
                                     } else {
                                         // Fallback: simple YYYY-MM-DD.md note
-                                        let date = js::today().await;
+                                        let date = crate::dates::today().await;
                                         if date.is_empty() { return; }
                                         let path = format!("{date}.md");
                                         let _ = vault::dispatch::create_file(
@@ -1158,7 +1158,7 @@ fn EditorPane(
                                         if meta.filepath.is_some() {
                                             apply_template(&meta, &cfg, files, to_open, load_error, &current_dir).await;
                                         } else {
-                                            let date_json = js::date_vars().await;
+                                            let date_json = crate::dates::date_vars_json().await;
                                             let vars = template::TemplateVars::from_json(&date_json, "", &current_dir);
                                             let body = template::strip_tabstops(
                                                 &template::substitute_vars(&meta.body, &vars));
