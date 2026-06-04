@@ -107,10 +107,28 @@ export function download_file(filename, content) {
 
 // ── Editor selection (toolbar) ────────────────────────────────────────────────
 
+// Returns the editable `.md-area` the user is currently working in. With a
+// single editor this is just that editor; with a split (two editors in the DOM)
+// it returns the one containing the selection, else the focused one, else the
+// first. This keeps selection/slash/apply operations targeting the right pane.
+function activeMdArea() {
+    const areas = document.querySelectorAll('.md-area[contenteditable="true"]');
+    if (areas.length <= 1) return areas[0] || null;
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount && sel.anchorNode) {
+        for (const el of areas) if (el.contains(sel.anchorNode)) return el;
+    }
+    const af = document.activeElement;
+    if (af) {
+        for (const el of areas) if (el === af || el.contains(af)) return el;
+    }
+    return areas[0];
+}
+
 // Returns [start, end] character offsets of the selection within the active
 // editor, or [-1, -1] when there is none.
 export function get_selection() {
-    const el = document.querySelector('.md-area[contenteditable="true"]');
+    const el = activeMdArea();
     if (!el) return [-1, -1];
     const sel = window.getSelection();
     if (!sel || !sel.rangeCount || !el.contains(sel.anchorNode)) return [-1, -1];
@@ -135,7 +153,7 @@ export function get_selection() {
 // is not in a slash token.
 export function slash_query() {
     const NO_SLASH = '\x00';
-    const el = document.querySelector('.md-area[contenteditable="true"]');
+    const el = activeMdArea();
     if (!el) return NO_SLASH;
     const sel = window.getSelection();
     if (!sel || !sel.rangeCount || !el.contains(sel.anchorNode)) return NO_SLASH;
@@ -163,7 +181,7 @@ export function slash_query() {
 // Replaces the `/query` token at the cursor with `snippet`. `slashLen` = 1 (the
 // `/`) + query length. `snippet` arrives already deserialized — no escaping.
 export function apply_slash(snippet, slashLen) {
-    const el = document.querySelector('.md-area[contenteditable="true"]');
+    const el = activeMdArea();
     if (!el) return;
     const sel = window.getSelection();
     if (!sel || !sel.rangeCount) return;
