@@ -66,6 +66,7 @@ dependencies = [
  "dioxus",
  "dioxus-use-js",
  "gloo-timers",
+ "manganis",
  "serde",
  "serde_json",
  "tokio",
@@ -984,8 +985,9 @@ dependencies = [
 name = "desktop"
 version = "0.1.0"
 dependencies = [
+ "app",
  "dioxus",
- "ui",
+ "vault",
 ]
 
 [[package]]

@@ -5,6 +5,10 @@ edition = "2024"
 
 [dependencies]
 dioxus = { workspace = true, features = ["router"] }
+# Needed because the `asset!` macro (used for the shared MAIN_CSS) expands to a
+# bare `manganis::` path; renderer crates pull it in transitively, but `app`
+# must name it directly to own the asset.
+manganis = "0.8.0-alpha.0"
 dioxus-use-js = { workspace = true }
 ui = { workspace = true }
 vault = { workspace = true }

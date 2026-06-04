@@ -1,10 +1,9 @@
 use dioxus::prelude::*;
 use vault::GithubConfig;
 
+use app::MAIN_CSS;
 use app::state;
 use app::views::{Settings, VaultBrowser};
-
-const MAIN_CSS: Asset = asset!("/assets/main.css");
 
 fn main() {
     dioxus::launch(App);

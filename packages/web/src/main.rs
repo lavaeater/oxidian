@@ -2,11 +2,11 @@ use dioxus::prelude::*;
 use tracing::Level;
 use vault::GithubConfig;
 
+use app::MAIN_CSS;
 use app::state;
 use app::views::{Settings, VaultBrowser};
 
 const FAVICON: Asset = asset!("/assets/favicon.ico");
-const MAIN_CSS: Asset = asset!("/assets/main.css");
 
 fn main() {
     console_error_panic_hook::set_once();

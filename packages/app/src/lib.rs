@@ -1,3 +1,9 @@
+use dioxus::prelude::{Asset, asset};
+
+/// The canonical application stylesheet, owned by the shared `app` crate so all
+/// platform shells (web/desktop/mobile) link the exact same file and can't drift.
+pub const MAIN_CSS: Asset = asset!("/assets/main.css");
+
 pub mod export;
 pub mod icons;
 pub mod js;
