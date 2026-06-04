@@ -122,6 +122,38 @@ pub mod dispatch {
             Provider::GitLab  => github::read_many(cfg, paths).await, // uses same sequential pattern
         }
     }
+
+    /// Move a single file. Neither provider's Contents API has a native move, so
+    /// this is create-at-new-path then delete-old. `create_file` fails if the
+    /// destination already exists, so on a collision the original is left intact.
+    pub async fn move_file(cfg: &GithubConfig, old_path: &str, old_sha: &str, new_path: &str) -> Result<(), VaultError> {
+        if old_path == new_path { return Ok(()); }
+        let msg = format!("Move {old_path} → {new_path}");
+        let fc = read_file(cfg, old_path).await?;
+        create_file(cfg, new_path, &fc.content, &msg).await?;
+        delete_file(cfg, old_path, old_sha, &msg).await?;
+        Ok(())
+    }
+
+    /// Move every file under `old_prefix/` to `new_prefix/…`, preserving the
+    /// sub-path. `files` is the current vault listing (for paths + SHAs).
+    /// Rejects moving a folder into itself or one of its own descendants.
+    pub async fn move_dir(cfg: &GithubConfig, old_prefix: &str, new_prefix: &str, files: &[FileMeta]) -> Result<(), VaultError> {
+        let old_prefix = old_prefix.trim_matches('/');
+        let new_prefix = new_prefix.trim_matches('/');
+        if old_prefix == new_prefix { return Ok(()); }
+        if new_prefix == old_prefix || new_prefix.starts_with(&format!("{old_prefix}/")) {
+            return Err(VaultError::Http("Cannot move a folder into itself".into()));
+        }
+        let strip = format!("{old_prefix}/");
+        for file in files {
+            if let Some(rel) = file.path.strip_prefix(&strip) {
+                let dest = format!("{new_prefix}/{rel}");
+                move_file(cfg, &file.path, &file.sha, &dest).await?;
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Connection settings for a vault (works for GitHub and GitLab).

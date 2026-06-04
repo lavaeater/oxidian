@@ -439,6 +439,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
     let cfg_search = config.clone();
     let cfg_newfile = config.clone();
     let cfg_delete = config.clone();
+    let cfg_move = config.clone();
 
     let handle_delete = move |file: FileMeta| {
         let cfg = cfg_delete.clone();
@@ -461,6 +462,60 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                     }
                 }
                 Err(e) => load_error.set(Some(format!("Delete failed: {e}"))),
+            }
+        });
+    };
+
+    // Move a file or folder via drag-and-drop. `payload` is "file\x1e<path>" or
+    // "dir\x1e<prefix>"; `dest_dir` is the target folder ("" = vault root).
+    let handle_move = move |(payload, dest_dir): (String, String)| {
+        let cfg = cfg_move.clone();
+        spawn(async move {
+            let mut parts = payload.splitn(2, '\x1e');
+            let kind = parts.next().unwrap_or("").to_string();
+            let src = parts.next().unwrap_or("").trim_matches('/').to_string();
+            if src.is_empty() { return; }
+            let dest = dest_dir.trim_matches('/').to_string();
+            let name = src.rsplit('/').next().unwrap_or(&src).to_string();
+            let src_parent = src.rfind('/').map(|i| &src[..i]).unwrap_or("");
+
+            // No-op: already directly inside the destination folder.
+            if src_parent == dest { return; }
+            let new_path = if dest.is_empty() { name.clone() } else { format!("{dest}/{name}") };
+            // Can't drop a folder into itself or a descendant.
+            if kind == "dir" && (dest == src || dest.starts_with(&format!("{src}/"))) { return; }
+
+            let dest_label = if dest.is_empty() { "vault root".to_string() } else { dest.clone() };
+            let confirmed = js::confirm_dialog(&format!("Move '{name}' into '{dest_label}'?")).await;
+            if !confirmed { return; }
+
+            let snapshot = files.peek().clone();
+            let result = if kind == "dir" {
+                vault::dispatch::move_dir(&cfg, &src, &new_path, &snapshot).await
+            } else {
+                let sha = snapshot.iter().find(|f| f.path == src).map(|f| f.sha.clone()).unwrap_or_default();
+                vault::dispatch::move_file(&cfg, &src, &sha, &new_path).await
+            };
+            match result {
+                Ok(()) => {
+                    if let Ok(mut list) = vault::dispatch::list_files(&cfg).await {
+                        list.sort_by(|a, b| a.path.cmp(&b.path));
+                        files.set(list);
+                    }
+                    // Follow the moved file/folder if it was open. Bind the peek
+                    // to a local so the read guard drops before we call set().
+                    let open = active_path.peek().clone();
+                    if let Some(open) = open {
+                        if kind == "dir" {
+                            if let Some(rel) = open.strip_prefix(&format!("{src}/")) {
+                                active_path.set(Some(format!("{new_path}/{rel}")));
+                            }
+                        } else if open == src {
+                            active_path.set(Some(new_path.clone()));
+                        }
+                    }
+                }
+                Err(e) => load_error.set(Some(format!("Move failed: {e}"))),
             }
         });
     };
@@ -591,6 +646,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                                             selected_dir.set(if dir.is_empty() { None } else { Some(dir) });
                                         }),
                                         on_delete: EventHandler::new(handle_delete),
+                                        on_move: EventHandler::new(handle_move),
                                     }) }
                                 }
                             }
@@ -687,6 +743,15 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                             }
                         },
                     }
+                }
+            }
+
+            // ── Drawer scrim (mobile only — `.sidebar-scrim` is display:none on
+            // desktop, so this is a no-op there even though sidebar_open is true).
+            if sidebar_open() {
+                div {
+                    class: "sidebar-scrim",
+                    onclick: move |_| sidebar_open.set(false),
                 }
             }
 
@@ -1391,10 +1456,12 @@ struct NavCallbacks {
     on_select: EventHandler<String>,
     on_select_dir: EventHandler<String>,
     on_delete: EventHandler<FileMeta>,
+    // (drag payload, destination dir). Payload is `"file\x1e<path>"` or `"dir\x1e<prefix>"`.
+    on_move: EventHandler<(String, String)>,
 }
 
 fn nav_dispatch(id: &'static str, cb: NavCallbacks) -> Element {
-    let NavCallbacks { files, active, selected_dir, on_select, on_select_dir, on_delete } = cb;
+    let NavCallbacks { files, active, selected_dir, on_select, on_select_dir, on_delete, on_move } = cb;
     match id {
         "flat" => rsx! {
             FlatList {
@@ -1404,6 +1471,7 @@ fn nav_dispatch(id: &'static str, cb: NavCallbacks) -> Element {
                 on_select,
                 on_select_dir,
                 on_delete,
+                on_move,
             }
         },
         "columns" => rsx! {
@@ -1414,6 +1482,7 @@ fn nav_dispatch(id: &'static str, cb: NavCallbacks) -> Element {
                 on_select,
                 on_select_dir,
                 on_delete,
+                on_move,
             }
         },
         // "tree" is the default / fallback
@@ -1425,10 +1494,22 @@ fn nav_dispatch(id: &'static str, cb: NavCallbacks) -> Element {
                 on_select,
                 on_select_dir,
                 on_delete,
+                on_move,
             }
         },
     }
 }
+
+// ── Drag-and-drop move helpers ─────────────────────────────────────────────────
+//
+// Drag payloads are encoded as `"<kind>\x1e<path>"` (kind = "file" | "dir"),
+// matching the Kanban drag convention. `set_drag_data` / `get_drag_data` are the
+// same JS-backed helpers the Kanban board uses.
+
+/// Builds the `ondrop` payload for a draggable file.
+fn file_drag_payload(path: &str) -> String { format!("file\x1e{path}") }
+/// Builds the `ondrop` payload for a draggable folder.
+fn dir_drag_payload(prefix: &str) -> String { format!("dir\x1e{prefix}") }
 
 // ── File tree ─────────────────────────────────────────────────────────────────
 
@@ -1466,10 +1547,26 @@ fn FileTree(
     on_select: EventHandler<String>,
     on_select_dir: EventHandler<String>,
     on_delete: EventHandler<FileMeta>,
+    on_move: EventHandler<(String, String)>,
 ) -> Element {
     let (root, dirs) = group_by_dir(&files, "");
+    let mut root_drop = use_signal(|| false);
     rsx! {
-        div { class: "file-tree",
+        // The root container is itself a drop target → moves to the vault root.
+        // Dir rows call stop_propagation() so a drop on a folder doesn't also
+        // bubble up here.
+        div {
+            class: if root_drop() { "file-tree file-tree--drop" } else { "file-tree" },
+            ondragover: move |e| { e.prevent_default(); root_drop.set(true); },
+            ondragleave: move |_| root_drop.set(false),
+            ondrop: move |_| {
+                root_drop.set(false);
+                spawn(async move {
+                    let data = js::get_drag_data().await;
+                    js::clear_drag_data();
+                    if !data.is_empty() { on_move((data, String::new())); }
+                });
+            },
             for (dir_prefix, dir_files) in dirs {
                 {
                     let name = dir_prefix.rsplit('/').next().unwrap_or(&dir_prefix).to_string();
@@ -1484,6 +1581,7 @@ fn FileTree(
                             on_select,
                             on_select_dir,
                             on_delete,
+                            on_move,
                             depth: 0,
                         }
                     }
@@ -1515,6 +1613,7 @@ fn FileTreeDir(
     on_select: EventHandler<String>,
     on_select_dir: EventHandler<String>,
     on_delete: EventHandler<FileMeta>,
+    on_move: EventHandler<(String, String)>,
     depth: u32,
 ) -> Element {
     let prefix_slash = format!("{prefix}/");
@@ -1522,6 +1621,7 @@ fn FileTreeDir(
         a.as_deref().map(|p| p.starts_with(&prefix_slash)).unwrap_or(false)
     };
     let mut collapsed = use_signal(|| !contains_active(&active()));
+    let mut drag_over = use_signal(|| false);
     // Auto-expand when the active file moves into this directory.
     let prefix_slash_effect = prefix_slash.clone();
     use_effect(move || {
@@ -1533,11 +1633,30 @@ fn FileTreeDir(
     let dir_pl = 10 + depth * 10;
     let is_selected = selected_dir().as_deref() == Some(prefix.as_str());
     let prefix_click = prefix.clone();
+    let prefix_drag = prefix.clone();
+    let prefix_drop = prefix.clone();
+    let dir_class = if drag_over() { "file-tree-dir-name file-tree-dir-name--drop" }
+                    else if is_selected { "file-tree-dir-name file-tree-dir-name--active" }
+                    else { "file-tree-dir-name" };
     rsx! {
         div { class: "file-tree-dir",
             div {
-                class: if is_selected { "file-tree-dir-name file-tree-dir-name--active" } else { "file-tree-dir-name" },
+                class: "{dir_class}",
                 style: "padding-left: {dir_pl}px",
+                draggable: true,
+                ondragstart: move |_| js::set_drag_data(dir_drag_payload(&prefix_drag)),
+                ondragover: move |e| { e.prevent_default(); drag_over.set(true); },
+                ondragleave: move |_| drag_over.set(false),
+                ondrop: move |e| {
+                    e.stop_propagation();
+                    drag_over.set(false);
+                    let dest = prefix_drop.clone();
+                    spawn(async move {
+                        let data = js::get_drag_data().await;
+                        js::clear_drag_data();
+                        if !data.is_empty() { on_move((data, dest)); }
+                    });
+                },
                 onclick: move |_| {
                     collapsed.set(!collapsed());
                     on_select_dir(prefix_click.clone());
@@ -1561,6 +1680,7 @@ fn FileTreeDir(
                                 on_select,
                                 on_select_dir,
                                 on_delete,
+                                on_move,
                                 depth: depth + 1,
                             }
                         }
@@ -1592,6 +1712,7 @@ fn FileEntry(
     depth: u32,
 ) -> Element {
     let path = file.path.clone();
+    let path_drag = file.path.clone();
     let file_pl = 18 + depth * 10;
     let file_clone = file.clone();
     rsx! {
@@ -1599,6 +1720,8 @@ fn FileEntry(
             class: if active { "file-entry file-entry--active" } else { "file-entry" },
             style: "padding-left: {file_pl}px",
             tabindex: "0",
+            draggable: true,
+            ondragstart: move |_| js::set_drag_data(file_drag_payload(&path_drag)),
             onclick: move |_| on_select(path.clone()),
             onkeydown: move |e| {
                 if e.key() == Key::Delete || e.key() == Key::Backspace {
@@ -1634,6 +1757,7 @@ fn FlatList(
     on_select: EventHandler<String>,
     on_select_dir: EventHandler<String>,
     on_delete: EventHandler<FileMeta>,
+    on_move: EventHandler<(String, String)>,
 ) -> Element {
     let mut filter = use_signal(String::new);
     let q = filter.read().to_lowercase();
@@ -1671,12 +1795,25 @@ fn FlatList(
                 for (dir, dir_files) in sections {
                     {
                         let dir_clone = dir.clone();
+                        let dir_drag = dir.clone();
+                        let dir_drop = dir.clone();
                         let is_sel = selected_dir().as_deref() == Some(dir.as_str())
                             || (dir.is_empty() && selected_dir().is_none());
                         rsx! {
                             if !dir.is_empty() {
                                 div {
                                     class: if is_sel { "flat-list-dir flat-list-dir--active" } else { "flat-list-dir" },
+                                    draggable: true,
+                                    ondragstart: move |_| js::set_drag_data(dir_drag_payload(&dir_drag)),
+                                    ondragover: move |e| e.prevent_default(),
+                                    ondrop: move |_| {
+                                        let dest = dir_drop.clone();
+                                        spawn(async move {
+                                            let data = js::get_drag_data().await;
+                                            js::clear_drag_data();
+                                            if !data.is_empty() { on_move((data, dest)); }
+                                        });
+                                    },
                                     onclick: move |_| on_select_dir(dir_clone.clone()),
                                     IcoFolderClosed { size: 12 }
                                     " {dir}"
@@ -1685,11 +1822,14 @@ fn FlatList(
                             for file in dir_files {
                                 {
                                     let p = file.path.clone();
+                                    let p_drag = file.path.clone();
                                     let is_active = active().as_deref() == Some(p.as_str());
                                     let file_clone = file.clone();
                                     rsx! {
                                         div {
                                             class: if is_active { "flat-list-item flat-list-item--active" } else { "flat-list-item" },
+                                            draggable: true,
+                                            ondragstart: move |_| js::set_drag_data(file_drag_payload(&p_drag)),
                                             onclick: move |_| on_select(p.clone()),
                                             span { class: "file-entry-icon", IcoFileText { size: 12 } }
                                             span { class: "flat-list-name", "{file.name()}" }
@@ -1730,6 +1870,7 @@ fn ColumnView(
     on_select: EventHandler<String>,
     on_select_dir: EventHandler<String>,
     on_delete: EventHandler<FileMeta>,
+    on_move: EventHandler<(String, String)>,
 ) -> Element {
     // The directory currently shown in the LEFT column. Empty = vault root.
     let mut col_path: Signal<String> = use_signal(String::new);
@@ -1810,12 +1951,25 @@ fn ColumnView(
                     for (dir_prefix, _) in &left_dirs {
                         {
                             let dp = dir_prefix.clone();
+                            let dp_drag = dir_prefix.clone();
+                            let dp_drop = dir_prefix.clone();
                             let name = dir_prefix.rsplit('/').next().unwrap_or(dir_prefix).to_string();
                             let is_open = oc.as_deref() == Some(dir_prefix.as_str());
                             rsx! {
                                 div {
                                     key: "{dir_prefix}",
                                     class: if is_open { "col-item col-item--dir col-item--open" } else { "col-item col-item--dir" },
+                                    draggable: true,
+                                    ondragstart: move |_| js::set_drag_data(dir_drag_payload(&dp_drag)),
+                                    ondragover: move |e| e.prevent_default(),
+                                    ondrop: move |_| {
+                                        let dest = dp_drop.clone();
+                                        spawn(async move {
+                                            let data = js::get_drag_data().await;
+                                            js::clear_drag_data();
+                                            if !data.is_empty() { on_move((data, dest)); }
+                                        });
+                                    },
                                     onclick: move |_| {
                                         open_child.set(Some(dp.clone()));
                                         on_select_dir(dp.clone());
@@ -1830,12 +1984,15 @@ fn ColumnView(
                         if file.name() != ".gitkeep" {
                             {
                                 let p = file.path.clone();
+                                let p_drag = file.path.clone();
                                 let is_active = active().as_deref() == Some(p.as_str());
                                 let fc = file.clone();
                                 rsx! {
                                     div {
                                         key: "{p}",
                                         class: if is_active { "col-item col-item--active" } else { "col-item" },
+                                        draggable: true,
+                                        ondragstart: move |_| js::set_drag_data(file_drag_payload(&p_drag)),
                                         onclick: move |_| on_select(p.clone()),
                                         span { "📄 {file.name()}" }
                                         button {
@@ -1856,6 +2013,8 @@ fn ColumnView(
                         for (sub_prefix, _) in &right_dirs {
                             {
                                 let sp = sub_prefix.clone();
+                                let sp_drag = sub_prefix.clone();
+                                let sp_drop = sub_prefix.clone();
                                 let name = sub_prefix.rsplit('/').next().unwrap_or(sub_prefix).to_string();
                                 // Clicking a subfolder in the right pane drills down:
                                 // it becomes the new left column.
@@ -1864,6 +2023,17 @@ fn ColumnView(
                                     div {
                                         key: "{sp}",
                                         class: "col-item col-item--dir",
+                                        draggable: true,
+                                        ondragstart: move |_| js::set_drag_data(dir_drag_payload(&sp_drag)),
+                                        ondragover: move |e| e.prevent_default(),
+                                        ondrop: move |_| {
+                                            let dest = sp_drop.clone();
+                                            spawn(async move {
+                                                let data = js::get_drag_data().await;
+                                                js::clear_drag_data();
+                                                if !data.is_empty() { on_move((data, dest)); }
+                                            });
+                                        },
                                         onclick: move |_| {
                                             col_path.set(sp_drill.clone());
                                             open_child.set(None);
@@ -1879,12 +2049,15 @@ fn ColumnView(
                             if file.name() != ".gitkeep" {
                                 {
                                     let p = file.path.clone();
+                                    let p_drag = file.path.clone();
                                     let is_active = active().as_deref() == Some(p.as_str());
                                     let fc = file.clone();
                                     rsx! {
                                         div {
                                             key: "{p}",
                                             class: if is_active { "col-item col-item--active" } else { "col-item" },
+                                            draggable: true,
+                                            ondragstart: move |_| js::set_drag_data(file_drag_payload(&p_drag)),
                                             onclick: move |_| on_select(p.clone()),
                                             span { "📄 {file.name()}" }
                                             button {

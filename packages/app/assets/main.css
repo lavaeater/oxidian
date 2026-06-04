@@ -128,6 +128,15 @@ code { font-family: ui-monospace, monospace; font-size: 0.88em; }
 }
 .file-tree-dir-name:hover { color: var(--text); }
 .file-tree-dir-name--active { color: var(--accent); }
+/* Drag-and-drop move: highlight the folder / root currently under the pointer. */
+.file-tree-dir-name--drop,
+.flat-list-dir--drop,
+.col-item--drop {
+  background: var(--accent);
+  color: var(--bg);
+  border-radius: 4px;
+}
+.file-tree--drop { box-shadow: inset 0 0 0 2px var(--accent); border-radius: 4px; }
 .file-tree-dir-chevron { opacity: 0.35; display: flex; align-items: center; flex-shrink: 0; }
 
 .file-entry {
@@ -894,4 +903,76 @@ kbd {
 .bookmark-remove svg,
 .sidebar-error-close svg {
   display: block;
+}
+
+/* Drawer scrim — only visible on narrow screens (see @media below). */
+.sidebar-scrim { display: none; }
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Responsive / mobile layout
+   On narrow screens the sidebar becomes an off-canvas drawer toggled by the
+   `sidebar--open` class (driven by the `sidebar_open` signal). The bottom nav,
+   close button and editor back button — hidden on desktop — are revealed here.
+   ────────────────────────────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    width: min(85vw, 320px);
+    z-index: 50;
+    transform: translateX(-100%);
+    transition: transform 180ms ease;
+    box-shadow: 2px 0 12px rgba(0, 0, 0, 0.3);
+    /* leave room for the fixed bottom nav so the last items aren't hidden */
+    padding-bottom: 54px;
+  }
+  .sidebar.sidebar--open { transform: translateX(0); }
+
+  /* Dim the editor behind the open drawer; tap to close. */
+  .sidebar-scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    background: rgba(0, 0, 0, 0.45);
+  }
+
+  /* The sidebar is out of flow, so the editor pane fills the width. */
+  .editor-pane { padding-bottom: 54px; }
+  .editor-titlebar { padding: 8px 12px; }
+
+  /* No drag-to-resize on touch layouts. */
+  .sidebar-resize-handle { display: none; }
+
+  /* Reveal the mobile-only controls. */
+  .sidebar-close-btn { display: inline-flex; }
+  .editor-back-btn   { display: inline-flex; }
+
+  .bottom-nav {
+    display: flex;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 54px;
+    z-index: 60;
+    background: var(--bg2);
+    border-top: 1px solid var(--border);
+  }
+  .bottom-nav-btn {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 0.65rem;
+    cursor: pointer;
+    padding: 6px 0;
+  }
+  .bottom-nav-btn--active { color: var(--accent); }
+  .bottom-nav-label { line-height: 1; }
 }
