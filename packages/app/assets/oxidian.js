@@ -56,7 +56,31 @@ export function confirm_dialog(message) {
 }
 
 export function copy_to_clipboard(text) {
-    if (navigator.clipboard) navigator.clipboard.writeText(text).catch(() => { });
+    // navigator.clipboard is unavailable in the Android WebView (it requires a
+    // secure context / user-permission that the embedded view doesn't grant),
+    // so fall back to the legacy execCommand path via a temporary textarea.
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).catch(() => legacyCopy(text));
+    } else {
+        legacyCopy(text);
+    }
+}
+
+function legacyCopy(text) {
+    try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed';
+        ta.style.top = '-1000px';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        ta.setSelectionRange(0, text.length);
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+    } catch (_) { }
 }
 
 // ── Focus / scroll / resize ──────────────────────────────────────────────────

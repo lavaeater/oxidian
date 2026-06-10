@@ -366,8 +366,15 @@ pub fn MarkdownArea(
         let editor_id = id();
         spawn(async move {
             let payload: Result<String, _> = read_state(&editor_id).await;
-            let Ok(payload) = payload else {
-                return;
+            let payload = match payload {
+                Ok(p) => {
+                    log::info!("[oxidian] read_state(input): {} bytes", p.len());
+                    p
+                }
+                Err(e) => {
+                    log::info!("[oxidian] read_state(input) ERROR: {e:?}");
+                    return;
+                }
             };
 
             if let Some(rest) = payload.strip_prefix("linechange\n") {

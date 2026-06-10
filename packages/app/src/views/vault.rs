@@ -947,7 +947,14 @@ fn EditorPane(
     let cfg = config.clone();
     use_effect(move || {
         let current = content();
-        if loading_file() || current.is_empty() || current == saved_content() { return; }
+        if loading_file() || current.is_empty() || current == saved_content() {
+            console_log(&format!(
+                "[oxidian] auto-save: skip (loading={}, empty={}, unchanged={})",
+                loading_file(), current.is_empty(), current == saved_content()
+            ));
+            return;
+        }
+        console_log(&format!("[oxidian] auto-save: edit detected, {} bytes, starting countdown", current.len()));
         let this_gen = *edit_gen.peek() + 1;
         edit_gen.set(this_gen);
         save_status.set(SaveStatus::Countdown(5));
@@ -962,19 +969,25 @@ fn EditorPane(
             if edit_gen() != this_gen { return; }
             let Some(path) = active() else { return };
             let sha = file_sha();
-            if sha.is_empty() { return; }
+            if sha.is_empty() {
+                console_log("[oxidian] auto-save: aborted — file_sha is empty");
+                return;
+            }
             let snapshot = content();
             if snapshot == saved_content() { return; }
             save_status.set(SaveStatus::Saving);
+            console_log(&format!("[oxidian] auto-save: writing {path} ({} bytes, sha={sha})", snapshot.len()));
             let name = path.rsplit('/').next().unwrap_or(&path).to_string();
             match vault::dispatch::write_file(&cfg, &path, &snapshot, &sha, &format!("Update {name}")).await {
                 Ok(new_sha) => {
+                    console_log(&format!("[oxidian] auto-save: OK, new sha={new_sha}"));
                     index.with_mut(|idx| idx.reindex_file(&path, &snapshot));
                     file_sha.set(new_sha);
                     saved_content.set(snapshot);
                     save_status.set(SaveStatus::Saved);
                 }
                 Err(e) => {
+                    console_log(&format!("[oxidian] auto-save: write_file FAILED for {path}: {e}"));
                     tracing::error!("auto-save: write_file failed for {path}: {e}");
                     save_status.set(SaveStatus::Error(e.to_string()));
                 }

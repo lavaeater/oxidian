@@ -30,7 +30,15 @@ pub fn console_log(msg: &str) {
     web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(msg));
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+// On Android, `println!` goes to a stdout that logcat doesn't capture, so route
+// through the `log` facade — the mobile shell installs `android_logger`, making
+// these visible via `adb logcat -s oxidian`.
+#[cfg(target_os = "android")]
+pub fn console_log(msg: &str) {
+    log::info!("{msg}");
+}
+
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
 pub fn console_log(msg: &str) {
     println!("{msg}");
 }
