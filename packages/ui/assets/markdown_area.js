@@ -67,84 +67,74 @@ export function setup_selection(id) {
     });
 }
 
-// Handles Enter inside the editor:
-//   • list/task lines with content  → continue the list (insert next marker)
-//   • empty list/task lines         → exit the list (delete the marker, no new item)
-//   • any line                      → force a re-render of the line being left
+// Handles Enter inside the editor entirely in the text model:
+//   • list/task line with content → continue the list (newline + next marker)
+//   • empty list/task line         → exit the list (remove the marker, no new line)
+//   • any other line               → plain newline
 //
-// The re-render is the important part on mobile: it is what rebuilds one
-// `.md-line` div per line (so block formatting like headings updates and the
-// per-line list logic stays correct). Desktop gets this from `selectionchange`,
-// but the Android WebView doesn't fire it reliably on Enter — so we trigger it
-// here, off the keydown that we already know fires (list continuation works).
+// We `preventDefault` and never use `execCommand`/the browser's default Enter,
+// because those insert a `<br>` for the line break — and `<br>` is invisible to
+// `textContent` (what `lineTextAndCursor` reads), so the newline would be lost
+// and the next line would collapse onto the previous one. Instead we compute the
+// new full text + caret offset ourselves and hand them to the Rust side via
+// `_pendingText`/`_pendingCursor` (read by `read_state`), which re-tokenises and
+// rebuilds one clean `.md-line` div per line with the caret restored. Keeping
+// `<br>` out of the DOM is also what lets the caret/line math stay correct.
 export function setup_keyboard(id) {
     const el = document.getElementById(id);
     if (!el || el.dataset.kbSetup) return;
     el.dataset.kbSetup = '1';
 
-    // Ask the Rust side to re-tokenise + re-render the current content, which
-    // restores one div per line. Deferred so the DOM has settled after Enter.
-    function scheduleRerender() {
-        requestAnimationFrame(function () {
-            if (el.dataset.rendering) return;
-            el.dataset.lineChange = '1';
-            el.dispatchEvent(new Event('input', { bubbles: true }));
-        });
-    }
-
     el.addEventListener('keydown', function (e) {
-        if (e.key !== 'Enter' || e.shiftKey || e.ctrlKey || e.metaKey) return;
-        const sel = window.getSelection();
-        if (!sel || !sel.rangeCount) return;
-        // Walk up to the containing md-line div.
-        let node = sel.anchorNode;
-        if (node && node.nodeType !== 1) node = node.parentElement;
-        while (node && node !== el) {
-            if (node.classList && node.classList.contains('md-line')) break;
-            node = node.parentElement;
-        }
-        if (!node || node === el) { scheduleRerender(); return; }
-        // textContent includes hidden marker text regardless of font-size CSS.
-        // NB: if lines have merged into one div (mobile), this is the *first*
-        // line of the div — but a prior Enter's re-render keeps that from
-        // happening for the line under the cursor in practice.
-        const line = node.textContent;
-        let prefix = null;
-        let markerLen = 0;
-        // Task item: `- [ ] ` / `- [x] ` (with optional indent).
-        const taskM = line.match(/^(\s*[-*+] )\[[ xX]\] /);
-        if (taskM) {
-            markerLen = taskM[0].length;
-            prefix = '\n' + taskM[1] + '[ ] ';
-        } else {
-            // Ordered list: `1. ` `2. ` …
-            const olM = line.match(/^(\s*)(\d+)\. /);
-            if (olM) {
-                markerLen = olM[0].length;
-                prefix = '\n' + olM[1] + (parseInt(olM[2]) + 1) + '. ';
-            } else {
-                // Unordered list: `- ` / `* ` / `+ `
-                const ulM = line.match(/^(\s*)([-*+]) /);
-                if (ulM) {
-                    markerLen = ulM[0].length;
-                    prefix = '\n' + ulM[1] + ulM[2] + ' ';
+        // ctrl/meta+Enter may be a shortcut elsewhere; IME Enter confirms a
+        // composition rather than inserting a line.
+        if (e.key !== 'Enter' || e.ctrlKey || e.metaKey || e.isComposing) return;
+        const [text, cursor] = lineTextAndCursor(el);
+        if (cursor < 0) return; // no caret in the editor — let the browser handle it
+
+        const lineStart = text.lastIndexOf('\n', cursor - 1) + 1;
+        let lineEnd = text.indexOf('\n', cursor);
+        if (lineEnd < 0) lineEnd = text.length;
+        const line = text.slice(lineStart, lineEnd);
+
+        // Detect a list/task marker on the current line (Shift+Enter = plain
+        // newline, so it never continues a list).
+        let marker = null;   // marker to start the continued item with
+        let markerLen = 0;   // length of this line's existing marker
+        if (!e.shiftKey) {
+            const taskM = line.match(/^(\s*[-*+] )\[[ xX]\] /);
+            if (taskM) { markerLen = taskM[0].length; marker = taskM[1] + '[ ] '; }
+            else {
+                const olM = line.match(/^(\s*)(\d+)\. /);
+                if (olM) { markerLen = olM[0].length; marker = olM[1] + (parseInt(olM[2]) + 1) + '. '; }
+                else {
+                    const ulM = line.match(/^(\s*)([-*+]) /);
+                    if (ulM) { markerLen = ulM[0].length; marker = ulM[1] + ulM[2] + ' '; }
                 }
             }
         }
-        if (prefix) {
-            if (line.slice(markerLen).trim() === '') {
-                // Empty list/task item: exit the list. Delete the marker
-                // (markerLen chars before the cursor, which sits right after it)
-                // so the line becomes blank, and DON'T insert another item.
-                e.preventDefault();
-                for (let i = 0; i < markerLen; i++) document.execCommand('delete');
-            } else {
-                e.preventDefault();
-                document.execCommand('insertText', false, prefix);
-            }
+
+        let newText, newCursor;
+        if (marker && line.slice(markerLen).trim() === '') {
+            // Empty item → exit the list: drop the marker, no new line.
+            newText = text.slice(0, lineStart) + text.slice(lineStart + markerLen);
+            newCursor = lineStart;
+        } else if (marker) {
+            // Continue the list: newline + next marker at the caret.
+            const ins = '\n' + marker;
+            newText = text.slice(0, cursor) + ins + text.slice(cursor);
+            newCursor = cursor + ins.length;
+        } else {
+            // Plain newline (covers Shift+Enter and non-list lines).
+            newText = text.slice(0, cursor) + '\n' + text.slice(cursor);
+            newCursor = cursor + 1;
         }
-        // Plain lines fall through to the browser's default Enter.
-        scheduleRerender();
+
+        e.preventDefault();
+        el._pendingText = newText;
+        el._pendingCursor = newCursor;
+        el.dataset.lineChange = '1';
+        el.dispatchEvent(new Event('input', { bubbles: true }));
     });
 }
 
@@ -209,6 +199,15 @@ export function read_state(id) {
         const tc = el._taskClick;
         el._taskClick = null;
         return 'cb:' + tc.pos + ':' + (tc.checked ? '1' : '0');
+    }
+    // Enter handler computed the new text + caret in the model (see
+    // setup_keyboard) — use it verbatim and force a re-render.
+    if (el._pendingText != null) {
+        const text = el._pendingText, cursor = el._pendingCursor;
+        el._pendingText = null;
+        el._pendingCursor = null;
+        el.dataset.lineChange = '';
+        return 'linechange\n' + cursor + '\n' + text;
     }
     const [text, cursor] = lineTextAndCursor(el);
     if (el.dataset.lineChange) {

@@ -9,7 +9,7 @@ Oxidian is an Obsidian-style "second brain" app backed by a Git host repository:
 - **Auth:** GitHub OAuth device flow (`request_device_code` → `poll_device_token` in `packages/vault`), or a personal access token. GitLab is also supported. The resulting token + repo/branch config is stored client-side in `localStorage` and used to read/write the repo directly via the host's REST API — there is no Oxidian backend.
 - **Storage:** Markdown files in a GitHub/GitLab repo act as the note vault (version-controlled, no proprietary format). Writes are SHA-checked for conflicts.
 - **Editor:** Hybrid WYSIWYG markdown — notes render as formatted markdown; clicking/focusing a line reveals and edits the raw markdown for that line only (Obsidian-style inline editing, not a split-pane preview). The `MarkdownArea` component in `packages/ui/src/cm/` is the editor.
-- **Platform priority:** `packages/web` first, then desktop/mobile. All three are thin shells over the shared `app` crate, so they stay in sync automatically.
+- **Platform priority:** **`packages/web` and `packages/mobile` (Android only) are the priority targets** — the author always has either a computer or an Android phone, and web also covers iPad. `packages/desktop` still builds and shares all the same code, but isn't a focus. All platforms are thin shells over the shared `app` crate, so they stay in sync automatically; because web and mobile share that code, **changes to shared UI/editor logic must be validated on both web and Android** (iOS is out of scope for now).
 
 ## Commands
 

@@ -8,7 +8,7 @@ members = [
     "packages/desktop",
     "packages/mobile",
 ]
-exclude = ["vendor"]
+exclude = ["dioxus-use-js"]
 
 [workspace.dependencies]
 dioxus = { version = "0.8.0-alpha.0" }
@@ -20,12 +20,10 @@ ui = { path = "packages/ui" }
 vault = { path = "packages/vault" }
 app = { path = "packages/app" }
 
-# Local patch of the dioxus-use-js fork: the macro generated `await import("/assets/…")`,
-# which fails in the Android System WebView (Chromium) because Dioxus runs eval inside a
-# `new AsyncFunction(...)` whose base URL is `about:blank`, so a root-relative module
-# specifier can't resolve ("Failed to resolve module specifier … base URL is about:blank").
-# The patched macro resolves the specifier against `document.baseURI` first. Once the
-# one-line fix is on lavaeater/dioxus-use-js (branch dioxus-v0.8.0), drop this patch + vendor/.
+# TEMPORARY: build against the local `dioxus-use-js` submodule, which carries the
+# Android `import()` fix (resolve module specifier against `document.baseURI`; see the
+# submodule's macro). Once that commit is pushed to lavaeater/dioxus-use-js and the git
+# dep below is bumped (`cargo update -p dioxus-use-js`), delete this whole [patch] block.
 [patch."https://github.com/lavaeater/dioxus-use-js.git"]
-dioxus-use-js = { path = "vendor/dioxus-use-js/dioxus-use-js" }
-dioxus-use-js-macro = { path = "vendor/dioxus-use-js/dioxus-use-js-macro" }
+dioxus-use-js = { path = "dioxus-use-js/dioxus-use-js" }
+dioxus-use-js-macro = { path = "dioxus-use-js/dioxus-use-js-macro" }
