@@ -42,7 +42,8 @@ Below is a detailed status for every user story.
 | — | **Tabs + two-pane split** — `EditorPane`, Obsidian-style preview tabs | ✅ Done |
 | — | **Responsive sidebar drawer** — mobile drawer nav + bottom bar | ✅ Done |
 | — | **WikiLink index + backlinks panel** | ✅ Done |
-| — | **Android mobile app** — shared `app` crate; bridge/save/persistence/editor all working | ✅ Done |
+| — | **Android mobile app** — shared `app` crate; bridge/save/editor all working | ✅ Done |
+| — | **Persistent native auth** — token/bookmarks/board stored on the filesystem (`native_store.rs`), survives cold restarts on Android/desktop instead of relying on WebView `localStorage` | ✅ Done |
 
 ---
 
@@ -85,7 +86,7 @@ Listed roughly by priority / dependency order. Filtered to the web + Android foc
 
 | US | Feature | Effort |
 |----|---------|--------|
-| — | **PAT / token in Android Keystore** (instead of `localStorage`) | Medium |
+| — | **Encrypt token in Android Keystore** — hardening only; the token already persists across restarts in app-private storage (`native_store.rs`, `getFilesDir()`), just in plaintext | Medium |
 | — | Swipe-right to file list, pull-to-refresh, haptic feedback | Small |
 
 ### Deprioritized (desktop-only / out of scope for now)
