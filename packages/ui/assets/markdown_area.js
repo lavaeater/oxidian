@@ -67,11 +67,31 @@ export function setup_selection(id) {
     });
 }
 
-// Intercepts Enter on list lines and inserts the correct continuation prefix.
+// Handles Enter inside the editor:
+//   • list/task lines with content  → continue the list (insert next marker)
+//   • empty list/task lines         → exit the list (delete the marker, no new item)
+//   • any line                      → force a re-render of the line being left
+//
+// The re-render is the important part on mobile: it is what rebuilds one
+// `.md-line` div per line (so block formatting like headings updates and the
+// per-line list logic stays correct). Desktop gets this from `selectionchange`,
+// but the Android WebView doesn't fire it reliably on Enter — so we trigger it
+// here, off the keydown that we already know fires (list continuation works).
 export function setup_keyboard(id) {
     const el = document.getElementById(id);
     if (!el || el.dataset.kbSetup) return;
     el.dataset.kbSetup = '1';
+
+    // Ask the Rust side to re-tokenise + re-render the current content, which
+    // restores one div per line. Deferred so the DOM has settled after Enter.
+    function scheduleRerender() {
+        requestAnimationFrame(function () {
+            if (el.dataset.rendering) return;
+            el.dataset.lineChange = '1';
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+        });
+    }
+
     el.addEventListener('keydown', function (e) {
         if (e.key !== 'Enter' || e.shiftKey || e.ctrlKey || e.metaKey) return;
         const sel = window.getSelection();
@@ -83,8 +103,11 @@ export function setup_keyboard(id) {
             if (node.classList && node.classList.contains('md-line')) break;
             node = node.parentElement;
         }
-        if (!node || node === el) return;
+        if (!node || node === el) { scheduleRerender(); return; }
         // textContent includes hidden marker text regardless of font-size CSS.
+        // NB: if lines have merged into one div (mobile), this is the *first*
+        // line of the div — but a prior Enter's re-render keeps that from
+        // happening for the line under the cursor in practice.
         const line = node.textContent;
         let prefix = null;
         let markerLen = 0;
@@ -108,17 +131,67 @@ export function setup_keyboard(id) {
                 }
             }
         }
-        if (!prefix) return;
-        // If the line has no content beyond the marker, exit the list instead.
-        if (line.slice(markerLen).trim() === '') return;
-        e.preventDefault();
-        document.execCommand('insertText', false, prefix);
+        if (prefix) {
+            if (line.slice(markerLen).trim() === '') {
+                // Empty list/task item: exit the list. Delete the marker
+                // (markerLen chars before the cursor, which sits right after it)
+                // so the line becomes blank, and DON'T insert another item.
+                e.preventDefault();
+                for (let i = 0; i < markerLen; i++) document.execCommand('delete');
+            } else {
+                e.preventDefault();
+                document.execCommand('insertText', false, prefix);
+            }
+        }
+        // Plain lines fall through to the browser's default Enter.
+        scheduleRerender();
     });
 }
 
-// Reads innerText and cursor offset together and returns the tagged-string
-// protocol the Rust side parses. If a navigate or task-checkbox click was
-// recorded, those are returned first. Possible returns:
+// Reads the editor text and caret offset together, in a *line-deterministic*
+// space: each top-level child of the editor is one line, and lines are joined
+// with exactly one '\n'. This is the crucial difference from `innerText`, whose
+// trailing/empty-line newlines are unreliable in the Android WebView: it lets
+// the caret offset distinguish "end of line N" from "start of empty line N+1"
+// (they differ by the line-break char), so empty/blank lines get a real offset
+// instead of -1 — which is what makes leaving a block re-render on mobile.
+//
+// Returns [text, cursor]; cursor is -1 only when there is no caret in the editor.
+function lineTextAndCursor(el) {
+    const sel = window.getSelection();
+    const range = (sel && sel.rangeCount > 0 && el.contains(sel.anchorNode))
+        ? sel.getRangeAt(0) : null;
+    let text = '';
+    let cursor = -1;
+    const kids = el.childNodes;
+    for (let i = 0; i < kids.length; i++) {
+        if (i > 0) text += '\n';
+        const kid = kids[i];
+        if (range && cursor < 0 &&
+            (kid === range.startContainer ||
+                (kid.nodeType === 1 && kid.contains(range.startContainer)))) {
+            const pre = range.cloneRange();
+            pre.selectNodeContents(kid);
+            try { pre.setEnd(range.startContainer, range.startOffset); } catch (_) { }
+            cursor = text.length + pre.toString().length;
+        }
+        text += (kid.textContent || '');
+    }
+    // Caret sitting directly on the editor element, between line nodes.
+    if (range && cursor < 0 && range.startContainer === el) {
+        let t = '';
+        for (let i = 0; i < range.startOffset && i < kids.length; i++) {
+            if (i > 0) t += '\n';
+            t += (kids[i].textContent || '');
+        }
+        cursor = t.length;
+    }
+    return [text, cursor];
+}
+
+// Reads text + cursor together and returns the tagged-string protocol the Rust
+// side parses. If a navigate or task-checkbox click was recorded, those are
+// returned first. Possible returns:
 //   "-1\n"                          → element missing
 //   "nav:<url>"                     → navigate click
 //   "cb:<pos>:<0|1>"                → task-checkbox click
@@ -137,23 +210,7 @@ export function read_state(id) {
         el._taskClick = null;
         return 'cb:' + tc.pos + ':' + (tc.checked ? '1' : '0');
     }
-    const text = el.innerText;
-    const sel = window.getSelection();
-    let cursor = -1;
-    if (sel && sel.rangeCount > 0) {
-        const range = sel.getRangeAt(0);
-        if (el.contains(range.startContainer)) {
-            let offset = 0;
-            const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
-            while (walker.nextNode()) {
-                if (walker.currentNode === range.startContainer) {
-                    cursor = offset + range.startOffset;
-                    break;
-                }
-                offset += walker.currentNode.textContent.length;
-            }
-        }
-    }
+    const [text, cursor] = lineTextAndCursor(el);
     if (el.dataset.lineChange) {
         el.dataset.lineChange = '';
         return 'linechange\n' + cursor + '\n' + text;
@@ -161,8 +218,33 @@ export function read_state(id) {
     return cursor + "\n" + text;
 }
 
+// Places a collapsed caret `offset` characters into a single `.md-line`. When
+// the line has no text node (an empty line), the caret is set on the element
+// itself so it still lands on that blank line.
+function placeCaretInLine(line, offset) {
+    const walker = document.createTreeWalker(line, NodeFilter.SHOW_TEXT, null);
+    let acc = 0, node = null, nodeOff = 0;
+    while (walker.nextNode()) {
+        const n = walker.currentNode, len = n.textContent.length;
+        if (offset <= acc + len) { node = n; nodeOff = offset - acc; break; }
+        acc += len;
+    }
+    try {
+        const range = document.createRange();
+        if (node) range.setStart(node, nodeOff);
+        else range.setStart(line, 0);
+        range.collapse(true);
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+    } catch (_) { }
+}
+
 // Sets innerHTML directly (bypassing the Dioxus render cycle) and immediately
-// restores the cursor — both synchronously, so they can't race each other.
+// restores the caret — both synchronously, so they can't race each other. The
+// caret offset is in the same line-deterministic space as `lineTextAndCursor`
+// (one '\n' per line boundary), so we walk the rebuilt `.md-line` divs counting
+// each line's text length plus one for the break between lines.
 // `html` arrives already serialized from Rust; no manual escaping required.
 export function apply_html_and_restore_cursor(id, html, cursor) {
     const el = document.getElementById(id);
@@ -170,21 +252,23 @@ export function apply_html_and_restore_cursor(id, html, cursor) {
     el.dataset.rendering = '1';
     el.innerHTML = html;
     if (cursor >= 0) {
-        let remaining = cursor;
-        const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
-        while (walker.nextNode()) {
-            const len = walker.currentNode.textContent.length;
-            if (remaining <= len) {
-                try {
-                    const range = document.createRange();
-                    range.setStart(walker.currentNode, remaining);
-                    range.collapse(true);
-                    window.getSelection().removeAllRanges();
-                    window.getSelection().addRange(range);
-                } catch (_) {}
-                return;
+        const lines = el.querySelectorAll(':scope > .md-line');
+        if (lines.length) {
+            let remaining = cursor;
+            let placed = false;
+            for (let li = 0; li < lines.length; li++) {
+                const len = lines[li].textContent.length;
+                if (remaining <= len) {
+                    placeCaretInLine(lines[li], remaining);
+                    placed = true;
+                    break;
+                }
+                remaining -= len + 1; // +1 for the '\n' between lines
             }
-            remaining -= len;
+            if (!placed) {
+                const last = lines[lines.length - 1];
+                placeCaretInLine(last, last.textContent.length);
+            }
         }
     }
     // Clear the flag after the selectionchange triggered by innerHTML has fired.

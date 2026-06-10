@@ -1482,12 +1482,12 @@ fn generate_invocation(
     } else if let Some(class) = &class {
         let class_name = &class.class_name;
         format!(
-            "const{{{class_name}}}=await import(\"{asset_path_string}\");{prepare}{drop_declare}{param_declarations}{drop_handle}try{{{call_function}}}catch(e){{console.warn(\"Executing `{func_call_full_path}` threw:\", e);return [false,null];}}{finally}"
+            "const{{{class_name}}}=await import(new URL(\"{asset_path_string}\",document.baseURI).href);{prepare}{drop_declare}{param_declarations}{drop_handle}try{{{call_function}}}catch(e){{console.warn(\"Executing `{func_call_full_path}` threw:\", e);return [false,null];}}{finally}"
         )
     } else {
         assert_eq!(func_call_full_path.as_str(), func_name_str);
         format!(
-            "const{{{func_name_str}}}=await import(\"{asset_path_string}\");{prepare}{drop_declare}{param_declarations}{drop_handle}try{{{call_function}}}catch(e){{console.warn(\"Executing `{func_call_full_path}` threw:\", e);return [false,null];}}{finally}"
+            "const{{{func_name_str}}}=await import(new URL(\"{asset_path_string}\",document.baseURI).href);{prepare}{drop_declare}{param_declarations}{drop_handle}try{{{call_function}}}catch(e){{console.warn(\"Executing `{func_call_full_path}` threw:\", e);return [false,null];}}{finally}"
         )
     };
     fn to_raw_string_literal(s: &str) -> Literal {

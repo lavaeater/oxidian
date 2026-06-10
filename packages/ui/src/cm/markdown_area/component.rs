@@ -367,10 +367,7 @@ pub fn MarkdownArea(
         spawn(async move {
             let payload: Result<String, _> = read_state(&editor_id).await;
             let payload = match payload {
-                Ok(p) => {
-                    log::info!("[oxidian] read_state(input): {} bytes", p.len());
-                    p
-                }
+                Ok(p) => p,
                 Err(e) => {
                     log::info!("[oxidian] read_state(input) ERROR: {e:?}");
                     return;
@@ -378,6 +375,8 @@ pub fn MarkdownArea(
             };
 
             if let Some(rest) = payload.strip_prefix("linechange\n") {
+                log::info!("[oxidian] linechange re-render, cursor={}",
+                    rest.split_once('\n').map(|(c, _)| c).unwrap_or("?"));
                 // Active line changed: re-render so block tokens (headings,
                 // lists, …) reformat immediately.
                 // We set innerHTML directly + restore cursor in one synchronous
@@ -386,14 +385,15 @@ pub fn MarkdownArea(
                 // will sync it on the next blur.
                 let (cursor_str, text) = rest.split_once('\n').unwrap_or(("-1", rest));
                 let cursor: i64 = cursor_str.parse().unwrap_or(-1);
-                // Chrome appends a trailing \n to innerText of contenteditable
-                // divs; strip it to avoid accumulating blank lines.
-                let text = text.trim_end_matches('\n').to_string();
+                // `text` now comes from `lineTextAndCursor` (one '\n' per line
+                // boundary), so a trailing '\n' is a real empty last line the
+                // caret may sit on — don't strip it, or that line (and its
+                // caret target) disappears on re-render.
+                let text = text.to_string();
                 content.set(text.clone());
-                // cursor = -1 means the selection is in an element with no
-                // text nodes (e.g. a freshly Enter-created empty line).
-                // Skip the re-render in that case — the DOM is untouched so
-                // the cursor stays put, and formatting syncs on blur.
+                // cursor = -1 only when there is no caret in the editor; with
+                // line-deterministic offsets even empty/blank lines get a real
+                // offset, so leaving a block now re-renders on mobile too.
                 if cursor >= 0 {
                     let tokens = tokenize(&text);
                     let new_html = tokens_to_html(&text, &tokens);

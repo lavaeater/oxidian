@@ -1,0 +1,4 @@
+[submodule "dioxus-use-js"]
+	path = dioxus-use-js
+	url = git@github.com:lavaeater/dioxus-use-js.git
+	branch = dioxus-v0.8.0
