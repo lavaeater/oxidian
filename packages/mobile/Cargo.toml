@@ -8,6 +8,10 @@ dioxus = { workspace = true, features = ["router"] }
 vault = { workspace = true }
 app = { workspace = true }
 
+[target.'cfg(target_os = "android")'.dependencies]
+android_logger = "0.14"
+log = { workspace = true }
+
 [features]
 default = []
 mobile = ["dioxus/mobile"]

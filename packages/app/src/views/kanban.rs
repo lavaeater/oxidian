@@ -417,15 +417,14 @@ fn KanbanColumn(
                 e.prevent_default();
                 drag_over.set(false);
                 spawn(async move {
-                    let mut ev = document::eval("dioxus.send(window.__oxidianDragData || '');");
-                    let data = ev.recv::<String>().await.unwrap_or_default();
+                    let data = crate::js::get_drag_data().await;
+                    crate::js::clear_drag_data();
                     if data.is_empty() { return; }
                     // data = "src_col\x1ecard_title"
                     if let Some((src, title)) = data.split_once('\x1e') {
                         on_drop((src.to_string(), title.to_string()));
                     }
                 });
-                document::eval("window.__oxidianDragData = '';");
             },
             div { class: "kanban-col-header",
                 "{name}"
@@ -442,11 +441,7 @@ fn KanbanColumn(
                                 class: "kanban-card",
                                 draggable: true,
                                 ondragstart: move |_| {
-                                    let data = format!("{}\x1e{}", drag_col, drag_title);
-                                    document::eval(&format!(
-                                        "window.__oxidianDragData = {};",
-                                        serde_json::to_string(&data).unwrap_or_default()
-                                    ));
+                                    crate::js::set_drag_data(format!("{}\x1e{}", drag_col, drag_title));
                                 },
                                 onclick: move |_| on_open(title.clone()),
                                 "{card}"

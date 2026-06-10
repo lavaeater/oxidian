@@ -1,4 +1,5 @@
 use dioxus::prelude::*;
+use dioxus_use_js::use_js;
 
 use super::tokenizer::{tokenize, tokenize_line, Token, TokenKind};
 
@@ -33,230 +34,19 @@ fn next_editor_id() -> String {
     format!("md-area-{}", COUNTER.fetch_add(1, Ordering::Relaxed))
 }
 
-// ── JS helpers ────────────────────────────────────────────────────────────────
+// ── JS bindings ───────────────────────────────────────────────────────────────
 
-// Sets up mousedown capture for task-checkbox clicks and navigate clicks.
-fn js_setup_tasks(id: &str) -> String {
-    format!(
-        r#"(function() {{
-    const el = document.getElementById({id:?});
-    if (!el || el.dataset.taskSetup) return;
-    el.dataset.taskSetup = '1';
-    el.addEventListener('mousedown', function(e) {{
-        const cb = e.target.closest('.md-task-checkbox');
-        if (cb) {{
-            el._taskClick = {{
-                pos: parseInt(cb.dataset.pos),
-                checked: cb.dataset.checked === 'true'
-            }};
-            return;
-        }}
-        const nav = e.target.closest('[data-navigate]');
-        if (nav) {{
-            el._navClick = nav.dataset.navigate;
-        }}
-    }}, true);
-}})()"#
-    )
-}
-
-// Sets up a selectionchange listener that marks the active line div so CSS
-// can show its markers. Simpler than per-token tracking.
-fn js_setup_selection(id: &str) -> String {
-    format!(
-        r#"(function() {{
-    const el = document.getElementById({id:?});
-    if (!el || el.dataset.selSetup) return;
-    el.dataset.selSetup = '1';
-    document.addEventListener('selectionchange', function() {{
-        const prev = el.querySelector('.md-line--active');
-        const sel = window.getSelection();
-        let next = null;
-        if (sel && sel.rangeCount > 0 && el.contains(sel.anchorNode)) {{
-            let cur = sel.anchorNode;
-            if (cur.nodeType !== 1) cur = cur.parentElement;
-            while (cur && cur !== el) {{
-                if (cur.classList && cur.classList.contains('md-line')) {{
-                    next = cur;
-                    break;
-                }}
-                cur = cur.parentElement;
-            }}
-        }}
-        if (prev !== next) {{
-            if (prev) {{
-                // Sync data-checked from actual text before the line goes inactive.
-                const cb = prev.querySelector('.md-task-checkbox');
-                if (cb) {{
-                    const t = cb.textContent;
-                    cb.dataset.checked = (t.startsWith('[x]') || t.startsWith('[X]')) ? 'true' : 'false';
-                }}
-                prev.classList.remove('md-line--active');
-                // Skip if we're mid-render (innerHTML was just set by us).
-                if (!el.dataset.rendering) {{
-                    el.dataset.lineChange = '1';
-                    el.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                }}
-            }}
-            if (next) next.classList.add('md-line--active');
-        }}
-    }});
-}})()"#
-    )
-}
-
-// Intercepts Enter on list lines and inserts the correct continuation prefix.
-fn js_setup_keyboard(id: &str) -> String {
-    format!(
-        r#"(function() {{
-    const el = document.getElementById({id:?});
-    if (!el || el.dataset.kbSetup) return;
-    el.dataset.kbSetup = '1';
-    el.addEventListener('keydown', function(e) {{
-        if (e.key !== 'Enter' || e.shiftKey || e.ctrlKey || e.metaKey) return;
-        const sel = window.getSelection();
-        if (!sel || !sel.rangeCount) return;
-        // Walk up to the containing md-line div.
-        let node = sel.anchorNode;
-        if (node && node.nodeType !== 1) node = node.parentElement;
-        while (node && node !== el) {{
-            if (node.classList && node.classList.contains('md-line')) break;
-            node = node.parentElement;
-        }}
-        if (!node || node === el) return;
-        // textContent includes hidden marker text regardless of font-size CSS.
-        const line = node.textContent;
-        let prefix = null;
-        let markerLen = 0;
-        // Task item: `- [ ] ` / `- [x] ` (with optional indent).
-        const taskM = line.match(/^(\s*[-*+] )\[[ xX]\] /);
-        if (taskM) {{
-            markerLen = taskM[0].length;
-            prefix = '\n' + taskM[1] + '[ ] ';
-        }} else {{
-            // Ordered list: `1. ` `2. ` …
-            const olM = line.match(/^(\s*)(\d+)\. /);
-            if (olM) {{
-                markerLen = olM[0].length;
-                prefix = '\n' + olM[1] + (parseInt(olM[2]) + 1) + '. ';
-            }} else {{
-                // Unordered list: `- ` / `* ` / `+ `
-                const ulM = line.match(/^(\s*)([-*+]) /);
-                if (ulM) {{
-                    markerLen = ulM[0].length;
-                    prefix = '\n' + ulM[1] + ulM[2] + ' ';
-                }}
-            }}
-        }}
-        if (!prefix) return;
-        // If the line has no content beyond the marker, exit the list instead.
-        if (line.slice(markerLen).trim() === '') return;
-        e.preventDefault();
-        document.execCommand('insertText', false, prefix);
-    }});
-}})()"#
-    )
-}
-
-// Reads innerText and cursor offset together, then sends "cursor_offset\ntext".
-// If a navigate or task-checkbox click was recorded, sends those first.
-fn js_read_state(id: &str) -> String {
-    format!(
-        r#"(function() {{
-    const el = document.getElementById({id:?});
-    if (!el) {{ dioxus.send("-1\n"); return; }}
-    if (el._navClick) {{
-        const url = el._navClick;
-        el._navClick = null;
-        dioxus.send('nav:' + url);
-        return;
-    }}
-    if (el._taskClick) {{
-        const tc = el._taskClick;
-        el._taskClick = null;
-        dioxus.send('cb:' + tc.pos + ':' + (tc.checked ? '1' : '0'));
-        return;
-    }}
-    const text = el.innerText;
-    const sel = window.getSelection();
-    let cursor = -1;
-    if (sel && sel.rangeCount > 0) {{
-        const range = sel.getRangeAt(0);
-        if (el.contains(range.startContainer)) {{
-            let offset = 0;
-            const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
-            while (walker.nextNode()) {{
-                if (walker.currentNode === range.startContainer) {{
-                    cursor = offset + range.startOffset;
-                    break;
-                }}
-                offset += walker.currentNode.textContent.length;
-            }}
-        }}
-    }}
-    if (el.dataset.lineChange) {{
-        el.dataset.lineChange = '';
-        dioxus.send('linechange\n' + cursor + '\n' + text);
-        return;
-    }}
-    dioxus.send(cursor + "\n" + text);
-}})()"#
-    )
-}
-
-// Escapes a Rust string for use as a JS double-quoted string literal.
-fn js_str(s: &str) -> String {
-    let mut out = String::from('"');
-    for ch in s.chars() {
-        match ch {
-            '"'  => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            c if (c as u32) < 0x20 => {
-                use std::fmt::Write;
-                let _ = write!(out, "\\u{:04x}", c as u32);
-            }
-            c => out.push(c),
-        }
-    }
-    out.push('"');
-    out
-}
-
-// Sets innerHTML directly (bypassing the Dioxus render cycle) and immediately
-// restores the cursor — both synchronously, so they can't race each other.
-fn js_apply_html_and_restore_cursor(id: &str, new_html: &str, cursor: i64) -> String {
-    let html_js = js_str(new_html);
-    format!(
-        r#"(function() {{
-    const el = document.getElementById({id:?});
-    if (!el) return;
-    el.dataset.rendering = '1';
-    el.innerHTML = {html_js};
-    if ({cursor} >= 0) {{
-        let remaining = {cursor};
-        const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
-        while (walker.nextNode()) {{
-            const len = walker.currentNode.textContent.length;
-            if (remaining <= len) {{
-                try {{
-                    const range = document.createRange();
-                    range.setStart(walker.currentNode, remaining);
-                    range.collapse(true);
-                    window.getSelection().removeAllRanges();
-                    window.getSelection().addRange(range);
-                }} catch(_) {{}}
-                return;
-            }}
-            remaining -= len;
-        }}
-    }}
-    // Clear the flag after the selectionchange triggered by innerHTML has fired.
-    setTimeout(function() {{ el.dataset.rendering = ''; }}, 0);
-}})()"#
-    )
-}
+// The editor's DOM glue lives in `assets/markdown_area.js`. `use_js!` turns each
+// exported function into an async Rust fn (returning `Result<_, JsError>`) and
+// serializes arguments across the boundary — replacing the old `format!`-built
+// eval strings and the hand-rolled `js_str` escaper.
+use_js!("assets/markdown_area.js"::{
+    setup_tasks,
+    setup_selection,
+    setup_keyboard,
+    read_state,
+    apply_html_and_restore_cursor
+});
 
 // ── HTML rendering ────────────────────────────────────────────────────────────
 
@@ -561,19 +351,27 @@ pub fn MarkdownArea(
     });
 
     use_effect(move || {
-        document::eval(&js_setup_tasks(&id()));
-        document::eval(&js_setup_selection(&id()));
-        document::eval(&js_setup_keyboard(&id()));
+        let editor_id = id();
+        spawn(async move {
+            // Register the editor's DOM listeners. Pure-JS bindings return a
+            // generic `T: DeserializeOwned`, so the `Result<(), _>` annotation
+            // pins it to the unit type.
+            let _: Result<(), _> = setup_tasks(&editor_id).await;
+            let _: Result<(), _> = setup_selection(&editor_id).await;
+            let _: Result<(), _> = setup_keyboard(&editor_id).await;
+        });
     });
 
     let handle_input = move |_: Event<FormData>| {
         let editor_id = id();
         spawn(async move {
-            let Ok(payload) = document::eval(&js_read_state(&editor_id))
-                .recv::<String>()
-                .await
-            else {
-                return;
+            let payload: Result<String, _> = read_state(&editor_id).await;
+            let payload = match payload {
+                Ok(p) => p,
+                Err(e) => {
+                    log::info!("[oxidian] read_state(input) ERROR: {e:?}");
+                    return;
+                }
             };
 
             if let Some(rest) = payload.strip_prefix("linechange\n") {
@@ -585,18 +383,20 @@ pub fn MarkdownArea(
                 // will sync it on the next blur.
                 let (cursor_str, text) = rest.split_once('\n').unwrap_or(("-1", rest));
                 let cursor: i64 = cursor_str.parse().unwrap_or(-1);
-                // Chrome appends a trailing \n to innerText of contenteditable
-                // divs; strip it to avoid accumulating blank lines.
-                let text = text.trim_end_matches('\n').to_string();
+                // `text` now comes from `lineTextAndCursor` (one '\n' per line
+                // boundary), so a trailing '\n' is a real empty last line the
+                // caret may sit on — don't strip it, or that line (and its
+                // caret target) disappears on re-render.
+                let text = text.to_string();
                 content.set(text.clone());
-                // cursor = -1 means the selection is in an element with no
-                // text nodes (e.g. a freshly Enter-created empty line).
-                // Skip the re-render in that case — the DOM is untouched so
-                // the cursor stays put, and formatting syncs on blur.
+                // cursor = -1 only when there is no caret in the editor; with
+                // line-deterministic offsets even empty/blank lines get a real
+                // offset, so leaving a block now re-renders on mobile too.
                 if cursor >= 0 {
                     let tokens = tokenize(&text);
                     let new_html = tokens_to_html(&text, &tokens);
-                    document::eval(&js_apply_html_and_restore_cursor(&editor_id, &new_html, cursor));
+                    let _: Result<(), _> =
+                        apply_html_and_restore_cursor(&editor_id, &new_html, cursor).await;
                 }
             } else {
                 // Normal keystroke: update content only; rendered_html stays
@@ -613,10 +413,8 @@ pub fn MarkdownArea(
     let handle_click = move || {
         let editor_id = id();
         spawn(async move {
-            let Ok(payload) = document::eval(&js_read_state(&editor_id))
-                .recv::<String>()
-                .await
-            else {
+            let payload: Result<String, _> = read_state(&editor_id).await;
+            let Ok(payload) = payload else {
                 return;
             };
 

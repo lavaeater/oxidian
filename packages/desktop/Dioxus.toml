@@ -1,0 +1,9 @@
+[application]
+name = "Oxidian"
+version = "0.1.0"
+
+[bundle]
+identifier = "com.oxidian.app"
+publisher = "Oxidian"
+icon = ["assets/favicon.ico"]
+application_name = "Oxidian"

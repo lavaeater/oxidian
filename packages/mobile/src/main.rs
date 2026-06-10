@@ -1,12 +1,21 @@
 use dioxus::prelude::*;
 use vault::GithubConfig;
 
+use app::MAIN_CSS;
 use app::state;
 use app::views::{Settings, VaultBrowser};
 
-const MAIN_CSS: Asset = asset!("/assets/main.css");
-
 fn main() {
+    // Route Rust logging to logcat so `adb logcat -s oxidian` shows our
+    // diagnostics. Dioxus does not install an Android logger itself, and the
+    // native `println!` used elsewhere never reaches logcat — without this the
+    // mobile build is effectively un-debuggable.
+    #[cfg(target_os = "android")]
+    android_logger::init_once(
+        android_logger::Config::default()
+            .with_max_level(log::LevelFilter::Info)
+            .with_tag("oxidian"),
+    );
     dioxus::launch(App);
 }
 

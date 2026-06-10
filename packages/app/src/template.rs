@@ -10,29 +10,10 @@ pub struct TemplateMeta {
     pub body: String,
 }
 
-// ── Date variables via JS ─────────────────────────────────────────────────────
-
-pub const JS_DATE_VARS: &str = r#"
-const __d = new Date();
-const __months = ['January','February','March','April','May','June',
-                  'July','August','September','October','November','December'];
-const __days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-const __pad = n => String(n).padStart(2, '0');
-const __jan4 = new Date(__d.getFullYear(), 0, 4);
-const __dow = __jan4.getDay() || 7;
-const __weekStart = new Date(__jan4);
-__weekStart.setDate(__jan4.getDate() - __dow + 1);
-const __week = Math.max(1, Math.floor((__d - __weekStart) / 604800000) + 1);
-dioxus.send(JSON.stringify({
-    year:      String(__d.getFullYear()),
-    yearShort: String(__d.getFullYear()).slice(-2),
-    month:     __pad(__d.getMonth() + 1),
-    monthName: __months[__d.getMonth()],
-    date:      __pad(__d.getDate()),
-    dayName:   __days[__d.getDay()],
-    week:      __pad(__week)
-}));
-"#;
+// ── Date variables ────────────────────────────────────────────────────────────
+//
+// The date variables themselves are produced by `js::date_vars()` (see
+// `assets/oxidian.js`) and parsed into `TemplateVars` below.
 
 pub struct TemplateVars {
     pub year: String,

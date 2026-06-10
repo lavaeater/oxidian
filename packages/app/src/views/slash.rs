@@ -1,83 +1,8 @@
 use dioxus::prelude::*;
 use crate::template::TemplateMeta;
 
-// JS: returns the text typed after the most recent `/` on the current line,
-// or "" if the cursor is not right after a `/…` token.
-// Sentinel returned when the cursor is NOT right after a `/…` token.
-// Distinct from "" which means "cursor is directly after `/` with no query yet".
-pub const JS_NO_SLASH: &str = "\x00";
-
-pub const JS_SLASH_QUERY: &str = r#"
-(function() {
-    const NO_SLASH = '\x00';
-    const el = document.querySelector('.md-area[contenteditable="true"]');
-    if (!el) { dioxus.send(NO_SLASH); return; }
-    const sel = window.getSelection();
-    if (!sel || !sel.rangeCount || !el.contains(sel.anchorNode)) {
-        dioxus.send(NO_SLASH); return;
-    }
-    const range = sel.getRangeAt(0);
-    let offset = range.startOffset;
-    let node = range.startContainer;
-    let collected = '';
-    // Walk backwards through text nodes
-    while (true) {
-        const text = (node.textContent || '').slice(0, offset);
-        for (let i = text.length - 1; i >= 0; i--) {
-            const ch = text[i];
-            if (ch === '/') { dioxus.send(collected); return; }
-            if (/[\s\n]/.test(ch)) { dioxus.send(NO_SLASH); return; }
-            collected = ch + collected;
-        }
-        // Previous text node
-        const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
-        let prev = null, cur = walk.nextNode();
-        while (cur && cur !== node) { prev = cur; cur = walk.nextNode(); }
-        if (!prev) { dioxus.send(NO_SLASH); return; }
-        node = prev; offset = prev.textContent.length;
-    }
-})();
-"#;
-
-// Replaces the `/query` token at the cursor with `snippet`.
-// `slash_len` = 1 (the `/`) + query.len()
-pub fn js_apply_slash(snippet: &str, slash_len: usize) -> String {
-    let escaped = snippet.replace('`', "\\`").replace("${", "\\${");
-    format!(r#"
-(function() {{
-    const el = document.querySelector('.md-area[contenteditable="true"]');
-    if (!el) return;
-    const sel = window.getSelection();
-    if (!sel || !sel.rangeCount) return;
-    const range = sel.getRangeAt(0);
-    let remaining = {slash_len}, cur = range.startContainer, off = range.startOffset;
-    while (remaining > 0 && cur) {{
-        const take = Math.min(off, remaining);
-        cur.textContent = cur.textContent.slice(0, off - take) + cur.textContent.slice(off);
-        off -= take; remaining -= take;
-        if (remaining > 0) {{
-            const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
-            let prev = null, c = w.nextNode();
-            while (c && c !== cur) {{ prev = c; c = w.nextNode(); }}
-            if (!prev) break;
-            cur = prev; off = prev.textContent.length;
-        }}
-    }}
-    const snippet = `{escaped}`;
-    cur.textContent = cur.textContent.slice(0, off) + snippet + cur.textContent.slice(off);
-    // Cursor placement: between markers for [[]], ****, or after snippet
-    let cursor = off + snippet.length;
-    if (snippet === '[[]]') cursor = off + 2;
-    else if (snippet === '****') cursor = off + 2;
-    else if (snippet === '**') cursor = off + 1;
-    const r2 = document.createRange();
-    r2.setStart(cur, Math.min(cursor, cur.textContent.length));
-    r2.collapse(true);
-    sel.removeAllRanges(); sel.addRange(r2);
-    el.dispatchEvent(new Event('input', {{ bubbles: true }}));
-}})();
-"#)
-}
+// The slash-query read and the `/query` → snippet replacement now live in
+// `assets/oxidian.js`, bound as `js::slash_query()` / `js::apply_slash()`.
 
 // ── Slash commands catalogue ──────────────────────────────────────────────────
 

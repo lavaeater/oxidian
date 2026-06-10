@@ -164,15 +164,7 @@ pub fn Settings(
                                     class: "settings-copy-btn",
                                     r#type: "button",
                                     title: "Copy code",
-                                    onclick: move |_| {
-                                        let code = user_code.clone();
-                                        spawn(async move {
-                                            let _ = document::eval(&format!(
-                                                "navigator.clipboard.writeText('{}').catch(()=>{{}})",
-                                                code
-                                            )).await;
-                                        });
-                                    },
+                                    onclick: move |_| crate::js::copy_to_clipboard(user_code.clone()),
                                     "Copy"
                                 }
                             }

@@ -8,11 +8,22 @@ members = [
     "packages/desktop",
     "packages/mobile",
 ]
+exclude = ["dioxus-use-js"]
 
 [workspace.dependencies]
 dioxus = { version = "0.8.0-alpha.0" }
 lucide-dioxus = { version="3.11.0", features=["all-icons"] }
+dioxus-use-js = { git ="https://github.com/lavaeater/dioxus-use-js.git", branch="dioxus-v0.8.0" }
+log = "0.4"
 # workspace
 ui = { path = "packages/ui" }
 vault = { path = "packages/vault" }
 app = { path = "packages/app" }
+
+# TEMPORARY: build against the local `dioxus-use-js` submodule, which carries the
+# Android `import()` fix (resolve module specifier against `document.baseURI`; see the
+# submodule's macro). Once that commit is pushed to lavaeater/dioxus-use-js and the git
+# dep below is bumped (`cargo update -p dioxus-use-js`), delete this whole [patch] block.
+[patch."https://github.com/lavaeater/dioxus-use-js.git"]
+dioxus-use-js = { path = "dioxus-use-js/dioxus-use-js" }
+dioxus-use-js-macro = { path = "dioxus-use-js/dioxus-use-js-macro" }

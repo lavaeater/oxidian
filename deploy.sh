@@ -27,7 +27,7 @@ echo "📦 Zipping contents of '$FOLDER'..."
 (
   cd "$FOLDER"
   rm -f "../$ZIP_FILE"
-  zip -r "../$ZIP_FILE" . -x "*.git*" -x "../$ZIP_FILE"
+  zip -r "../$ZIP_FILE" . -x "*.git*" -x "./$ZIP_FILE"
 )
 
 # === CREATE DEPLOYMENT ===
@@ -39,7 +39,9 @@ JOB_ID=$(echo "$DEPLOYMENT" | jq -r '.jobId')
 # === UPLOAD FILE ===
 echo "⬆️ Uploading build to Amplify (via pre-signed S3 URL)..."
 
-curl -s -T "../$ZIP_FILE" "$UPLOAD_URL"
+ls 
+
+curl -s -T "target/dx/web/release/web/$ZIP_FILE" "$UPLOAD_URL"
 
 # === START DEPLOYMENT ===
 echo "▶️ Starting deployment job..."

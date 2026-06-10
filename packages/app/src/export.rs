@@ -204,22 +204,6 @@ fn escape_html(s: &str) -> String {
      .replace('"', "&quot;")
 }
 
-// ── Download trigger ──────────────────────────────────────────────────────────
-
-/// Triggers a browser file download of `content` with `filename` via JS eval.
-pub fn download_html(filename: &str, content: &str) -> String {
-    let escaped = content
-        .replace('\\', "\\\\")
-        .replace('`', "\\`")
-        .replace("${", "\\${");
-    format!(r#"
-(function() {{
-    const blob = new Blob([`{escaped}`], {{type: 'text/html'}});
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = {filename:?};
-    a.click();
-    URL.revokeObjectURL(a.href);
-}})();
-"#)
-}
+// The actual browser download is triggered by `js::download_file()`
+// (see `assets/oxidian.js`), which takes the filename and rendered HTML
+// directly — no manual string escaping.
