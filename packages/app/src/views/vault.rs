@@ -158,6 +158,80 @@ impl SaveStatus {
 #[derive(Clone, PartialEq)]
 enum Panel { Files, Search, Backlinks, Graph, Bookmarks, Kanban }
 
+// ── Command palette ─────────────────────────────────────────────────────────
+// Every action reachable from the Command Palette (Ctrl/⌘-P). `VaultBrowser`
+// owns the dispatch (`run_cmd`); the palette UI just lists these and reports the
+// chosen one back. Keep `ALL` in display order.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Cmd {
+    QuickSwitcher,
+    NewFile,
+    NewFolder,
+    DailyNote,
+    ExportHtml,
+    ToggleSidebar,
+    ToggleSplit,
+    GoFiles,
+    GoSearch,
+    GoBacklinks,
+    GoGraph,
+    GoBookmarks,
+    GoKanban,
+}
+
+impl Cmd {
+    const ALL: &'static [Cmd] = &[
+        Cmd::QuickSwitcher, Cmd::NewFile, Cmd::NewFolder, Cmd::DailyNote, Cmd::ExportHtml,
+        Cmd::ToggleSidebar, Cmd::ToggleSplit,
+        Cmd::GoFiles, Cmd::GoSearch, Cmd::GoBacklinks, Cmd::GoGraph, Cmd::GoBookmarks, Cmd::GoKanban,
+    ];
+
+    fn title(self) -> &'static str {
+        match self {
+            Cmd::QuickSwitcher => "Go to file…",
+            Cmd::NewFile       => "New note",
+            Cmd::NewFolder     => "New folder",
+            Cmd::DailyNote     => "Open today's daily note",
+            Cmd::ExportHtml    => "Export current note as HTML",
+            Cmd::ToggleSidebar => "Toggle sidebar",
+            Cmd::ToggleSplit   => "Toggle editor split",
+            Cmd::GoFiles       => "Show: Files",
+            Cmd::GoSearch      => "Show: Search",
+            Cmd::GoBacklinks   => "Show: Backlinks",
+            Cmd::GoGraph       => "Show: Graph",
+            Cmd::GoBookmarks   => "Show: Bookmarks",
+            Cmd::GoKanban      => "Show: Kanban",
+        }
+    }
+
+    /// Shortcut hint shown on the right of the row (empty if none).
+    fn hint(self) -> &'static str {
+        match self {
+            Cmd::QuickSwitcher => "Ctrl/⌘ O",
+            _ => "",
+        }
+    }
+
+    /// Extra search terms so commands are findable by intent, not just title.
+    fn keywords(self) -> &'static str {
+        match self {
+            Cmd::QuickSwitcher => "switch open jump find",
+            Cmd::NewFile       => "create page",
+            Cmd::NewFolder     => "create directory",
+            Cmd::DailyNote     => "today journal calendar",
+            Cmd::ExportHtml    => "download save html",
+            Cmd::ToggleSidebar => "hide show panel",
+            Cmd::ToggleSplit   => "pane two columns",
+            Cmd::GoFiles       => "tree explorer",
+            Cmd::GoSearch      => "find grep",
+            Cmd::GoBacklinks   => "links references",
+            Cmd::GoGraph       => "network",
+            Cmd::GoBookmarks   => "saved pinned",
+            Cmd::GoKanban      => "board",
+        }
+    }
+}
+
 // ── Tabs ────────────────────────────────────────────────────────────────────
 //
 // Each editor pane keeps an ordered list of open tabs plus its active path.
@@ -252,6 +326,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
     let mut sidebar_open = use_signal(|| true);
     let mut bookmarks: Signal<Vec<String>> = use_signal(Vec::new);
     let mut show_switcher = use_signal(|| false);
+    let mut show_palette = use_signal(|| false);
     let mut show_new_file = use_signal(|| false);
     let mut show_new_folder = use_signal(|| false);
     let mut new_file_result: Signal<Option<String>> = use_signal(|| None);
@@ -360,6 +435,75 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
     let cfg_delete = config.clone();
     let cfg_move = config.clone();
 
+    // ── Command actions ───────────────────────────────────────────────────────
+    // Shared, Copy callbacks so the same logic runs from a toolbar button, the
+    // command palette, and a keyboard shortcut.
+
+    // Open (or create) today's daily note. Extracted from the sidebar button so
+    // the palette can trigger it too.
+    let run_daily = use_callback(move |_: ()| {
+        let cfg = cfg_daily.clone();
+        let tmpl_path = cfg.daily_note_template.clone();
+        let tmpl = templates.read().iter().find(|t| t.source_path == tmpl_path).cloned();
+        let open_mbx = focused_open_mbx();
+        spawn(async move {
+            if let Some(meta) = tmpl {
+                apply_template(&meta, &cfg, files, open_mbx, load_error, "").await;
+            } else {
+                let date = crate::dates::today().await;
+                if date.is_empty() { return; }
+                let path = format!("{date}.md");
+                let _ = vault::dispatch::create_file(
+                    &cfg, &path, &format!("# {date}\n\n"), &format!("Daily note {date}"),
+                ).await;
+                if let Ok(mut list) = vault::dispatch::list_files(&cfg).await {
+                    list.sort_by(|a, b| a.path.cmp(&b.path));
+                    files.set(list);
+                }
+                open_focused(path);
+            }
+            show_switcher.set(false);
+            sidebar_open.set(false);
+        });
+    });
+
+    // Export the focused note as standalone HTML (uses the focused-pane mirrors).
+    let run_export = use_callback(move |_: ()| {
+        if let Some(p) = active_path() {
+            let title = p.rsplit('/').next().unwrap_or(&p).trim_end_matches(".md").to_string();
+            let html = export::to_html(&title, &content.read());
+            js::download_file(format!("{title}.html"), html);
+        }
+    });
+
+    // Central palette dispatcher.
+    let run_cmd = use_callback(move |cmd: Cmd| {
+        match cmd {
+            Cmd::QuickSwitcher => show_switcher.set(true),
+            Cmd::NewFile       => show_new_file.set(true),
+            Cmd::NewFolder     => show_new_folder.set(true),
+            Cmd::DailyNote     => run_daily.call(()),
+            Cmd::ExportHtml    => run_export.call(()),
+            Cmd::ToggleSidebar => sidebar_open.set(!sidebar_open()),
+            Cmd::ToggleSplit   => split.set(!split()),
+            Cmd::GoFiles       => panel.set(Panel::Files),
+            Cmd::GoSearch      => panel.set(Panel::Search),
+            Cmd::GoBacklinks   => panel.set(Panel::Backlinks),
+            Cmd::GoGraph       => panel.set(Panel::Graph),
+            Cmd::GoBookmarks   => panel.set(Panel::Bookmarks),
+            Cmd::GoKanban      => panel.set(Panel::Kanban),
+        }
+        show_palette.set(false);
+    });
+
+    // Global keyboard shortcuts (web/desktop; harmless no-op on mobile).
+    let on_shortcut = use_callback(move |id: String| match id.as_str() {
+        "palette"  => show_palette.set(true),
+        "switcher" => show_switcher.set(true),
+        _ => {}
+    });
+    crate::shortcuts::use_global_shortcuts(on_shortcut);
+
     let handle_delete = move |file: FileMeta| {
         let cfg = cfg_delete.clone();
         spawn(async move {
@@ -462,36 +606,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                         button {
                             class: "sidebar-icon-btn",
                             title: "Today's note",
-                            onclick: move |_| {
-                                let cfg = cfg_daily.clone();
-                                let tmpl_path = cfg.daily_note_template.clone();
-                                let tmpl = templates.read().iter()
-                                    .find(|t| t.source_path == tmpl_path)
-                                    .cloned();
-                                let open_mbx = focused_open_mbx();
-                                spawn(async move {
-                                    if let Some(meta) = tmpl {
-                                        apply_template(&meta, &cfg, files, open_mbx, load_error, "").await;
-                                    } else {
-                                        // Fallback: simple YYYY-MM-DD.md note
-                                        let date = crate::dates::today().await;
-                                        if date.is_empty() { return; }
-                                        let path = format!("{date}.md");
-                                        let _ = vault::dispatch::create_file(
-                                            &cfg, &path,
-                                            &format!("# {date}\n\n"),
-                                            &format!("Daily note {date}"),
-                                        ).await;
-                                        if let Ok(mut list) = vault::dispatch::list_files(&cfg).await {
-                                            list.sort_by(|a, b| a.path.cmp(&b.path));
-                                            files.set(list);
-                                        }
-                                        open_focused(path);
-                                    }
-                                    show_switcher.set(false);
-                                    sidebar_open.set(false);
-                                });
-                            },
+                            onclick: move |_| run_daily.call(()),
                             IcoCalendar { size: 16 }
                         }
                         button {
@@ -726,6 +841,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                         on_close_pane: None,
                         on_send_other: move |p: String| { open_in_pane(tabs_b, active_b, p); focused.set(1); split.set(true); },
                         on_back: move |_| sidebar_open.set(true),
+                        on_palette: move |_| show_palette.set(true),
                     }
                     if split() {
                         EditorPane {
@@ -747,6 +863,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                             on_close_pane: Some(EventHandler::new(move |_| { split.set(false); focused.set(0); })),
                             on_send_other: move |p: String| { open_in_pane(tabs_a, active_a, p); focused.set(0); },
                             on_back: move |_| sidebar_open.set(true),
+                            on_palette: move |_| show_palette.set(true),
                         }
                     }
                 }
@@ -795,6 +912,14 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                         show_switcher.set(false);
                     },
                     on_close: move |_| show_switcher.set(false),
+                }
+            }
+
+            // ── Command Palette ──────────────────────────────────────────────
+            if show_palette() {
+                CommandPalette {
+                    on_run: move |cmd: Cmd| run_cmd.call(cmd),
+                    on_close: move |_| show_palette.set(false),
                 }
             }
 
@@ -858,6 +983,7 @@ fn EditorPane(
     on_close_pane: Option<EventHandler<()>>,
     on_send_other: EventHandler<String>,
     on_back: EventHandler<()>,
+    on_palette: EventHandler<()>,
 ) -> Element {
     let content = use_signal(String::new);
     let mut file_sha: Signal<String> = use_signal(String::new);
@@ -1077,6 +1203,12 @@ fn EditorPane(
                     }
                     span { class: "editor-filename", "{path}" }
                     div { class: "editor-meta",
+                        button {
+                            class: "editor-icon-btn",
+                            title: "Command palette (Ctrl/⌘ P)",
+                            onclick: move |_| on_palette.call(()),
+                            IcoLayoutList { size: 15 }
+                        }
                         button {
                             class: if is_bookmarked { "editor-icon-btn editor-icon-btn--active" } else { "editor-icon-btn" },
                             title: if is_bookmarked { "Remove bookmark" } else { "Add bookmark" },
@@ -1573,6 +1705,69 @@ fn QuickSwitcher(
                                 onclick: move |_| on_select(path.clone()),
                                 span { class: "qs-item-name", "{name}" }
                                 if !dir.is_empty() { span { class: "qs-item-dir", "{dir}" } }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ── Command palette ───────────────────────────────────────────────────────────
+
+#[component]
+fn CommandPalette(on_run: EventHandler<Cmd>, on_close: EventHandler<()>) -> Element {
+    let mut query = use_signal(String::new);
+
+    use_effect(move || {
+        js::focus_selector(".qs-input");
+    });
+
+    let q = query.read().to_lowercase();
+    let mut matches: Vec<Cmd> = Cmd::ALL.iter().copied()
+        .filter(|c| {
+            q.is_empty()
+                || fuzzy_match(&c.title().to_lowercase(), &q)
+                || c.keywords().contains(&q)
+        })
+        .collect();
+    if !q.is_empty() {
+        matches.sort_by(|a, b| fuzzy_score(b.title(), &q).cmp(&fuzzy_score(a.title(), &q)));
+    }
+    let first = matches.first().copied();
+    let empty = matches.is_empty();
+
+    rsx! {
+        div {
+            class: "qs-overlay",
+            onclick: move |_| on_close(()),
+            div {
+                class: "qs-modal",
+                onclick: move |e| e.stop_propagation(),
+                input {
+                    class: "qs-input", placeholder: "Run a command…", autofocus: true,
+                    value: "{query}",
+                    oninput: move |e| query.set(e.value()),
+                    onkeydown: move |e| {
+                        if e.key() == Key::Escape { on_close(()); }
+                        if e.key() == Key::Enter {
+                            if let Some(c) = first { on_run(c); }
+                        }
+                    },
+                }
+                if empty {
+                    div { class: "qs-empty", "No matching commands" }
+                } else {
+                    div { class: "qs-results",
+                        for c in matches {
+                            div {
+                                class: "qs-item",
+                                onclick: move |_| on_run(c),
+                                span { class: "qs-item-name", "{c.title()}" }
+                                if !c.hint().is_empty() {
+                                    span { class: "qs-item-dir", "{c.hint()}" }
+                                }
                             }
                         }
                     }
