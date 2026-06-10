@@ -1529,7 +1529,6 @@ dependencies = [
 [[package]]
 name = "dioxus-use-js"
 version = "0.4.7"
-source = "git+https://github.com/lavaeater/dioxus-use-js.git?branch=dioxus-v0.8.0#a310e90d1a41c3e7bcc0553bbfe9ce06838e33a5"
 dependencies = [
  "dioxus",
  "dioxus-use-js-macro",
@@ -1540,7 +1539,6 @@ dependencies = [
 [[package]]
 name = "dioxus-use-js-macro"
 version = "0.4.7"
-source = "git+https://github.com/lavaeater/dioxus-use-js.git?branch=dioxus-v0.8.0#a310e90d1a41c3e7bcc0553bbfe9ce06838e33a5"
 dependencies = [
  "base64",
  "blake3",
