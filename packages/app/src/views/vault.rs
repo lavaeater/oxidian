@@ -232,6 +232,14 @@ impl Cmd {
     }
 }
 
+/// What a Command Palette row does when chosen: a built-in command, or
+/// create/open a note from one of the vault's templates.
+#[derive(Clone, PartialEq)]
+enum PaletteAction {
+    Cmd(Cmd),
+    Template(TemplateMeta),
+}
+
 // ── Tabs ────────────────────────────────────────────────────────────────────
 //
 // Each editor pane keeps an ordered list of open tabs plus its active path.
@@ -434,6 +442,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
     let cfg_newfile = config.clone();
     let cfg_delete = config.clone();
     let cfg_move = config.clone();
+    let cfg_tmpl_run = config.clone();
 
     // ── Command actions ───────────────────────────────────────────────────────
     // Shared, Copy callbacks so the same logic runs from a toolbar button, the
@@ -465,6 +474,21 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
             show_switcher.set(false);
             sidebar_open.set(false);
         });
+    });
+
+    // Create/open a note from a template (same path as the slash menu and daily
+    // note), but chosen from the Command Palette.
+    let run_template = use_callback(move |meta: TemplateMeta| {
+        let cfg = cfg_tmpl_run.clone();
+        let open_mbx = focused_open_mbx();
+        let current_dir = active_path()
+            .and_then(|p| p.rfind('/').map(|i| p[..i].to_string()))
+            .unwrap_or_default();
+        spawn(async move {
+            apply_template(&meta, &cfg, files, open_mbx, load_error, &current_dir).await;
+        });
+        show_palette.set(false);
+        sidebar_open.set(false);
     });
 
     // Export the focused note as standalone HTML (uses the focused-pane mirrors).
@@ -918,7 +942,11 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
             // ── Command Palette ──────────────────────────────────────────────
             if show_palette() {
                 CommandPalette {
-                    on_run: move |cmd: Cmd| run_cmd.call(cmd),
+                    templates: templates.read().clone(),
+                    on_run: move |action: PaletteAction| match action {
+                        PaletteAction::Cmd(c) => run_cmd.call(c),
+                        PaletteAction::Template(t) => run_template.call(t),
+                    },
                     on_close: move |_| show_palette.set(false),
                 }
             }
@@ -1074,13 +1102,8 @@ fn EditorPane(
     use_effect(move || {
         let current = content();
         if loading_file() || current.is_empty() || current == saved_content() {
-            console_log(&format!(
-                "[oxidian] auto-save: skip (loading={}, empty={}, unchanged={})",
-                loading_file(), current.is_empty(), current == saved_content()
-            ));
             return;
         }
-        console_log(&format!("[oxidian] auto-save: edit detected, {} bytes, starting countdown", current.len()));
         let this_gen = *edit_gen.peek() + 1;
         edit_gen.set(this_gen);
         save_status.set(SaveStatus::Countdown(5));
@@ -1095,18 +1118,13 @@ fn EditorPane(
             if edit_gen() != this_gen { return; }
             let Some(path) = active() else { return };
             let sha = file_sha();
-            if sha.is_empty() {
-                console_log("[oxidian] auto-save: aborted — file_sha is empty");
-                return;
-            }
+            if sha.is_empty() { return; }
             let snapshot = content();
             if snapshot == saved_content() { return; }
             save_status.set(SaveStatus::Saving);
-            console_log(&format!("[oxidian] auto-save: writing {path} ({} bytes, sha={sha})", snapshot.len()));
             let name = path.rsplit('/').next().unwrap_or(&path).to_string();
             match vault::dispatch::write_file(&cfg, &path, &snapshot, &sha, &format!("Update {name}")).await {
                 Ok(new_sha) => {
-                    console_log(&format!("[oxidian] auto-save: OK, new sha={new_sha}"));
                     index.with_mut(|idx| idx.reindex_file(&path, &snapshot));
                     file_sha.set(new_sha);
                     saved_content.set(snapshot);
@@ -1717,25 +1735,39 @@ fn QuickSwitcher(
 // ── Command palette ───────────────────────────────────────────────────────────
 
 #[component]
-fn CommandPalette(on_run: EventHandler<Cmd>, on_close: EventHandler<()>) -> Element {
+fn CommandPalette(
+    templates: Vec<TemplateMeta>,
+    on_run: EventHandler<PaletteAction>,
+    on_close: EventHandler<()>,
+) -> Element {
     let mut query = use_signal(String::new);
 
     use_effect(move || {
         js::focus_selector(".qs-input");
     });
 
+    // Build the unified list: built-in commands first, then one row per template.
+    // (label, hint, keywords, action)
+    let mut items: Vec<(String, String, String, PaletteAction)> = Vec::new();
+    for c in Cmd::ALL.iter().copied() {
+        items.push((c.title().into(), c.hint().into(), c.keywords().into(), PaletteAction::Cmd(c)));
+    }
+    for t in &templates {
+        items.push((format!("Template: {}", t.name), "New note".into(), "template new note".into(),
+            PaletteAction::Template(t.clone())));
+    }
+
     let q = query.read().to_lowercase();
-    let mut matches: Vec<Cmd> = Cmd::ALL.iter().copied()
-        .filter(|c| {
-            q.is_empty()
-                || fuzzy_match(&c.title().to_lowercase(), &q)
-                || c.keywords().contains(&q)
+    let mut matches: Vec<(String, String, PaletteAction)> = items.into_iter()
+        .filter(|(label, _, keywords, _)| {
+            q.is_empty() || fuzzy_match(&label.to_lowercase(), &q) || keywords.contains(&q)
         })
+        .map(|(label, hint, _, action)| (label, hint, action))
         .collect();
     if !q.is_empty() {
-        matches.sort_by(|a, b| fuzzy_score(b.title(), &q).cmp(&fuzzy_score(a.title(), &q)));
+        matches.sort_by(|a, b| fuzzy_score(&b.0, &q).cmp(&fuzzy_score(&a.0, &q)));
     }
-    let first = matches.first().copied();
+    let first = matches.first().map(|(_, _, a)| a.clone());
     let empty = matches.is_empty();
 
     rsx! {
@@ -1752,7 +1784,7 @@ fn CommandPalette(on_run: EventHandler<Cmd>, on_close: EventHandler<()>) -> Elem
                     onkeydown: move |e| {
                         if e.key() == Key::Escape { on_close(()); }
                         if e.key() == Key::Enter {
-                            if let Some(c) = first { on_run(c); }
+                            if let Some(a) = &first { on_run(a.clone()); }
                         }
                     },
                 }
@@ -1760,13 +1792,13 @@ fn CommandPalette(on_run: EventHandler<Cmd>, on_close: EventHandler<()>) -> Elem
                     div { class: "qs-empty", "No matching commands" }
                 } else {
                     div { class: "qs-results",
-                        for c in matches {
+                        for (label, hint, action) in matches {
                             div {
                                 class: "qs-item",
-                                onclick: move |_| on_run(c),
-                                span { class: "qs-item-name", "{c.title()}" }
-                                if !c.hint().is_empty() {
-                                    span { class: "qs-item-dir", "{c.hint()}" }
+                                onclick: move |_| on_run(action.clone()),
+                                span { class: "qs-item-name", "{label}" }
+                                if !hint.is_empty() {
+                                    span { class: "qs-item-dir", "{hint}" }
                                 }
                             }
                         }

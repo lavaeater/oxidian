@@ -26,5 +26,13 @@ js-sys = "0.3"
 tokio = { version = "1", features = ["time"] }
 time = { version = "0.3", features = ["local-offset"] }
 
+# Desktop only: resolve the OS data dir for the native config store.
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
+dirs = "5"
+
 [target.'cfg(target_os = "android")'.dependencies]
 log = { workspace = true }
+# Native config store path: read the app's private files dir via JNI. Versions
+# match what wry/tao already pull in, so the JavaVM/context pointers are ABI-safe.
+jni = "0.21"
+ndk-context = "0.1"

@@ -29,23 +29,49 @@ mod bindings {
 
 // ── localStorage ──────────────────────────────────────────────────────────────
 
+// On native (desktop/mobile) these route to a filesystem-backed store instead
+// of the WebView's localStorage, which doesn't reliably survive a cold restart
+// on Android (the GitHub token was lost on every launch). Web keeps real
+// localStorage. See `crate::native_store`.
+
 /// Reads a `localStorage` key, returning `""` when absent.
 pub async fn ls_get(key: &str) -> String {
-    bindings::ls_get(key).await.unwrap_or_default()
+    #[cfg(target_arch = "wasm32")]
+    {
+        bindings::ls_get(key).await.unwrap_or_default()
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        crate::native_store::get(key)
+    }
 }
 
 pub fn ls_set(key: impl Into<String>, value: impl Into<String>) {
     let (key, value) = (key.into(), value.into());
-    spawn(async move {
-        let _: Result<(), _> = bindings::ls_set(key, value).await;
-    });
+    #[cfg(target_arch = "wasm32")]
+    {
+        spawn(async move {
+            let _: Result<(), _> = bindings::ls_set(key, value).await;
+        });
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        crate::native_store::set(&key, &value);
+    }
 }
 
 pub fn ls_remove(key: impl Into<String>) {
     let key = key.into();
-    spawn(async move {
-        let _: Result<(), _> = bindings::ls_remove(key).await;
-    });
+    #[cfg(target_arch = "wasm32")]
+    {
+        spawn(async move {
+            let _: Result<(), _> = bindings::ls_remove(key).await;
+        });
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        crate::native_store::remove(&key);
+    }
 }
 
 // ── Dates ─────────────────────────────────────────────────────────────────────

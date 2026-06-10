@@ -375,8 +375,6 @@ pub fn MarkdownArea(
             };
 
             if let Some(rest) = payload.strip_prefix("linechange\n") {
-                log::info!("[oxidian] linechange re-render, cursor={}",
-                    rest.split_once('\n').map(|(c, _)| c).unwrap_or("?"));
                 // Active line changed: re-render so block tokens (headings,
                 // lists, …) reformat immediately.
                 // We set innerHTML directly + restore cursor in one synchronous

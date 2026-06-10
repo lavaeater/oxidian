@@ -25,7 +25,8 @@ Below is a detailed status for every user story.
 | US 6.1 / 6.2 | **Outline pane** — live heading tree, click-to-scroll | ✅ Done |
 | US 8.1 / 8.2 | **Properties view** — YAML frontmatter editor, collapsible | ✅ Done |
 | US 9.1 | **Export as HTML** — standalone single-note export | ✅ Done |
-| US 10.1 / 10.2 | **Quick Switcher** — fuzzy file search modal | ✅ Done |
+| US 2.1 / 2.2 | **Command Palette** (Ctrl/⌘-P) — fuzzy command search + reusable global keyboard-shortcut framework (`shortcuts.rs`) | ✅ Done |
+| US 10.1 / 10.2 | **Quick Switcher** — fuzzy file search modal (Ctrl/⌘-O) | ✅ Done |
 | US 11.1 | **Global search** — full-text search across all notes | ✅ Done |
 | US 12.1 | **Slash commands** — `/` menu for tables, callouts, etc. | ✅ Done |
 | US 16.1 / 16.2 | **Word count** — live word count in editor status bar | ✅ Done |
@@ -53,9 +54,8 @@ Listed roughly by priority / dependency order. Filtered to the web + Android foc
 
 | US | Feature | Effort |
 |----|---------|--------|
-| US 2.1 / 2.2 | **Command Palette** (Ctrl/⌘-P) — fuzzy command search; hub for all commands (templates, periodic notes, …) | Medium |
-| US 14.1 / 14.2 | **Tags pane** — collects all `#tags`, click to search | Medium |
 | US 15.1 / 15.2 | **Templates** — folder setting + insert via slash/palette (*engine + daily-note done; general insertion remaining*) | Small–Medium |
+| US 14.1 / 14.2 | **Tags pane** — collects all `#tags`, click to search | Medium |
 | US 11.2 | Search filters (`path:`, `tag:`, `file:` prefixes) | Small |
 | US 3.2 / 3.3 | Weekly/Monthly notes; natural-language date parsing (`@today`, `@next friday`) | Medium |
 
@@ -103,8 +103,8 @@ Listed roughly by priority / dependency order. Filtered to the web + Android foc
 ```
 M0  Vault foundation            ✅ Done
 M1  Usable editor loop          ✅ Done (+ tabs/split, delete, drag-move)
-M2  Navigation & discovery      ✅ Search/Bookmarks/Backlinks/Outline/Quick Switcher
-                                 ⬜ Command Palette, Tags pane (remaining)
+M2  Navigation & discovery      ✅ Search/Bookmarks/Backlinks/Outline/Quick Switcher/Command Palette
+                                 ⬜ Tags pane (remaining)
 M3  Editing productivity        ✅ Slash, Properties, Toolbar, Daily note, template engine
                                  ⬜ Template insertion, Weekly/Monthly notes (remaining)
 M4  Local git (desktop)         ⬜ Deprioritized (desktop not a focus)
@@ -123,11 +123,13 @@ M8  Publish & export            ✅ Single-note HTML export
 
 Ordered for the web + Android focus (no desktop/local-git dependencies):
 
-1. **Command Palette** (US 2) — highest leverage; a single hub that ties together every command already built, and the natural home for template insertion and periodic-note commands.
-2. **Templates — general insertion** (US 15) — reuse the existing engine; expose "Insert template" via the palette/slash menu.
-3. **Tags pane** (US 14) — completes M2.
-4. **Hover preview** (US 7) — small effort, completes M5.
-5. **Search filters** (US 11.2) — small, makes search much more useful.
+1. **Templates — general insertion** (US 15) — *in progress*: reuse the existing engine; expose "Insert template" via the Command Palette (and slash menu).
+2. **Tags pane** (US 14) — completes M2.
+3. **Hover preview** (US 7) — small effort, completes M5.
+4. **Search filters** (US 11.2) — small, makes search much more useful.
+5. **Weekly/Monthly notes + natural-language dates** (US 3.2/3.3) — completes M3.
+
+*(Done: Command Palette + global keyboard-shortcut framework — US 2.)*
 
 ---
 
