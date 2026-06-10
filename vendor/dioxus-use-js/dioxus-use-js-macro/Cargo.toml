@@ -1,0 +1,26 @@
+[package]
+name = "dioxus-use-js-macro"
+version = "0.4.7"
+authors = ["Dillon Henry McMahon"]
+edition = "2024"
+rust-version = "1.88"
+description = "A macro that generates Rust bindings to JavaScript or TypeScript functions, with compile time checks. For use with Dioxus."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/mcmah309/dioxus-use-js"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1.0.103"
+quote = "1.0.41"
+syn = { version = "2.0.108", features = ["full"] }
+swc_ecma_parser = { version = "25.0.0", default-features = false }
+swc_ecma_ast = { version = "16.0.0", default-features = false }
+swc_ecma_visit = { version = "16.0.0", default-features = false }
+swc_common = { version = "15.0.0", default-features = false }
+indexmap = "2"
+blake3="1.8"
+base64="0.22"
+sourcemap = "9.3.2"
+debugid = "0.8.0"
