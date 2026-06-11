@@ -19,11 +19,3 @@ log = "0.4"
 ui = { path = "packages/ui" }
 vault = { path = "packages/vault" }
 app = { path = "packages/app" }
-
-# TEMPORARY: build against the local `dioxus-use-js` submodule, which carries the
-# Android `import()` fix (resolve module specifier against `document.baseURI`; see the
-# submodule's macro). Once that commit is pushed to lavaeater/dioxus-use-js and the git
-# dep below is bumped (`cargo update -p dioxus-use-js`), delete this whole [patch] block.
-[patch."https://github.com/lavaeater/dioxus-use-js.git"]
-dioxus-use-js = { path = "dioxus-use-js/dioxus-use-js" }
-dioxus-use-js-macro = { path = "dioxus-use-js/dioxus-use-js-macro" }

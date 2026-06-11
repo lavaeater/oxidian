@@ -3,8 +3,9 @@ use crate::icons::{
     IcoBookmark, IcoBookmarkCheck, IcoCalendar, IcoChevronDown, IcoChevronLeft,
     IcoChevronRight, IcoDownload, IcoFileText, IcoFilePlus, IcoFolderClosed,
     IcoFolderOpen, IcoFolderPlus, IcoFolderTree, IcoLayoutList, IcoLink2,
-    IcoNetwork, IcoSearch, IcoSettings, IcoTrash2, IcoX, IcoFolderKanban,
+    IcoListChecks, IcoNetwork, IcoSearch, IcoSettings, IcoTrash2, IcoX, IcoFolderKanban,
 };
+use crate::tasks::{self, Task};
 use ui::{MarkdownArea, MarkdownAreaVariant};
 use vault::{FileMeta, GithubConfig, SearchResult};
 
@@ -156,7 +157,7 @@ impl SaveStatus {
 }
 
 #[derive(Clone, PartialEq)]
-enum Panel { Files, Search, Backlinks, Graph, Bookmarks, Kanban }
+enum Panel { Files, Search, Backlinks, Graph, Bookmarks, Kanban, Tasks }
 
 // ── Command palette ─────────────────────────────────────────────────────────
 // Every action reachable from the Command Palette (Ctrl/⌘-P). `VaultBrowser`
@@ -177,13 +178,15 @@ enum Cmd {
     GoGraph,
     GoBookmarks,
     GoKanban,
+    GoTasks,
 }
 
 impl Cmd {
     const ALL: &'static [Cmd] = &[
         Cmd::QuickSwitcher, Cmd::NewFile, Cmd::NewFolder, Cmd::DailyNote, Cmd::ExportHtml,
         Cmd::ToggleSidebar, Cmd::ToggleSplit,
-        Cmd::GoFiles, Cmd::GoSearch, Cmd::GoBacklinks, Cmd::GoGraph, Cmd::GoBookmarks, Cmd::GoKanban,
+        Cmd::GoFiles, Cmd::GoSearch, Cmd::GoBacklinks, Cmd::GoGraph, Cmd::GoBookmarks,
+        Cmd::GoKanban, Cmd::GoTasks,
     ];
 
     fn title(self) -> &'static str {
@@ -201,6 +204,7 @@ impl Cmd {
             Cmd::GoGraph       => "Show: Graph",
             Cmd::GoBookmarks   => "Show: Bookmarks",
             Cmd::GoKanban      => "Show: Kanban",
+            Cmd::GoTasks       => "Show: Tasks",
         }
     }
 
@@ -228,6 +232,7 @@ impl Cmd {
             Cmd::GoGraph       => "network",
             Cmd::GoBookmarks   => "saved pinned",
             Cmd::GoKanban      => "board",
+            Cmd::GoTasks       => "todo checklist due priority overview",
         }
     }
 }
@@ -516,6 +521,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
             Cmd::GoGraph       => panel.set(Panel::Graph),
             Cmd::GoBookmarks   => panel.set(Panel::Bookmarks),
             Cmd::GoKanban      => panel.set(Panel::Kanban),
+            Cmd::GoTasks       => panel.set(Panel::Tasks),
         }
         show_palette.set(false);
     });
@@ -656,6 +662,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                     button { class: if panel() == Panel::Graph { "panel-tab panel-tab--active" } else { "panel-tab" }, onclick: move |_| panel.set(Panel::Graph), title: "Graph", IcoNetwork { size: 15 } }
                     button { class: if panel() == Panel::Bookmarks { "panel-tab panel-tab--active" } else { "panel-tab" }, onclick: move |_| panel.set(Panel::Bookmarks), title: "Bookmarks", IcoBookmark { size: 15 } }
                     button { class: if panel() == Panel::Kanban { "panel-tab panel-tab--active" } else { "panel-tab" }, onclick: move |_| panel.set(Panel::Kanban), title: "Kanban", IcoFolderKanban { size: 15 } }
+                    button { class: if panel() == Panel::Tasks { "panel-tab panel-tab--active" } else { "panel-tab" }, onclick: move |_| panel.set(Panel::Tasks), title: "Tasks", IcoListChecks { size: 15 } }
                 }
 
                 div { class: "panel-content",
@@ -801,6 +808,16 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                                 }
                             }
                         },
+                        Panel::Tasks => rsx! {
+                            TasksView {
+                                config: config.clone(),
+                                files,
+                                on_open: move |path: String| {
+                                    open_focused(path);
+                                    sidebar_open.set(false);
+                                },
+                            }
+                        },
                     }
                 }
             }
@@ -905,7 +922,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                     class: if panel() == Panel::Search { "bottom-nav-btn bottom-nav-btn--active" } else { "bottom-nav-btn" },
                     onclick: move |_| { panel.set(Panel::Search); sidebar_open.set(true); },
                     IcoSearch { size: 18 }
-                    span { class: "bottom-nav-label", "IcoSearch" }
+                    span { class: "bottom-nav-label", "Search" }
                 }
                 button {
                     class: if panel() == Panel::Backlinks { "bottom-nav-btn bottom-nav-btn--active" } else { "bottom-nav-btn" },
@@ -924,6 +941,12 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                     onclick: move |_| { panel.set(Panel::Bookmarks); sidebar_open.set(true); },
                     IcoBookmark { size: 18 }
                     span { class: "bottom-nav-label", "Saved" }
+                }
+                button {
+                    class: if panel() == Panel::Tasks { "bottom-nav-btn bottom-nav-btn--active" } else { "bottom-nav-btn" },
+                    onclick: move |_| { panel.set(Panel::Tasks); sidebar_open.set(true); },
+                    IcoListChecks { size: 18 }
+                    span { class: "bottom-nav-label", "Tasks" }
                 }
             }
 
@@ -1799,6 +1822,164 @@ fn CommandPalette(
                                 span { class: "qs-item-name", "{label}" }
                                 if !hint.is_empty() {
                                     span { class: "qs-item-dir", "{hint}" }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ── Tasks view ────────────────────────────────────────────────────────────────
+
+#[component]
+fn TasksView(
+    config: GithubConfig,
+    files: Signal<Vec<FileMeta>>,
+    on_open: EventHandler<String>,
+) -> Element {
+    let mut all_tasks = use_signal(Vec::<Task>::new);
+    let mut loading = use_signal(|| true);
+    let mut scan_gen = use_signal(|| 0u32);
+    let mut hide_done = use_signal(|| true);
+
+    // Today's date, for overdue styling (YYYY-MM-DD compares lexicographically).
+    let today = use_resource(move || async move { crate::dates::today().await });
+
+    // Scan the vault on mount, whenever the file list changes, and on refresh.
+    let cfg_scan = config.clone();
+    use_effect(move || {
+        let _ = scan_gen();
+        let paths: Vec<String> = files
+            .read()
+            .iter()
+            .filter(|f| f.path.ends_with(".md"))
+            .map(|f| f.path.clone())
+            .collect();
+        let cfg = cfg_scan.clone();
+        loading.set(true);
+        spawn(async move {
+            let mut t = tasks::scan(&cfg, paths).await;
+            t.sort_by(tasks::cmp);
+            all_tasks.set(t);
+            loading.set(false);
+        });
+    });
+
+    // Toggle a task: flip locally for instant feedback, then write back (the
+    // write re-reads the file for a fresh SHA, so it's conflict-safe).
+    let cfg_toggle = config.clone();
+    let toggle = use_callback(move |task: Task| {
+        all_tasks.with_mut(|ts| {
+            if let Some(t) = ts.iter_mut().find(|t| t.path == task.path && t.line == task.line) {
+                t.checked = !t.checked;
+            }
+        });
+        let cfg = cfg_toggle.clone();
+        spawn(async move {
+            if let Ok(fc) = vault::dispatch::read_file(&cfg, &task.path).await {
+                if let Some(new_content) = tasks::toggled_content(&fc.content, &task) {
+                    let name = task.path.rsplit('/').next().unwrap_or(&task.path).to_string();
+                    let _ = vault::dispatch::write_file(
+                        &cfg, &task.path, &new_content, &fc.sha,
+                        &format!("Toggle task in {name}"),
+                    ).await;
+                }
+            }
+        });
+    });
+
+    let today_str = today.read().as_deref().unwrap_or("").to_string();
+    let hide = hide_done();
+
+    // Group by file (BTreeMap path order = folders together), sorted within.
+    let mut groups: Vec<(String, Vec<Task>)> = {
+        let mut by_file: std::collections::BTreeMap<String, Vec<Task>> = Default::default();
+        for t in all_tasks.read().iter() {
+            if hide && t.checked { continue; }
+            by_file.entry(t.path.clone()).or_default().push(t.clone());
+        }
+        by_file.into_iter().collect()
+    };
+    for (_, items) in groups.iter_mut() {
+        items.sort_by(tasks::cmp);
+    }
+    let total_open = all_tasks.read().iter().filter(|t| !t.checked).count();
+    let is_empty = groups.is_empty();
+    let first_load = loading() && all_tasks.read().is_empty();
+
+    rsx! {
+        div { class: "tasks-panel",
+            div { class: "tasks-header",
+                span { class: "tasks-count", "{total_open} open" }
+                label { class: "tasks-toggle",
+                    input {
+                        r#type: "checkbox",
+                        checked: hide_done(),
+                        onchange: move |e| hide_done.set(e.checked()),
+                    }
+                    "Hide done"
+                }
+                button {
+                    class: "tasks-refresh",
+                    title: "Rescan vault",
+                    onclick: move |_| scan_gen.set(scan_gen() + 1),
+                    "↻"
+                }
+            }
+            if first_load {
+                div { class: "sidebar-status", "Scanning vault…" }
+            } else if is_empty {
+                div { class: "sidebar-status", "No tasks found." }
+            } else {
+                div { class: "tasks-list",
+                    for (path, items) in groups {
+                        {
+                            let p_open = path.clone();
+                            let name = path.rsplit('/').next().unwrap_or(&path)
+                                .trim_end_matches(".md").to_string();
+                            let dir = path.rfind('/').map(|i| path[..i].to_string()).unwrap_or_default();
+                            rsx! {
+                                div { class: "tasks-group",
+                                    div {
+                                        class: "tasks-group-header",
+                                        onclick: move |_| on_open(p_open.clone()),
+                                        span { class: "tasks-group-name", "{name}" }
+                                        if !dir.is_empty() { span { class: "tasks-group-dir", "{dir}" } }
+                                    }
+                                    for t in items {
+                                        {
+                                            let t_toggle = t.clone();
+                                            let p_jump = t.path.clone();
+                                            let overdue = !t.checked
+                                                && !today_str.is_empty()
+                                                && t.due.as_deref().map(|d| d < today_str.as_str()).unwrap_or(false);
+                                            let due_class = if overdue { "task-due task-due--overdue" } else { "task-due" };
+                                            let row_class = if t.checked { "task-row task-row--done" } else { "task-row" };
+                                            rsx! {
+                                                div { class: "{row_class}",
+                                                    button {
+                                                        class: "task-check",
+                                                        onclick: move |_| toggle.call(t_toggle.clone()),
+                                                        if t.checked { "☑" } else { "☐" }
+                                                    }
+                                                    span {
+                                                        class: "task-text",
+                                                        onclick: move |_| on_open(p_jump.clone()),
+                                                        "{t.text}"
+                                                    }
+                                                    if !t.priority.emoji().is_empty() {
+                                                        span { class: "task-prio", "{t.priority.emoji()}" }
+                                                    }
+                                                    if let Some(due) = t.due.clone() {
+                                                        span { class: "{due_class}", "📅 {due}" }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
