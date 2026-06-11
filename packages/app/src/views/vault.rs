@@ -1331,7 +1331,20 @@ fn EditorPane(
                                 on_select: move |insert: String| {
                                     let query_len = slash_query().unwrap_or_default().len();
                                     slash_query.set(None);
-                                    js::apply_slash(insert, 1 + query_len);
+                                    // Task-metadata snippets carry date placeholders; fill them
+                                    // in with real dates (async) before inserting.
+                                    if insert.contains("{{today}}") || insert.contains("{{tomorrow}}") {
+                                        spawn(async move {
+                                            let today = crate::dates::today().await;
+                                            let tomorrow = crate::dates::add_days(&today, 1);
+                                            let snippet = insert
+                                                .replace("{{today}}", &today)
+                                                .replace("{{tomorrow}}", &tomorrow);
+                                            js::apply_slash(snippet, 1 + query_len);
+                                        });
+                                    } else {
+                                        js::apply_slash(insert, 1 + query_len);
+                                    }
                                 },
                                 on_template: move |meta: TemplateMeta| {
                                     let query_len = slash_query().unwrap_or_default().len();
@@ -1878,9 +1891,10 @@ fn TasksView(
             }
         });
         let cfg = cfg_toggle.clone();
+        let today_now = today.read().as_deref().unwrap_or("").to_string();
         spawn(async move {
             if let Ok(fc) = vault::dispatch::read_file(&cfg, &task.path).await {
-                if let Some(new_content) = tasks::toggled_content(&fc.content, &task) {
+                if let Some(new_content) = tasks::toggled_content(&fc.content, &task, &today_now) {
                     let name = task.path.rsplit('/').next().unwrap_or(&task.path).to_string();
                     let _ = vault::dispatch::write_file(
                         &cfg, &task.path, &new_content, &fc.sha,

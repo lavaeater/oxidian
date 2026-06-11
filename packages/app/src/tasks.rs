@@ -148,17 +148,24 @@ fn normalize_ws(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Returns `content` with the given task's checkbox flipped, or `None` if the
-/// line can't be located/flipped. Matches by line index, falling back to the
-/// raw line text (so it still works if lines shifted since the scan).
-pub fn toggled_content(content: &str, task: &Task) -> Option<String> {
+/// Returns `content` with the given task's checkbox flipped and its done-date
+/// (`✅ <today>`) stamped/removed to match, or `None` if the line can't be
+/// located. Locates the line by index, falling back to a parsed-text match — so
+/// it stays correct even after a previous toggle added/removed the ✅ stamp.
+pub fn toggled_content(content: &str, task: &Task, today: &str) -> Option<String> {
     let lines: Vec<&str> = content.lines().collect();
-    let idx = if lines.get(task.line) == Some(&task.raw.as_str()) {
-        task.line
+    let idx = locate(&lines, task)?;
+    // The new state is derived from the file's *current* line, not the (possibly
+    // stale) scanned task, so rapid re-toggles stay consistent.
+    let now_checked = lines[idx].contains("[ ]");
+    let mut new_line = flip_checkbox(lines[idx])?;
+    if now_checked {
+        if !new_line.contains("✅") && !today.is_empty() {
+            new_line = format!("{} ✅ {today}", new_line.trim_end());
+        }
     } else {
-        lines.iter().position(|l| *l == task.raw)?
-    };
-    let flipped = flip_checkbox(lines[idx])?;
+        new_line = strip_done(&new_line);
+    }
 
     let mut out = String::new();
     for (i, l) in lines.iter().enumerate() {
@@ -166,7 +173,7 @@ pub fn toggled_content(content: &str, task: &Task) -> Option<String> {
             out.push('\n');
         }
         if i == idx {
-            out.push_str(&flipped);
+            out.push_str(&new_line);
         } else {
             out.push_str(l);
         }
@@ -175,6 +182,34 @@ pub fn toggled_content(content: &str, task: &Task) -> Option<String> {
         out.push('\n');
     }
     Some(out)
+}
+
+/// Find the task's line: prefer its original index, else the first line whose
+/// parsed task text matches (ignoring checkbox state and metadata).
+fn locate(lines: &[&str], task: &Task) -> Option<usize> {
+    let matches = |line: &str| {
+        parse_line(&task.path, 0, line)
+            .map(|t| t.text == task.text)
+            .unwrap_or(false)
+    };
+    if lines.get(task.line).map(|l| matches(l)).unwrap_or(false) {
+        return Some(task.line);
+    }
+    lines.iter().position(|l| matches(l))
+}
+
+/// Remove a trailing `✅ <date>` (and the space before it) from a line.
+fn strip_done(line: &str) -> String {
+    if let Some(pos) = line.find("✅") {
+        let after = &line[pos + "✅".len()..];
+        let after_trim = after.trim_start();
+        let skipped = after.len() - after_trim.len();
+        let date: String = after_trim.chars().take(10).collect();
+        let date_len = if is_ymd(&date) { date.len() } else { 0 };
+        let remove_end = pos + "✅".len() + skipped + date_len;
+        return format!("{}{}", line[..pos].trim_end(), &line[remove_end..]);
+    }
+    line.to_string()
 }
 
 fn flip_checkbox(line: &str) -> Option<String> {
@@ -250,10 +285,27 @@ mod tests {
     }
 
     #[test]
-    fn toggle_flips_the_right_line() {
+    fn toggle_checks_and_stamps_done() {
         let src = "# h\n- [ ] a\n- [ ] b\n";
         let task = &parse_file("a.md", src)[1];
-        let out = toggled_content(src, task).unwrap();
-        assert_eq!(out, "# h\n- [ ] a\n- [x] b\n");
+        let out = toggled_content(src, task, "2026-06-11").unwrap();
+        assert_eq!(out, "# h\n- [ ] a\n- [x] b ✅ 2026-06-11\n");
+    }
+
+    #[test]
+    fn toggle_unchecks_and_removes_done() {
+        let src = "- [x] done ✅ 2026-06-11\n";
+        let task = &parse_file("a.md", src)[0];
+        let out = toggled_content(src, task, "2026-06-11").unwrap();
+        assert_eq!(out, "- [ ] done\n");
+    }
+
+    #[test]
+    fn locate_survives_done_stamp_change() {
+        // After a check added the stamp, a re-toggle must still find the line.
+        let scanned = &parse_file("a.md", "- [ ] write tests")[0];
+        let current = "- [x] write tests ✅ 2026-06-11\n";
+        let out = toggled_content(current, scanned, "2026-06-11").unwrap();
+        assert_eq!(out, "- [ ] write tests\n");
     }
 }

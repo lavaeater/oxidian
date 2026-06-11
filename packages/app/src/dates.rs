@@ -70,6 +70,26 @@ fn days_in_month(y: i32, m: u8) -> u8 {
     }
 }
 
+/// Returns `ymd` (YYYY-MM-DD) advanced by `days`, handling month/year rollover.
+/// Falls back to the input string if it can't be parsed.
+pub fn add_days(ymd: &str, days: u32) -> String {
+    let Some((mut y, mut m, mut d)) = parse_ymd(ymd) else {
+        return ymd.to_string();
+    };
+    for _ in 0..days {
+        d += 1;
+        if d > days_in_month(y, m) {
+            d = 1;
+            m += 1;
+            if m > 12 {
+                m = 1;
+                y += 1;
+            }
+        }
+    }
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
 /// Day of year, 1-based.
 fn ordinal(y: i32, m: u8, d: u8) -> i32 {
     let mut doy = d as i32;
