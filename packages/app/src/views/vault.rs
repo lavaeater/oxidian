@@ -1865,16 +1865,11 @@ fn TasksView(
     let cfg_scan = config.clone();
     use_effect(move || {
         let _ = scan_gen();
-        let paths: Vec<String> = files
-            .read()
-            .iter()
-            .filter(|f| f.path.ends_with(".md"))
-            .map(|f| f.path.clone())
-            .collect();
+        let snapshot: Vec<FileMeta> = files.read().clone();
         let cfg = cfg_scan.clone();
         loading.set(true);
         spawn(async move {
-            let mut t = tasks::scan(&cfg, paths).await;
+            let mut t = crate::tasks_cache::scan(&cfg, &snapshot).await;
             t.sort_by(tasks::cmp);
             all_tasks.set(t);
             loading.set(false);
@@ -1896,10 +1891,13 @@ fn TasksView(
             if let Ok(fc) = vault::dispatch::read_file(&cfg, &task.path).await {
                 if let Some(new_content) = tasks::toggled_content(&fc.content, &task, &today_now) {
                     let name = task.path.rsplit('/').next().unwrap_or(&task.path).to_string();
-                    let _ = vault::dispatch::write_file(
+                    if vault::dispatch::write_file(
                         &cfg, &task.path, &new_content, &fc.sha,
                         &format!("Toggle task in {name}"),
-                    ).await;
+                    ).await.is_ok() {
+                        // The file changed remotely; force a fresh read next scan.
+                        crate::tasks_cache::invalidate(&task.path).await;
+                    }
                 }
             }
         });

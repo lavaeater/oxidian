@@ -13,6 +13,7 @@ pub mod native_store;
 pub mod shortcuts;
 pub mod state;
 pub mod tasks;
+pub mod tasks_cache;
 pub mod template;
 pub mod views;
 pub mod wikilink_index;

@@ -6,7 +6,7 @@
 //! The editor's tokenizer handles rendering; this is a separate, line-based
 //! parser for the aggregated Tasks view.
 
-use vault::GithubConfig;
+use serde::{Deserialize, Serialize};
 
 const PRIO_EMOJI: [(&str, Priority); 5] = [
     ("🔺", Priority::Highest),
@@ -16,7 +16,7 @@ const PRIO_EMOJI: [(&str, Priority); 5] = [
     ("⏬", Priority::Lowest),
 ];
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum Priority {
     Highest,
     High,
@@ -50,7 +50,7 @@ impl Priority {
     }
 }
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 pub struct Task {
     pub path: String,
     /// 0-based line index in the source file.
@@ -220,27 +220,6 @@ fn flip_checkbox(line: &str) -> Option<String> {
         return Some(format!("{}[ ]{}", &line[..pos], &line[pos + 3..]));
     }
     None
-}
-
-/// Scan many files for tasks, reading up to 8 concurrently to keep the first
-/// load snappy without hammering the host API.
-pub async fn scan(cfg: &GithubConfig, paths: Vec<String>) -> Vec<Task> {
-    let mut tasks = Vec::new();
-    for chunk in paths.chunks(8) {
-        let futs = chunk.iter().map(|p| {
-            let p = p.clone();
-            async move {
-                vault::dispatch::read_file(cfg, &p)
-                    .await
-                    .ok()
-                    .map(|fc| (p, fc.content))
-            }
-        });
-        for (p, content) in futures::future::join_all(futs).await.into_iter().flatten() {
-            tasks.extend(parse_file(&p, &content));
-        }
-    }
-    tasks
 }
 
 /// Sort order for the view: open tasks first, then by due date (earliest first,
