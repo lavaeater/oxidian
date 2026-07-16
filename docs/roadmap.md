@@ -32,6 +32,7 @@ Below is a detailed status for every user story.
 | US 16.1 / 16.2 | **Word count** — live word count in editor status bar | ✅ Done |
 | US 17.1 | **Formatting toolbar** — floating Bold/Italic/Heading/List toolbar | ✅ Done |
 | US 19.1 / 19.2 | **Kanban** — headings as columns, drag to reorder | ✅ Done |
+| — | **Tasks view** — vault-wide checkbox aggregation grouped by file, Obsidian-Tasks metadata (📅 due / priority / ✅ done), toggle + jump (`tasks.rs`, `Panel::Tasks`) | ✅ Done |
 | — | **GitLab support** — second provider alongside GitHub | ✅ Done |
 | — | **GitHub OAuth device flow** — no-PAT sign-in (incl. mobile copy-code + token persistence) | ✅ Done |
 | — | **Auto-save** — saves after ~5 s of inactivity, with countdown | ✅ Done |

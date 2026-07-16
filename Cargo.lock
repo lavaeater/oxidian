@@ -78,11 +78,12 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
 name = "app"
-version = "0.1.0"
+version = "0.1.4"
 dependencies = [
  "dioxus",
  "dioxus-use-js",
  "dirs 5.0.1",
+ "futures",
  "gloo-timers",
  "jni 0.21.1",
  "js-sys",
@@ -1007,7 +1008,7 @@ dependencies = [
 
 [[package]]
 name = "desktop"
-version = "0.1.0"
+version = "0.1.4"
 dependencies = [
  "app",
  "dioxus",
@@ -1533,6 +1534,7 @@ dependencies = [
 [[package]]
 name = "dioxus-use-js"
 version = "0.4.7"
+source = "git+https://github.com/lavaeater/dioxus-use-js.git?branch=dioxus-v0.8.0#1d80d8e8c69fb9d3eee3df419e18c9518899d4c5"
 dependencies = [
  "dioxus",
  "dioxus-use-js-macro",
@@ -1543,6 +1545,7 @@ dependencies = [
 [[package]]
 name = "dioxus-use-js-macro"
 version = "0.4.7"
+source = "git+https://github.com/lavaeater/dioxus-use-js.git?branch=dioxus-v0.8.0#1d80d8e8c69fb9d3eee3df419e18c9518899d4c5"
 dependencies = [
  "base64",
  "blake3",
@@ -3343,7 +3346,7 @@ dependencies = [
 
 [[package]]
 name = "mobile"
-version = "0.1.0"
+version = "0.1.4"
 dependencies = [
  "android_logger",
  "app",
@@ -5819,9 +5822,9 @@ dependencies = [
 
 [[package]]
 name = "tray-icon"
-version = "0.24.0"
+version = "0.24.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e47e6d063cfe4ad2e416fcbb310be3a37c5fd85c745b62cb562bfa4a003df674"
+checksum = "65ba1e5f6b9ef9fd87e21b9c6f351554dbd717960089168fcfdef854686961dc"
 dependencies = [
  "crossbeam-channel",
  "dirs 6.0.0",
@@ -5898,7 +5901,7 @@ checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 
 [[package]]
 name = "ui"
-version = "0.1.0"
+version = "0.1.4"
 dependencies = [
  "dioxus",
  "dioxus-use-js",
@@ -5994,7 +5997,7 @@ dependencies = [
 
 [[package]]
 name = "vault"
-version = "0.1.0"
+version = "0.1.4"
 dependencies = [
  "base64",
  "reqwest",
@@ -6196,7 +6199,7 @@ dependencies = [
 
 [[package]]
 name = "web"
-version = "0.1.0"
+version = "0.1.4"
 dependencies = [
  "app",
  "console_error_panic_hook",

@@ -21,6 +21,17 @@ const COMMANDS: &[(&str, &str, &str)] = &[
     ("Table",      "Markdown table",      "| Col 1 | Col 2 |\n| --- | --- |\n| | |"),
     ("Divider",    "Horizontal rule",     "\n---\n"),
     ("WikiLink",   "[[link to note]]",    "[[]]"),
+    // Task metadata (Obsidian-Tasks emoji). `{{today}}` / `{{tomorrow}}` are
+    // substituted with the real date by the editor's on_select handler.
+    ("Due today",       "📅 today's date",      "📅 {{today}} "),
+    ("Due tomorrow",    "📅 tomorrow's date",   "📅 {{tomorrow}} "),
+    ("Due date",        "📅 (then type date)",  "📅 "),
+    ("Priority urgent", "🔺 highest priority",  "🔺 "),
+    ("Priority high",   "⏫ high priority",      "⏫ "),
+    ("Priority medium", "🔼 medium priority",   "🔼 "),
+    ("Priority low",    "🔽 low priority",      "🔽 "),
+    ("Priority lowest", "⏬ lowest priority",   "⏬ "),
+    ("Done today",      "✅ mark done today",   "✅ {{today}} "),
 ];
 
 // ── Component ─────────────────────────────────────────────────────────────────
