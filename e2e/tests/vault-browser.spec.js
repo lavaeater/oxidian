@@ -20,9 +20,13 @@ test("seeded config boots into the vault browser and lists notes", async ({ page
   await expect(page.getByText("Oxidian", { exact: true })).toBeVisible();
   await expect(page.getByText("Connect your vault")).toHaveCount(0);
 
-  // The markdown notes from the mocked tree appear; the .gitkeep placeholder is
-  // filtered out of the note list by the vault backend.
+  // The root note and the folder from the mocked tree are listed; the
+  // .gitkeep placeholder is filtered out of the note list by the vault backend.
   await expect(page.getByText("Welcome", { exact: false }).first()).toBeVisible();
+  await expect(page.getByText("projects", { exact: false }).first()).toBeVisible();
+
+  // Expanding the folder reveals the nested note (tree interaction).
+  await page.getByText("projects", { exact: false }).first().click();
   await expect(page.getByText("Ideas", { exact: false }).first()).toBeVisible();
 });
 

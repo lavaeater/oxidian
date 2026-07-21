@@ -31,8 +31,10 @@ module.exports = defineConfig({
     { name: "chromium", use: { ...devices["Desktop Chrome"] } },
   ],
   webServer: {
+    // `dx run` builds once and serves WITHOUT file-watching/hot-patching, so no
+    // "app is being rebuilt" overlay can appear mid-test (unlike `dx serve`).
     // Run from the repo root (one level up) so the package path resolves.
-    command: `dx serve --package web --addr 127.0.0.1 --port ${PORT}`,
+    command: `dx run --package web --addr 127.0.0.1 --port ${PORT} --open false --hot-reload false`,
     cwd: "..",
     url: BASE_URL,
     timeout: SERVER_TIMEOUT,

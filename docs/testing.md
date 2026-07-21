@@ -368,7 +368,21 @@ cd e2e && npx playwright test  # E2E (auto-starts `dx serve --package web`)
   both. A live-HTTP round-trip (wiremock, or a throwaway repo) is still worth
   adding later as a smoke test, but the interesting logic is now covered without
   a network.
-- **Layer 3 (Playwright E2E) — not started.**
+- **Layer 3 (Playwright E2E) — scaffolded and green.** `e2e/` holds a working
+  Playwright project (`npm test`, 4 tests passing). The `webServer` runs
+  **`dx run --package web`** (not `dx serve` — `run` builds once without
+  watching/hot-patching, so no rebuild overlay races the tests). `tests/helpers.js`
+  implements both strategies from the design below: `seedConfig` writes a fake
+  `GithubConfig` to `localStorage` (`oxidian_cfg`) via `addInitScript` so the app
+  boots into `VaultBrowser`, and `mockGitHub` routes `api.github.com` to serve
+  canned tree/contents data (catch-all registered first — Playwright evaluates
+  routes in reverse order). Specs: `onboarding` (first-run Settings screen) and
+  `vault-browser` (seeded boot, note listing, `.gitkeep` filtered, folder
+  expansion, empty-vault status). Next: editor flows (focus reveals raw markdown,
+  the focused-contenteditable invariant, wikilink navigation), note CRUD with a
+  simulated 409 conflict, tasks/kanban, and the `Ctrl+P`/`Ctrl+O` shortcut hook
+  that can't be tested natively. CI wiring (install `dx`, `npx playwright test`)
+  still to do.
 
 ## Non-goals
 - Testing the vendored dioxus-primitives components in `ui/src/components/*`

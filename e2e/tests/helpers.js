@@ -49,20 +49,13 @@ function b64(text) {
 async function mockGitHub(page, files = {}) {
   const paths = Object.keys(files);
 
-  // Git tree (list_files): GET /repos/:owner/:repo/git/trees/:branch?recursive=1
-  await page.route(/api\.github\.com\/repos\/[^/]+\/[^/]+\/git\/trees\//, (route) => {
-    route.fulfill({
-      json: {
-        sha: "tree-sha",
-        tree: paths.map((p) => ({
-          path: p,
-          type: "blob",
-          sha: `sha-${p}`,
-          size: files[p].length,
-        })),
-        truncated: false,
-      },
-    });
+  // NOTE: Playwright evaluates route handlers in REVERSE registration order
+  // (most-recently-added first). Register the broad catch-all FIRST so the
+  // specific tree/contents routes added afterwards take precedence.
+
+  // Catch-all: keep any other GitHub call from escaping to the network.
+  await page.route(/api\.github\.com\//, (route) => {
+    route.fulfill({ json: {} });
   });
 
   // File contents (read_file): GET /repos/:owner/:repo/contents/:path
@@ -80,9 +73,20 @@ async function mockGitHub(page, files = {}) {
     });
   });
 
-  // Catch-all: keep any other GitHub call from escaping to the network.
-  await page.route(/api\.github\.com\//, (route) => {
-    route.fulfill({ json: {} });
+  // Git tree (list_files): GET /repos/:owner/:repo/git/trees/:branch?recursive=1
+  await page.route(/api\.github\.com\/repos\/[^/]+\/[^/]+\/git\/trees\//, (route) => {
+    route.fulfill({
+      json: {
+        sha: "tree-sha",
+        tree: paths.map((p) => ({
+          path: p,
+          type: "blob",
+          sha: `sha-${p}`,
+          size: files[p].length,
+        })),
+        truncated: false,
+      },
+    });
   });
 }
 

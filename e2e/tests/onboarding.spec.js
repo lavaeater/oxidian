@@ -13,10 +13,12 @@ test.beforeEach(async ({ page }) => {
 test("first run shows the Settings screen", async ({ page }) => {
   await page.goto("/");
 
-  await expect(page.getByText("Connect your vault")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Sign in with GitHub" })).toBeVisible();
-  // The vault sidebar must NOT be present before a vault is connected.
-  await expect(page.getByText("Oxidian", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Connect your vault" })).toBeVisible();
+  // Both git-host providers are offered.
+  await expect(page.getByRole("button", { name: "GitHub", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "GitLab", exact: true })).toBeVisible();
+  // The primary action to finish setup.
+  await expect(page.getByRole("button", { name: "Connect vault" })).toBeVisible();
 });
 
 test("settings form exposes the vault connection fields", async ({ page }) => {
@@ -25,5 +27,5 @@ test("settings form exposes the vault connection fields", async ({ page }) => {
   // Placeholders come straight from the Settings view (packages/app/.../settings.rs).
   await expect(page.getByPlaceholder("octocat")).toBeVisible();      // owner
   await expect(page.getByPlaceholder("my-notes")).toBeVisible();     // repo
-  await expect(page.getByRole("button", { name: "Connect vault" })).toBeVisible();
+  await expect(page.getByPlaceholder("main")).toBeVisible();         // branch
 });
