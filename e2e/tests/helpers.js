@@ -42,11 +42,16 @@ function b64(text) {
 /**
  * Mock the GitHub REST API used by the vault backend.
  *   files:    { [path]: markdownString }  — the note vault contents
+ *   options:
+ *     conflictOnWrite: boolean — make every PUT (save/create) return HTTP 409,
+ *       exercising the SHA-conflict guard (must surface as a conflict, never a
+ *       silent overwrite).
  * The git-trees endpoint is synthesized from the file paths; the contents
- * endpoint serves each file's base64 body. Any other api.github.com call gets a
- * benign empty 200 so a stray request can't hang the test.
+ * endpoint serves each file's base64 body on GET, and acknowledges PUT/DELETE.
+ * Any other api.github.com call gets a benign empty 200 so a stray request can't
+ * hang the test.
  */
-async function mockGitHub(page, files = {}) {
+async function mockGitHub(page, files = {}, options = {}) {
   const paths = Object.keys(files);
 
   // NOTE: Playwright evaluates route handlers in REVERSE registration order
@@ -58,11 +63,27 @@ async function mockGitHub(page, files = {}) {
     route.fulfill({ json: {} });
   });
 
-  // File contents (read_file): GET /repos/:owner/:repo/contents/:path
+  // File contents: GET = read_file, PUT = write/create, DELETE = delete.
   await page.route(/api\.github\.com\/repos\/[^/]+\/[^/]+\/contents\/(.+)/, (route, request) => {
+    const method = request.method();
     const url = new URL(request.url());
     const match = url.pathname.match(/\/contents\/(.+)$/);
     const path = match ? decodeURIComponent(match[1]) : "";
+
+    if (method === "PUT") {
+      if (options.conflictOnWrite) {
+        route.fulfill({ status: 409, json: { message: "Conflict" } });
+        return;
+      }
+      // GitHub returns the new blob sha under `content.sha`.
+      route.fulfill({ json: { content: { sha: `sha-${path}-v2` } } });
+      return;
+    }
+    if (method === "DELETE") {
+      route.fulfill({ json: {} });
+      return;
+    }
+    // GET
     const body = files[path];
     if (body === undefined) {
       route.fulfill({ status: 404, json: { message: "Not Found" } });
