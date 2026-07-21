@@ -17,12 +17,21 @@ fn get(url: &str, token: &str) -> reqwest::RequestBuilder {
     request(reqwest::Method::GET, url, token)
 }
 
-async fn check(resp: reqwest::Response) -> Result<reqwest::Response, VaultError> {
-    if resp.status() == 401 {
-        return Err(VaultError::Unauthorized);
+/// Map the meaningful HTTP status codes to a `VaultError`; `None` means "not
+/// special-cased" and the caller defers to `error_for_status`. (GitHub's
+/// Contents API signals write conflicts with 409, handled at the `write_file`
+/// call site, and 422 for create-on-existing — see `create_file`.)
+fn status_error(status: u16, path: &str) -> Option<VaultError> {
+    match status {
+        401 => Some(VaultError::Unauthorized),
+        404 => Some(VaultError::NotFound(path.to_string())),
+        _ => None,
     }
-    if resp.status() == 404 {
-        return Err(VaultError::NotFound(resp.url().path().to_string()));
+}
+
+async fn check(resp: reqwest::Response) -> Result<reqwest::Response, VaultError> {
+    if let Some(err) = status_error(resp.status().as_u16(), resp.url().path()) {
+        return Err(err);
     }
     resp.error_for_status().map_err(|e| VaultError::Http(e.to_string()))
 }
@@ -43,12 +52,30 @@ struct TreeEntry {
     size: Option<usize>,
 }
 
-pub async fn list_files(cfg: &GithubConfig) -> Result<Vec<FileMeta>, VaultError> {
-    let url = format!(
+fn tree_url(cfg: &GithubConfig) -> String {
+    format!(
         "{API}/repos/{}/{}/git/trees/{}?recursive=1",
         cfg.owner, cfg.repo, cfg.branch
-    );
-    let resp = get(&url, &cfg.token)
+    )
+}
+
+/// Keep markdown notes plus `.gitkeep` placeholders so empty folders (created
+/// via "New folder" / Kanban columns) still appear in the tree; drop trees and
+/// non-note blobs.
+fn tree_to_files(tree: TreeResponse) -> Vec<FileMeta> {
+    tree.tree
+        .into_iter()
+        .filter(|e| e.kind == "blob" && (e.path.ends_with(".md") || e.path.ends_with(".gitkeep")))
+        .map(|e| FileMeta {
+            path: e.path,
+            sha: e.sha,
+            size: e.size.unwrap_or(0),
+        })
+        .collect()
+}
+
+pub async fn list_files(cfg: &GithubConfig) -> Result<Vec<FileMeta>, VaultError> {
+    let resp = get(&tree_url(cfg), &cfg.token)
         .send()
         .await
         .map_err(|e| VaultError::Http(e.to_string()))?;
@@ -57,19 +84,7 @@ pub async fn list_files(cfg: &GithubConfig) -> Result<Vec<FileMeta>, VaultError>
         .json()
         .await
         .map_err(|e| VaultError::Http(e.to_string()))?;
-
-    Ok(tree
-        .tree
-        .into_iter()
-        // Keep markdown notes plus `.gitkeep` placeholders so empty folders
-        // (created via "New folder" / Kanban columns) still appear in the tree.
-        .filter(|e| e.kind == "blob" && (e.path.ends_with(".md") || e.path.ends_with(".gitkeep")))
-        .map(|e| FileMeta {
-            path: e.path,
-            sha: e.sha,
-            size: e.size.unwrap_or(0),
-        })
-        .collect())
+    Ok(tree_to_files(tree))
 }
 
 // ── read_file ─────────────────────────────────────────────────────────────────
@@ -80,12 +95,25 @@ struct ContentsResponse {
     sha: String,
 }
 
+fn contents_url(cfg: &GithubConfig, path: &str) -> String {
+    format!("{API}/repos/{}/{}/contents/{path}", cfg.owner, cfg.repo)
+}
+
+/// Decode GitHub's base64 blob content into a normalised UTF-8 string.
+/// GitHub base64-encodes with a newline every 60 chars and can serve CRLF, both
+/// of which we strip/normalise (raw CR breaks the tokenizer).
+fn decode_content(b64: &str, sha: String) -> Result<FileContent, VaultError> {
+    let raw = b64.replace('\n', "");
+    let bytes = STANDARD
+        .decode(&raw)
+        .map_err(|e| VaultError::Decode(e.to_string()))?;
+    let content = String::from_utf8(bytes).map_err(|e| VaultError::Decode(e.to_string()))?;
+    let content = content.replace("\r\n", "\n").replace('\r', "\n");
+    Ok(FileContent { content, sha })
+}
+
 pub async fn read_file(cfg: &GithubConfig, path: &str) -> Result<FileContent, VaultError> {
-    let url = format!(
-        "{API}/repos/{}/{}/contents/{path}",
-        cfg.owner, cfg.repo
-    );
-    let resp = get(&url, &cfg.token)
+    let resp = get(&contents_url(cfg, path), &cfg.token)
         .send()
         .await
         .map_err(|e| VaultError::Http(e.to_string()))?;
@@ -94,18 +122,7 @@ pub async fn read_file(cfg: &GithubConfig, path: &str) -> Result<FileContent, Va
         .json()
         .await
         .map_err(|e| VaultError::Http(e.to_string()))?;
-
-    // GitHub base64-encodes content with newlines every 60 chars
-    let raw = body.content.replace('\n', "");
-    let bytes = STANDARD
-        .decode(&raw)
-        .map_err(|e| VaultError::Decode(e.to_string()))?;
-    let content = String::from_utf8(bytes).map_err(|e| VaultError::Decode(e.to_string()))?;
-
-    // Normalise line endings — GitHub can serve CRLF which breaks the tokenizer.
-    let content = content.replace("\r\n", "\n").replace('\r', "\n");
-
-    Ok(FileContent { content, sha: body.sha })
+    decode_content(&body.content, body.sha)
 }
 
 // ── write_file ────────────────────────────────────────────────────────────────
@@ -138,7 +155,7 @@ pub async fn write_file(
     sha: &str,
     message: &str,
 ) -> Result<String, VaultError> {
-    let url = format!("{API}/repos/{}/{}/contents/{path}", cfg.owner, cfg.repo);
+    let url = contents_url(cfg, path);
     let body = WriteBody {
         message,
         content: STANDARD.encode(content.as_bytes()),
@@ -184,14 +201,36 @@ struct TextMatch {
     fragment: String,
 }
 
+fn search_url(cfg: &GithubConfig, query: &str) -> String {
+    let q = format!("{} repo:{}/{}", query.trim(), cfg.owner, cfg.repo);
+    format!("{API}/search/code?q={}&per_page=30", urlencoded(&q))
+}
+
+/// Keep only markdown hits and lift the first text-match fragment per item.
+fn search_to_results(body: SearchResponse) -> Vec<SearchResult> {
+    body.items
+        .into_iter()
+        .filter(|i| i.path.ends_with(".md"))
+        .map(|i| SearchResult {
+            path: i.path,
+            sha: i.sha,
+            fragment: i
+                .text_matches
+                .into_iter()
+                .next()
+                .map(|m| m.fragment)
+                .unwrap_or_default(),
+        })
+        .collect()
+}
+
 /// Full-text search across the repo using GitHub's Code Search API.
 /// Returns up to 30 results with matching text fragments.
 pub async fn search_code(cfg: &GithubConfig, query: &str) -> Result<Vec<SearchResult>, VaultError> {
     if query.trim().is_empty() {
         return Ok(vec![]);
     }
-    let q = format!("{} repo:{}/{}", query.trim(), cfg.owner, cfg.repo);
-    let url = format!("{API}/search/code?q={}&per_page=30", urlencoded(&q));
+    let url = search_url(cfg, query);
 
     let resp = reqwest::Client::new()
         .get(&url)
@@ -209,21 +248,7 @@ pub async fn search_code(cfg: &GithubConfig, query: &str) -> Result<Vec<SearchRe
         .await
         .map_err(|e| VaultError::Http(e.to_string()))?;
 
-    Ok(body
-        .items
-        .into_iter()
-        .filter(|i| i.path.ends_with(".md"))
-        .map(|i| SearchResult {
-            path: i.path,
-            sha: i.sha,
-            fragment: i
-                .text_matches
-                .into_iter()
-                .next()
-                .map(|m| m.fragment)
-                .unwrap_or_default(),
-        })
-        .collect())
+    Ok(search_to_results(body))
 }
 
 // ── read_many ─────────────────────────────────────────────────────────────────
@@ -250,7 +275,7 @@ pub async fn create_file(
     content: &str,
     message: &str,
 ) -> Result<String, VaultError> {
-    let url = format!("{API}/repos/{}/{}/contents/{path}", cfg.owner, cfg.repo);
+    let url = contents_url(cfg, path);
     // No "sha" field = create, not update
     let body = serde_json::json!({
         "message": message,
@@ -284,7 +309,7 @@ pub async fn delete_file(
     sha: &str,
     message: &str,
 ) -> Result<(), VaultError> {
-    let url = format!("{API}/repos/{}/{}/contents/{path}", cfg.owner, cfg.repo);
+    let url = contents_url(cfg, path);
     let body = serde_json::json!({
         "message": message,
         "sha": sha,
@@ -316,13 +341,27 @@ pub struct DeviceCodeResponse {
     pub interval: u32,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum PollOutcome {
     Token(String),
     Pending,
     SlowDown(u32),
     Expired,
     Denied,
+}
+
+/// Map the device-flow poll response fields to an outcome. A present token wins;
+/// otherwise the `error` code selects the state (unknown/absent = still pending).
+fn classify_poll(access_token: Option<String>, error: Option<&str>, interval: Option<u32>) -> PollOutcome {
+    if let Some(token) = access_token {
+        return PollOutcome::Token(token);
+    }
+    match error {
+        Some("slow_down")     => PollOutcome::SlowDown(interval.unwrap_or(10)),
+        Some("expired_token") => PollOutcome::Expired,
+        Some("access_denied") => PollOutcome::Denied,
+        _                     => PollOutcome::Pending,
+    }
 }
 
 pub async fn request_device_code() -> Result<DeviceCodeResponse, VaultError> {
@@ -357,15 +396,7 @@ pub async fn poll_device_token(device_code: &str) -> Result<PollOutcome, VaultEr
         .await
         .map_err(|e| VaultError::Http(e.to_string()))?;
     let body: PollResp = resp.json().await.map_err(|e| VaultError::Http(e.to_string()))?;
-    if let Some(token) = body.access_token {
-        return Ok(PollOutcome::Token(token));
-    }
-    Ok(match body.error.as_deref() {
-        Some("slow_down")      => PollOutcome::SlowDown(body.interval.unwrap_or(10)),
-        Some("expired_token")  => PollOutcome::Expired,
-        Some("access_denied")  => PollOutcome::Denied,
-        _                      => PollOutcome::Pending,
-    })
+    Ok(classify_poll(body.access_token, body.error.as_deref(), body.interval))
 }
 
 pub async fn get_username(token: &str) -> Result<String, VaultError> {
@@ -387,4 +418,130 @@ fn urlencoded(s: &str) -> String {
             c => format!("%{:02X}", c as u32).chars().collect(),
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use base64::{engine::general_purpose::STANDARD, Engine};
+
+    fn cfg() -> GithubConfig {
+        GithubConfig {
+            token: "tok".into(),
+            owner: "me".into(),
+            repo: "notes".into(),
+            branch: "main".into(),
+            provider: crate::Provider::GitHub,
+            templates_dir: String::new(),
+            daily_note_template: String::new(),
+        }
+    }
+
+    #[test]
+    fn builds_expected_urls() {
+        assert_eq!(
+            tree_url(&cfg()),
+            "https://api.github.com/repos/me/notes/git/trees/main?recursive=1"
+        );
+        assert_eq!(
+            contents_url(&cfg(), "sub/idea.md"),
+            "https://api.github.com/repos/me/notes/contents/sub/idea.md"
+        );
+    }
+
+    #[test]
+    fn search_url_encodes_query_and_scopes_to_repo() {
+        let url = search_url(&cfg(), "hello world");
+        // Spaces -> '+', repo scope appended.
+        assert_eq!(
+            url,
+            "https://api.github.com/search/code?q=hello+world+repo%3Ame%2Fnotes&per_page=30"
+        );
+    }
+
+    #[test]
+    fn tree_keeps_only_md_and_gitkeep_blobs() {
+        let json = r#"{"tree":[
+            {"path":"a.md","type":"blob","sha":"s1","size":10},
+            {"path":"img.png","type":"blob","sha":"s2","size":20},
+            {"path":"dir","type":"tree","sha":"s3","size":null},
+            {"path":"empty/.gitkeep","type":"blob","sha":"s4","size":null}
+        ]}"#;
+        let tree: TreeResponse = serde_json::from_str(json).unwrap();
+        let files = tree_to_files(tree);
+        let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, vec!["a.md", "empty/.gitkeep"]);
+        // Missing size defaults to 0.
+        assert_eq!(files[1].size, 0);
+        assert_eq!(files[0].sha, "s1");
+    }
+
+    #[test]
+    fn decode_content_strips_newlines_and_normalises_crlf() {
+        // GitHub wraps base64 at 60 cols and may embed CRLF in the payload.
+        let encoded = STANDARD.encode("line1\r\nline2\rline3");
+        let wrapped = format!("{}\n{}", &encoded[..4], &encoded[4..]);
+        let fc = decode_content(&wrapped, "sha1".into()).unwrap();
+        assert_eq!(fc.content, "line1\nline2\nline3");
+        assert_eq!(fc.sha, "sha1");
+    }
+
+    #[test]
+    fn decode_content_rejects_invalid_base64() {
+        assert!(matches!(
+            decode_content("!!not base64!!", "s".into()),
+            Err(VaultError::Decode(_))
+        ));
+    }
+
+    #[test]
+    fn search_results_keep_md_and_lift_first_fragment() {
+        let json = r#"{"items":[
+            {"path":"note.md","sha":"a","text_matches":[{"fragment":"frag one"},{"fragment":"frag two"}]},
+            {"path":"code.rs","sha":"b","text_matches":[{"fragment":"x"}]},
+            {"path":"bare.md","sha":"c"}
+        ]}"#;
+        let body: SearchResponse = serde_json::from_str(json).unwrap();
+        let results = search_to_results(body);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].path, "note.md");
+        assert_eq!(results[0].fragment, "frag one");
+        // No text_matches -> empty fragment (serde default).
+        assert_eq!(results[1].path, "bare.md");
+        assert_eq!(results[1].fragment, "");
+    }
+
+    #[test]
+    fn classify_poll_prefers_token() {
+        assert_eq!(
+            classify_poll(Some("gho_x".into()), Some("slow_down"), Some(5)),
+            PollOutcome::Token("gho_x".into())
+        );
+    }
+
+    #[test]
+    fn classify_poll_maps_error_codes() {
+        assert_eq!(classify_poll(None, Some("slow_down"), Some(7)), PollOutcome::SlowDown(7));
+        assert_eq!(classify_poll(None, Some("slow_down"), None), PollOutcome::SlowDown(10));
+        assert_eq!(classify_poll(None, Some("expired_token"), None), PollOutcome::Expired);
+        assert_eq!(classify_poll(None, Some("access_denied"), None), PollOutcome::Denied);
+        // Unknown/absent error while still waiting.
+        assert_eq!(classify_poll(None, Some("authorization_pending"), None), PollOutcome::Pending);
+        assert_eq!(classify_poll(None, None, None), PollOutcome::Pending);
+    }
+
+    #[test]
+    fn urlencoded_matches_github_query_rules() {
+        assert_eq!(urlencoded("a b/c"), "a+b%2Fc");
+        assert_eq!(urlencoded("keep-_.~"), "keep-_.~");
+    }
+
+    #[test]
+    fn status_error_maps_auth_and_not_found() {
+        assert!(matches!(status_error(401, "/x"), Some(VaultError::Unauthorized)));
+        assert!(matches!(status_error(404, "/notes/a.md"), Some(VaultError::NotFound(p)) if p == "/notes/a.md"));
+        // 409/422 are handled at their call sites, not here; success defers.
+        assert!(status_error(409, "/x").is_none());
+        assert!(status_error(200, "/x").is_none());
+    }
 }

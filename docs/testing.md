@@ -356,7 +356,18 @@ cd e2e && npx playwright test  # E2E (auto-starts `dx serve --package web`)
   contenteditable surface shows formatted markdown on initial unfocused mount.
   A single `rebuild_in_place` pass renders initial state only — effects/JS don't
   run, so interaction/cursor behaviour stays in Layer 3.
-- **Layer 1.5 (vault mocked HTTP) — not started.**
+- **Layer 1.5 (vault backend contract) — done via pure extraction, not
+  wiremock.** The base URL is a hardcoded `const`, so redirecting requests to a
+  per-test localhost mock would force a production change (and env-var injection
+  races under parallel tests). Instead — the plan's *first* listed option — the
+  pure request-building and response-parsing were extracted from the async fns
+  into free functions and tested exhaustively (16 tests): URL builders, tree
+  filtering (`.md`/`.gitkeep`, blob-id→sha), base64+CRLF decode, GitHub search
+  result mapping, device-flow poll classification, and `status_error` — which
+  locks the **409 → `Conflict`** SHA-guard for GitLab and the 401/404 mapping for
+  both. A live-HTTP round-trip (wiremock, or a throwaway repo) is still worth
+  adding later as a smoke test, but the interesting logic is now covered without
+  a network.
 - **Layer 3 (Playwright E2E) — not started.**
 
 ## Non-goals
