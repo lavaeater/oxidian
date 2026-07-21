@@ -175,3 +175,67 @@ pub struct GithubConfig {
 fn default_branch() -> String { "main".to_string() }
 fn default_templates_dir() -> String { ".oxidian/templates".to_string() }
 fn default_daily_note_template() -> String { ".oxidian/templates/daily-note.md".to_string() }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn meta(path: &str) -> FileMeta {
+        FileMeta { path: path.to_string(), sha: "abc".into(), size: 0 }
+    }
+
+    #[test]
+    fn file_meta_name_and_dir_for_nested_path() {
+        let m = meta("notes/sub/idea.md");
+        assert_eq!(m.name(), "idea.md");
+        assert_eq!(m.dir(), "notes/sub");
+    }
+
+    #[test]
+    fn file_meta_name_and_dir_for_root_file() {
+        let m = meta("README.md");
+        assert_eq!(m.name(), "README.md");
+        assert_eq!(m.dir(), "");
+    }
+
+    #[test]
+    fn provider_defaults_to_github_with_label() {
+        assert_eq!(Provider::default(), Provider::GitHub);
+        assert_eq!(Provider::GitHub.label(), "GitHub");
+        assert_eq!(Provider::GitLab.label(), "GitLab");
+    }
+
+    #[test]
+    fn config_applies_defaults_for_missing_fields() {
+        // Only the required identity fields are present; the rest default.
+        let json = r#"{"token":"t","owner":"o","repo":"r"}"#;
+        let cfg: GithubConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(cfg.branch, "main");
+        assert_eq!(cfg.provider, Provider::GitHub);
+        assert_eq!(cfg.templates_dir, ".oxidian/templates");
+        assert_eq!(cfg.daily_note_template, ".oxidian/templates/daily-note.md");
+    }
+
+    #[test]
+    fn config_round_trips_through_serde() {
+        let cfg = GithubConfig {
+            token: "t".into(),
+            owner: "o".into(),
+            repo: "r".into(),
+            branch: "dev".into(),
+            provider: Provider::GitLab,
+            templates_dir: "tpl".into(),
+            daily_note_template: "tpl/daily.md".into(),
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+        let back: GithubConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(cfg, back);
+    }
+
+    #[test]
+    fn vault_error_messages_are_user_facing() {
+        assert_eq!(VaultError::Unauthorized.to_string(), "Unauthorized — check your token");
+        assert!(VaultError::Conflict.to_string().contains("changed remotely"));
+        assert_eq!(VaultError::NotFound("x.md".into()).to_string(), "Not found: x.md");
+    }
+}

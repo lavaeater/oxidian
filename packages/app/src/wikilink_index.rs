@@ -107,3 +107,103 @@ fn stem(path: &str) -> String {
 fn stems_match(link_target: &str, file_stem: &str) -> bool {
     link_target.to_lowercase() == *file_stem
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn targets_of<'a>(idx: &'a WikiLinkIndex, source: &str) -> Vec<&'a str> {
+        idx.links
+            .iter()
+            .filter(|l| l.source == source)
+            .map(|l| l.target.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn extracts_simple_and_labeled_links() {
+        let mut idx = WikiLinkIndex::new();
+        idx.index_file("a.md", "see [[Target]] and [[Other|a label]] here");
+        assert_eq!(targets_of(&idx, "a.md"), vec!["Target", "Other"]);
+    }
+
+    #[test]
+    fn trims_and_skips_empty_targets() {
+        let mut idx = WikiLinkIndex::new();
+        idx.index_file("a.md", "[[  Spaced  ]] then [[]] then [[   ]]");
+        // Empty / whitespace-only targets are dropped; real one is trimmed.
+        assert_eq!(targets_of(&idx, "a.md"), vec!["Spaced"]);
+    }
+
+    #[test]
+    fn unclosed_bracket_stops_scanning() {
+        let mut idx = WikiLinkIndex::new();
+        idx.index_file("a.md", "[[Good]] then [[Unclosed and more text");
+        assert_eq!(targets_of(&idx, "a.md"), vec!["Good"]);
+    }
+
+    #[test]
+    fn index_file_is_noop_when_already_indexed() {
+        let mut idx = WikiLinkIndex::new();
+        idx.index_file("a.md", "[[First]]");
+        // Second call with different content is ignored (already indexed).
+        idx.index_file("a.md", "[[Second]]");
+        assert_eq!(targets_of(&idx, "a.md"), vec!["First"]);
+    }
+
+    #[test]
+    fn reindex_replaces_stale_links() {
+        let mut idx = WikiLinkIndex::new();
+        idx.index_file("a.md", "[[First]] [[Shared]]");
+        idx.reindex_file("a.md", "[[Second]] [[Shared]]");
+        assert_eq!(targets_of(&idx, "a.md"), vec!["Second", "Shared"]);
+    }
+
+    #[test]
+    fn backlinks_are_case_insensitive_and_exclude_self() {
+        let mut idx = WikiLinkIndex::new();
+        idx.index_file("notes/a.md", "[[Target]]");
+        idx.index_file("notes/b.md", "[[target]]"); // lowercase still matches
+        idx.index_file("notes/Target.md", "[[Target]]"); // self-link excluded
+        let mut back = idx.backlinks("notes/Target.md");
+        back.sort();
+        assert_eq!(back, vec!["notes/a.md", "notes/b.md"]);
+    }
+
+    #[test]
+    fn outlinks_resolve_targets_to_paths() {
+        let mut idx = WikiLinkIndex::new();
+        idx.index_file("a.md", "[[Target]] [[Missing]]");
+        let all = vec![
+            "a.md".to_string(),
+            "sub/Target.md".to_string(),
+            "unrelated.md".to_string(),
+        ];
+        assert_eq!(idx.outlinks("a.md", &all), vec!["sub/Target.md"]);
+    }
+
+    #[test]
+    fn edges_resolve_source_and_target_paths() {
+        let mut idx = WikiLinkIndex::new();
+        idx.index_file("notes/a.md", "[[Target]]");
+        let all = vec!["notes/a.md".to_string(), "notes/Target.md".to_string()];
+        assert_eq!(
+            idx.edges(&all),
+            vec![("notes/a.md".to_string(), "notes/Target.md".to_string())]
+        );
+    }
+
+    #[test]
+    fn edges_drops_unresolved_targets() {
+        let mut idx = WikiLinkIndex::new();
+        idx.index_file("a.md", "[[Nowhere]]");
+        let all = vec!["a.md".to_string()];
+        assert!(idx.edges(&all).is_empty());
+    }
+
+    #[test]
+    fn stem_strips_dir_and_extension() {
+        assert_eq!(stem("notes/sub/My Note.md"), "my note");
+        assert_eq!(stem("Plain"), "plain");
+    }
+}
