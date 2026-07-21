@@ -482,3 +482,99 @@ pub fn MarkdownArea(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The exact HTML the editor paints for a given markdown source — this is
+    /// the rendering contract, so any drift here is a visible editor regression.
+    fn html(src: &str) -> String {
+        let tokens = tokenize(src);
+        tokens_to_html(src, &tokens)
+    }
+
+    #[test]
+    fn wraps_output_in_a_single_md_line() {
+        let out = html("hello");
+        assert!(out.starts_with("<div class=\"md-line\">"));
+        assert!(out.ends_with("</div>"));
+        assert!(out.contains("md-plain"));
+        assert!(out.contains("hello"));
+    }
+
+    #[test]
+    fn newlines_open_new_md_line_divs() {
+        // Two source lines become two md-line divs (block divs, no <br>).
+        let out = html("a\nb");
+        assert_eq!(out.matches("<div class=\"md-line\">").count(), 2);
+        assert!(!out.contains("<br"));
+    }
+
+    #[test]
+    fn bold_keeps_visible_markers_and_class() {
+        let out = html("**hi**");
+        assert!(out.contains("<strong class=\"md-token md-bold\">"));
+        // The `**` markers are preserved (Obsidian-style raw-on-focus editing).
+        assert_eq!(out.matches("md-marker").count(), 2);
+        assert!(out.contains("hi"));
+    }
+
+    #[test]
+    fn escapes_html_special_chars() {
+        let out = html("a < b & \"c\"");
+        assert!(out.contains("&lt;"));
+        assert!(out.contains("&amp;"));
+        assert!(out.contains("&quot;"));
+        // No raw angle bracket from the note leaks into the DOM string.
+        assert!(!out.contains("a < b"));
+    }
+
+    #[test]
+    fn heading_carries_level_class() {
+        let out = html("## Title");
+        assert!(out.contains("md-heading"));
+        assert!(out.contains("md-h2"));
+        assert!(out.contains("Title"));
+    }
+
+    #[test]
+    fn wikilink_exposes_navigate_target() {
+        let out = html("[[My Note]]");
+        assert!(out.contains("md-wikilink"));
+        assert!(out.contains("data-navigate=\"My Note\""));
+    }
+
+    #[test]
+    fn labeled_wikilink_splits_target_and_display() {
+        let out = html("[[Target|shown]]");
+        assert!(out.contains("data-navigate=\"Target\""));
+        assert!(out.contains("md-wikilink-target"));
+        assert!(out.contains("shown"));
+    }
+
+    #[test]
+    fn link_carries_href_and_navigate() {
+        let out = html("[label](https://example.com)");
+        assert!(out.contains("md-link"));
+        assert!(out.contains("href=\"https://example.com\""));
+        assert!(out.contains("data-navigate=\"https://example.com\""));
+    }
+
+    #[test]
+    fn task_item_exposes_checkbox_state() {
+        let checked = html("- [x] done");
+        assert!(checked.contains("md-task-checkbox"));
+        assert!(checked.contains("data-checked=\"true\""));
+        let unchecked = html("- [ ] todo");
+        assert!(unchecked.contains("data-checked=\"false\""));
+    }
+
+    #[test]
+    fn wikilink_target_attribute_is_escaped() {
+        // A quote in the target must not break out of the attribute.
+        let out = html("[[a\"b]]");
+        assert!(out.contains("data-navigate=\"a&quot;b\""));
+        assert!(!out.contains("data-navigate=\"a\"b\""));
+    }
+}
