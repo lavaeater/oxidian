@@ -378,11 +378,20 @@ cd e2e && npx playwright test  # E2E (auto-starts `dx serve --package web`)
   canned tree/contents data (catch-all registered first — Playwright evaluates
   routes in reverse order). Specs: `onboarding` (first-run Settings screen) and
   `vault-browser` (seeded boot, note listing, `.gitkeep` filtered, folder
-  expansion, empty-vault status). Next: editor flows (focus reveals raw markdown,
-  the focused-contenteditable invariant, wikilink navigation), note CRUD with a
-  simulated 409 conflict, tasks/kanban, and the `Ctrl+P`/`Ctrl+O` shortcut hook
-  that can't be tested natively. CI wiring (install `dx`, `npx playwright test`)
-  still to do.
+  expansion, empty-vault status) and `editor` (opening a note renders formatted
+  markdown; typing round-trips through the model and survives the re-render on
+  blur — the focused-contenteditable invariant). 6 specs passing.
+
+  > **Finding surfaced by the editor spec:** the `VaultBrowser` mounts
+  > `MarkdownArea` **without** an `on_navigate` handler
+  > (`packages/app/src/views/vault.rs`), so clicking a `[[wikilink]]` *inside the
+  > editor* is currently a no-op — the link renders but doesn't navigate. The
+  > planned navigation spec is therefore deferred until that's wired up; the test
+  > was not written to pass against absent behaviour.
+
+  Next: note CRUD with a simulated 409 conflict, tasks/kanban, wikilink
+  navigation (once wired), and the `Ctrl+P`/`Ctrl+O` shortcut hook that can't be
+  tested natively. CI wiring (install `dx`, `npx playwright test`) still to do.
 
 ## Non-goals
 - Testing the vendored dioxus-primitives components in `ui/src/components/*`
