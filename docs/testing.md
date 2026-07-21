@@ -171,8 +171,13 @@ fn use_global_shortcuts_fires_callback() {
 }
 ```
 Hooks worth covering this way:
-- `app/src/shortcuts.rs::use_global_shortcuts` — key combos map to the right
-  action strings; teardown removes listeners.
+- `app/src/shortcuts.rs::use_global_shortcuts` — **caveat: this hook is
+  JS-driven.** The chord-matching logic lives in `INSTALL_JS` (a `document::eval`
+  string), not in Rust, and there is no JS runtime in the native harness, so the
+  callback never fires under `cargo test`. There is no pure Rust logic to unit
+  test here — this hook belongs to the **E2E layer** (press Ctrl+P in a real
+  browser, assert the palette opens). The `VirtualDom`-driving pattern is still
+  the right tool for any *future* hook whose logic lives in Rust.
 - `ui/.../sidebar::use_sidebar` / `use_is_mobile` — context wiring and the
   mobile breakpoint signal.
 - Any future `use_*` we add (the guide's whole point is that these get a test
@@ -334,6 +339,25 @@ cd e2e && npx playwright test  # E2E (auto-starts `dx serve --package web`)
    localStorage-seed + route-mock strategy.
 5. **Snapshots + CI wiring**, then broaden E2E coverage feature-by-feature.
 6. **Android smoke checklist** documented and run before releases.
+
+## Implementation status
+
+- **Layer 1 (pure units) — done for all already-pure code.** Added: `app`
+  `wikilink_index` (10), `template` (12), `dates::add_days` (5), `export` (7);
+  `vault` `lib` helpers (6). Pre-existing: `dates`, `tasks`, `tasks_cache`,
+  `tokenizer`. Still open: extract + test pure request/response helpers from
+  `github.rs`/`gitlab.rs`.
+- **Layer 2 (component/hook harness) — bootstrapped.** `dioxus-ssr` +
+  `pretty_assertions` added as dev-deps to `app` and `ui`. The reusable harness
+  is `let mut dom = VirtualDom::new(app); dom.rebuild_in_place();
+  dioxus_ssr::render(&dom)` (see `app/tests/ssr_smoke.rs`). Added: `MarkdownArea`
+  `tokens_to_html` rendering contract (10 in-file unit tests) and a
+  component-level render test (`ui/tests/markdown_area_render.rs`, 3) proving the
+  contenteditable surface shows formatted markdown on initial unfocused mount.
+  A single `rebuild_in_place` pass renders initial state only — effects/JS don't
+  run, so interaction/cursor behaviour stays in Layer 3.
+- **Layer 1.5 (vault mocked HTTP) — not started.**
+- **Layer 3 (Playwright E2E) — not started.**
 
 ## Non-goals
 - Testing the vendored dioxus-primitives components in `ui/src/components/*`
