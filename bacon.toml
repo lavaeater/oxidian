@@ -22,32 +22,24 @@ need_stdout = false
 command = ["cargo", "clippy", "--package", "web", "--features", "web"]
 need_stdout = false
 
-
-[jobs.test]
+[jobs.nextest]
 command = [
-    "cargo", "nextest", "run",
-    "--hide-progress-bar", "--failure-output", "final"
+    "sh", "-c",
+    "cargo llvm-cov nextest --hide-progress-bar --failure-output final | awk '/^Filename/{printf \"%-40s %9s %8s %13s %9s\\n\",\"File\",\"MissLine\",\"Line%\",\"MissBranch\",\"Branch%\"; printf \"%s\\n\",\"----------------------------------------\"; next} /^-/{next} NF==13{printf \"%-40s %9s %8s %13s %9s\\n\",$1,$9,$10,$12,$13; next} {print}'"
 ]
 need_stdout = true
 analyzer = "nextest"
 
-[jobs.doc]
-command = ["cargo", "doc", "--no-deps"]
-need_stdout = false
-
-# If the doc compiles, then it opens in your browser and bacon switches
-# to the previous job
-[jobs.doc-open]
-command = ["cargo", "doc", "--no-deps", "--open"]
-need_stdout = false
-on_success = "back" # so that we don't open the browser at each change
-
-# You may define here keybindings that would be specific to
-# a project, for example a shortcut to launch a specific job.
-# Shortcuts to internal functions (scrolling, toggling, etc.)
-# should go in your personal global prefs.toml file instead.
+[jobs.nextest-cov]
+command = [
+    "sh", "-c",
+    "out=$(cargo llvm-cov nextest --hide-progress-bar --failure-output final 2>&1); s=$?; printf '%s\\n' \"$out\" | awk -v failed=$s '/^Filename/{printf \"%-40s %9s %8s %13s %9s\\n\",\"File\",\"MissLine\",\"Line%\",\"MissBranch\",\"Branch%\"; printf \"%-40s\\n\",\"----------------------------------------\"; next} /^-+$/{next} NF==13{printf \"%-40s %9s %8s %13s %9s\\n\",$1,$9,$10,$12,$13; next} failed{print}'"
+]
+need_stdout = true
+analyzer = "nextest"
 
 [keybindings]
-# alt-m = "job:my-job"
-c = "job:clippy-client" # comment this to have 'c' run clippy on only the default target
-t = "job:test"
+s = "job:clippy-server"
+c = "job:clippy-client"
+t = "job:nextest"
+v = "job:nextest-cov"
