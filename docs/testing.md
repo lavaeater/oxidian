@@ -385,7 +385,13 @@ cd e2e && npx playwright test  # E2E (auto-starts `dx serve --package web`)
   the SHA-guard end to end, never a silent overwrite; `mockGitHub` grew a
   `conflictOnWrite` option that 409s every PUT), `new-note` (the New-note dialog
   creates a file and opens it in the editor) and `tasks` (clicking a task
-  checkbox in the editor flips `- [ ]` → `- [x]`). **9 specs passing.**
+  checkbox in the editor flips `- [ ]` → `- [x]`), `command-palette` (**the only
+  coverage for `use_global_shortcuts`** — Ctrl+P opens the command palette and
+  filters, Ctrl+O opens the quick switcher, Escape closes; the chord logic lives
+  in a `document::eval` JS string with no native runtime, so it can only be
+  tested here) and `delete-note` (the delete button confirms via
+  `window.confirm`, then removes the note on accept and is a no-op on dismiss —
+  a destructive action never fires without confirmation). **13 specs passing.**
   `mockGitHub` is now a small *stateful* fake — a PUT records the written body so
   a later GET reflects it (enables create-then-open and edit-then-reload).
 
@@ -396,9 +402,9 @@ cd e2e && npx playwright test  # E2E (auto-starts `dx serve --package web`)
   > planned navigation spec is therefore deferred until that's wired up; the test
   > was not written to pass against absent behaviour.
 
-  Next: note delete/move, kanban, the command palette / quick switcher, wikilink
-  navigation (once wired), and the `Ctrl+P`/`Ctrl+O` shortcut hook that can't be
-  tested natively. CI wiring (install `dx`, `npx playwright test`) still to do.
+  Next: note move (drag-and-drop), kanban board interactions, and wikilink
+  navigation (once wired). CI wiring (install `dx`, `npx playwright test`) still
+  to do.
 
 ## Non-goals
 - Testing the vendored dioxus-primitives components in `ui/src/components/*`
