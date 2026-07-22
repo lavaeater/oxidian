@@ -9,6 +9,12 @@
 
 default_job = "test"
 env.CARGO_TERM_COLOR = "always"
+# .cargo/config.toml sets `build.rustc-wrapper = ""` to keep sccache from
+# double-wrapping under `dx serve`. That empty string breaks `cargo llvm-cov`,
+# which prepends the wrapper to rustc and ends up execing " /…/rustc" (leading
+# space -> "No such file or directory"). bacon never runs `dx serve`, so we
+# override the wrapper back to a real one; env vars beat the config file.
+env.CARGO_BUILD_RUSTC_WRAPPER = "sccache"
 
 [jobs.check]
 command = ["cargo", "check"]
