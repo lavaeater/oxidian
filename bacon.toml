@@ -38,8 +38,27 @@ command = [
 need_stdout = true
 analyzer = "nextest"
 
+# Playwright end-to-end suite (web target). Starts its own `dx run` server, so it
+# is heavy (~15s warm, 1–2 min cold) — keep it a manual, on-demand job rather than
+# part of the keystroke-fast Rust loop. Note: E2E drives the compiled wasm app in
+# a browser, so it can NOT contribute to `cargo llvm-cov` coverage — that is why
+# it is a separate job and not part of `nextest-cov`.
+[jobs.e2e]
+command = ["sh", "-c", "cd e2e && npm test"]
+need_stdout = true
+
+# Everything: Rust tests (with coverage table) then the E2E suite.
+[jobs.test-all]
+command = [
+    "sh", "-c",
+    "cargo llvm-cov nextest --hide-progress-bar --failure-output final && (cd e2e && npm test)"
+]
+need_stdout = true
+
 [keybindings]
 s = "job:clippy-server"
 c = "job:clippy-client"
 t = "job:nextest"
 v = "job:nextest-cov"
+e = "job:e2e"
+a = "job:test-all"
