@@ -383,7 +383,11 @@ cd e2e && npx playwright test  # E2E (auto-starts `dx serve --package web`)
   blur — the focused-contenteditable invariant) and `save-conflict` (a 409 on
   auto-save surfaces "Save failed" with the "changed remotely" conflict message —
   the SHA-guard end to end, never a silent overwrite; `mockGitHub` grew a
-  `conflictOnWrite` option that 409s every PUT). 7 specs passing.
+  `conflictOnWrite` option that 409s every PUT), `new-note` (the New-note dialog
+  creates a file and opens it in the editor) and `tasks` (clicking a task
+  checkbox in the editor flips `- [ ]` → `- [x]`). **9 specs passing.**
+  `mockGitHub` is now a small *stateful* fake — a PUT records the written body so
+  a later GET reflects it (enables create-then-open and edit-then-reload).
 
   > **Finding surfaced by the editor spec:** the `VaultBrowser` mounts
   > `MarkdownArea` **without** an `on_navigate` handler
@@ -392,9 +396,9 @@ cd e2e && npx playwright test  # E2E (auto-starts `dx serve --package web`)
   > planned navigation spec is therefore deferred until that's wired up; the test
   > was not written to pass against absent behaviour.
 
-  Next: note create/delete flows, tasks/kanban, wikilink navigation (once
-  wired), and the `Ctrl+P`/`Ctrl+O` shortcut hook that can't be tested natively.
-  CI wiring (install `dx`, `npx playwright test`) still to do.
+  Next: note delete/move, kanban, the command palette / quick switcher, wikilink
+  navigation (once wired), and the `Ctrl+P`/`Ctrl+O` shortcut hook that can't be
+  tested natively. CI wiring (install `dx`, `npx playwright test`) still to do.
 
 ## Non-goals
 - Testing the vendored dioxus-primitives components in `ui/src/components/*`

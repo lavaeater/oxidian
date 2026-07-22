@@ -75,6 +75,17 @@ async function mockGitHub(page, files = {}, options = {}) {
         route.fulfill({ status: 409, json: { message: "Conflict" } });
         return;
       }
+      // Stateful fake: record the written body so a later GET reflects it
+      // (enables create-then-open and edit-then-reload flows). The write/create
+      // body carries base64 `content`.
+      try {
+        const payload = request.postDataJSON();
+        if (payload && typeof payload.content === "string") {
+          files[path] = Buffer.from(payload.content, "base64").toString("utf-8");
+        }
+      } catch {
+        /* body wasn't JSON — ignore */
+      }
       // GitHub returns the new blob sha under `content.sha`.
       route.fulfill({ json: { content: { sha: `sha-${path}-v2` } } });
       return;
