@@ -391,9 +391,17 @@ cd e2e && npx playwright test  # E2E (auto-starts `dx serve --package web`)
   in a `document::eval` JS string with no native runtime, so it can only be
   tested here) and `delete-note` (the delete button confirms via
   `window.confirm`, then removes the note on accept and is a no-op on dismiss —
-  a destructive action never fires without confirmation). **13 specs passing.**
-  `mockGitHub` is now a small *stateful* fake — a PUT records the written body so
-  a later GET reflects it (enables create-then-open and edit-then-reload).
+  a destructive action never fires without confirmation), `move-file` (dragging a
+  note onto a folder confirms, then moves it via create-at-new + delete-old and
+  the sidebar reflects the new location) and `kanban` (a board renders columns +
+  cards from its markdown doc; dragging a card between columns moves the note file
+  between column folders and rewrites the board doc). **16 specs passing.**
+  `mockGitHub` is now a *stateful* fake — PUT records the written body, DELETE
+  removes it, and the git-tree is recomputed from the current file set, so
+  create/move/delete round-trip through a later list (enables create-then-open,
+  edit-then-reload, and drag-move). Drag-and-drop rides a `window` global
+  (`window.__oxidianDragData`), so Playwright's native `dragTo` drives the real
+  handlers.
 
   > **Finding surfaced by the editor spec:** the `VaultBrowser` mounts
   > `MarkdownArea` **without** an `on_navigate` handler
@@ -402,9 +410,8 @@ cd e2e && npx playwright test  # E2E (auto-starts `dx serve --package web`)
   > planned navigation spec is therefore deferred until that's wired up; the test
   > was not written to pass against absent behaviour.
 
-  Next: note move (drag-and-drop), kanban board interactions, and wikilink
-  navigation (once wired). CI wiring (install `dx`, `npx playwright test`) still
-  to do.
+  Next: wikilink navigation (once wired). CI wiring (install `dx`,
+  `npx playwright test`) is the main remaining piece.
 
 ## Non-goals
 - Testing the vendored dioxus-primitives components in `ui/src/components/*`

@@ -34,6 +34,18 @@ async function seedConfig(page, overrides = {}) {
   );
 }
 
+/**
+ * Seed the Kanban board root (localStorage `oxidian_board`, see
+ * packages/app/src/views/vault.rs) so the Kanban panel opens a board. A bare
+ * folder name like "kanban" resolves to the document "kanban/kanban.md".
+ */
+async function seedBoard(page, root = "kanban") {
+  await page.addInitScript(
+    (value) => window.localStorage.setItem("oxidian_board", value),
+    root
+  );
+}
+
 /** base64-encode a UTF-8 string the way the GitHub Contents API returns it. */
 function b64(text) {
   return Buffer.from(text, "utf-8").toString("base64");
@@ -46,14 +58,13 @@ function b64(text) {
  *     conflictOnWrite: boolean — make every PUT (save/create) return HTTP 409,
  *       exercising the SHA-conflict guard (must surface as a conflict, never a
  *       silent overwrite).
- * The git-trees endpoint is synthesized from the file paths; the contents
- * endpoint serves each file's base64 body on GET, and acknowledges PUT/DELETE.
- * Any other api.github.com call gets a benign empty 200 so a stray request can't
- * hang the test.
+ * The git-trees endpoint is synthesized from the CURRENT file paths (so a
+ * create/move/delete is reflected on the next list); the contents endpoint
+ * serves each file's base64 body on GET, records writes on PUT, and removes on
+ * DELETE. Any other api.github.com call gets a benign empty 200 so a stray
+ * request can't hang the test.
  */
 async function mockGitHub(page, files = {}, options = {}) {
-  const paths = Object.keys(files);
-
   // NOTE: Playwright evaluates route handlers in REVERSE registration order
   // (most-recently-added first). Register the broad catch-all FIRST so the
   // specific tree/contents routes added afterwards take precedence.
@@ -91,6 +102,7 @@ async function mockGitHub(page, files = {}, options = {}) {
       return;
     }
     if (method === "DELETE") {
+      delete files[path];
       route.fulfill({ json: {} });
       return;
     }
@@ -106,11 +118,12 @@ async function mockGitHub(page, files = {}, options = {}) {
   });
 
   // Git tree (list_files): GET /repos/:owner/:repo/git/trees/:branch?recursive=1
+  // Recomputed from the current `files` map so create/move/delete are reflected.
   await page.route(/api\.github\.com\/repos\/[^/]+\/[^/]+\/git\/trees\//, (route) => {
     route.fulfill({
       json: {
         sha: "tree-sha",
-        tree: paths.map((p) => ({
+        tree: Object.keys(files).map((p) => ({
           path: p,
           type: "blob",
           sha: `sha-${p}`,
@@ -122,4 +135,4 @@ async function mockGitHub(page, files = {}, options = {}) {
   });
 }
 
-module.exports = { seedConfig, mockGitHub, fakeConfig, b64, CONFIG_KEY };
+module.exports = { seedConfig, seedBoard, mockGitHub, fakeConfig, b64, CONFIG_KEY };
