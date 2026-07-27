@@ -318,12 +318,19 @@ cd e2e && npx playwright test  # E2E (auto-starts `dx serve --package web`)
 - `packages/vault`: `wiremock` (or `httpmock`), `tokio` (multi-thread, macros).
 - `e2e/`: `@playwright/test`.
 
-### CI (GitHub Actions) — suggested jobs
-1. `cargo test --workspace` + `cargo clippy --workspace` (fast, always).
-2. `playwright` job: install the `dx` CLI, `cargo build`, run `npx playwright
-   test` with the localStorage-seed + route-mock strategy; upload the Playwright
-   HTML report + traces on failure.
-3. *(optional, nightly)* real-repo smoke using a CI token secret.
+### CI (GitHub Actions) — implemented in `.github/workflows/ci.yml`
+Runs on push to `main`/`testing` and on PRs, two jobs:
+1. **`rust-tests`** — `cargo test --locked -p vault -p ui -p app` + `cargo clippy`
+   on the same crates. Scoped to the three crates that hold tests: the
+   desktop/mobile shells have no tests and would drag in libxdo/webkit link deps,
+   and the web build is covered by the e2e job. Cached via `Swatinem/rust-cache`.
+2. **`e2e`** — installs the `dx` CLI (`cargo binstall dioxus-cli@0.8.0-alpha.0`) +
+   the `wasm32-unknown-unknown` target, Node 20, `npm ci`, `npx playwright install
+   --with-deps chromium`, then `npm test` (Playwright starts `dx run --package
+   web` itself; `CI=1` disables server reuse and enables retries). Uploads the
+   Playwright HTML report artifact.
+3. *(future, optional, nightly)* real-repo smoke using a CI token secret; a
+   wiremock/live-HTTP smoke for the vault backend.
 
 ---
 
@@ -410,8 +417,8 @@ cd e2e && npx playwright test  # E2E (auto-starts `dx serve --package web`)
   > planned navigation spec is therefore deferred until that's wired up; the test
   > was not written to pass against absent behaviour.
 
-  Next: wikilink navigation (once wired). CI wiring (install `dx`,
-  `npx playwright test`) is the main remaining piece.
+  Next: wikilink navigation (once wired). CI is now wired up (see
+  `.github/workflows/ci.yml`).
 
 ## Non-goals
 - Testing the vendored dioxus-primitives components in `ui/src/components/*`
