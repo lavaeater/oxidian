@@ -207,3 +207,64 @@ fn escape_html(s: &str) -> String {
 // The actual browser download is triggered by `js::download_file()`
 // (see `assets/oxidian.js`), which takes the filename and rendered HTML
 // directly — no manual string escaping.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wraps_document_and_escapes_title() {
+        let html = to_html("A & B <x>", "hello");
+        assert!(html.starts_with("<!DOCTYPE html>"));
+        assert!(html.contains("<title>A &amp; B &lt;x&gt;</title>"));
+        assert!(html.contains("hello"));
+        assert!(html.trim_end().ends_with("</html>"));
+    }
+
+    #[test]
+    fn renders_inline_formatting() {
+        let html = to_html("t", "**bold** and *italic* and `code`");
+        assert!(html.contains("<strong>bold</strong>"));
+        assert!(html.contains("<em>italic</em>"));
+        assert!(html.contains("<code>code</code>"));
+    }
+
+    #[test]
+    fn renders_headings() {
+        let html = to_html("t", "# Title\n## Sub");
+        assert!(html.contains("<h1>Title</h1>"));
+        assert!(html.contains("<h2>Sub</h2>"));
+    }
+
+    #[test]
+    fn escapes_html_in_body_content() {
+        let html = to_html("t", "a < b && c > d");
+        assert!(html.contains("a &lt; b &amp;&amp; c &gt; d"));
+        // The raw angle bracket from the note must not leak through.
+        assert!(!html.contains("a < b"));
+    }
+
+    #[test]
+    fn renders_wikilink_with_target_attribute() {
+        let html = to_html("t", "see [[Other Note]]");
+        assert!(html.contains(r#"<span class="wikilink" data-target="Other Note">"#));
+    }
+
+    #[test]
+    fn renders_link_with_href() {
+        let html = to_html("t", "[label](https://example.com)");
+        assert!(html.contains(r#"<a href="https://example.com">"#));
+        assert!(html.contains("label</a>"));
+    }
+
+    #[test]
+    fn wraps_consecutive_table_rows_in_table() {
+        let md = "| a | b |\n| --- | --- |\n| 1 | 2 |";
+        let html = to_html("t", md);
+        assert!(html.contains("<table>"));
+        assert!(html.contains("</table>"));
+        assert!(html.contains("<tr>"));
+        // The separator row must not become a data row.
+        assert!(!html.contains("<td>---</td>"));
+    }
+}

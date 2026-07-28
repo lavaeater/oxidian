@@ -765,7 +765,8 @@ mod tests {
         let tokens = tokenize(src);
         assert!(matches!(tokens[0].kind, TokenKind::ListItem { .. }));
     }
-
+    
+    #[test]
     fn ordered_list() {
         let src = "1. first\n2. second";
         let tokens = tokenize(src);

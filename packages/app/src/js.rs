@@ -23,6 +23,7 @@ mod bindings {
         download_file,
         get_selection,
         slash_query, apply_slash,
+        build_signin_link, read_signin_link, request_persistent_storage,
         get_drag_data, set_drag_data, clear_drag_data,
     });
 }
@@ -153,6 +154,46 @@ pub fn apply_slash(snippet: impl Into<String>, slash_len: usize) {
     spawn(async move {
         let _: Result<(), _> = bindings::apply_slash(snippet, slash_len).await;
     });
+}
+
+// ── Sign-in link / persistent storage ─────────────────────────────────────────
+
+/// Builds a bookmarkable sign-in link carrying `cfg_json` in the URL fragment.
+/// Web only — returns `""` on native (no shareable URL).
+pub async fn build_signin_link(cfg_json: impl Into<String>) -> String {
+    let cfg_json = cfg_json.into();
+    #[cfg(target_arch = "wasm32")]
+    {
+        bindings::build_signin_link(cfg_json).await.unwrap_or_default()
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = cfg_json;
+        String::new()
+    }
+}
+
+/// Consumes a `#cfg=…` sign-in link if the current URL carries one: returns the
+/// decoded config JSON and strips the fragment. `""` when there is none. Web only.
+pub async fn read_signin_link() -> String {
+    #[cfg(target_arch = "wasm32")]
+    {
+        bindings::read_signin_link().await.unwrap_or_default()
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        String::new()
+    }
+}
+
+/// Best-effort request to make client storage persistent (resist eviction).
+pub fn request_persistent_storage() {
+    #[cfg(target_arch = "wasm32")]
+    {
+        spawn(async move {
+            let _: Result<(), _> = bindings::request_persistent_storage().await;
+        });
+    }
 }
 
 // ── Kanban drag data ──────────────────────────────────────────────────────────

@@ -170,4 +170,36 @@ mod tests {
         assert_eq!(parse_ymd("not-a-date"), None);
         assert_eq!(parse_ymd("2026/06/04"), None);
     }
+
+    #[test]
+    fn add_days_within_month() {
+        assert_eq!(add_days("2026-06-04", 0), "2026-06-04");
+        assert_eq!(add_days("2026-06-04", 3), "2026-06-07");
+    }
+
+    #[test]
+    fn add_days_rolls_over_month_and_year() {
+        assert_eq!(add_days("2026-06-30", 1), "2026-07-01");
+        assert_eq!(add_days("2026-12-31", 1), "2027-01-01");
+    }
+
+    #[test]
+    fn add_days_handles_leap_february() {
+        // 2024 is a leap year: Feb has 29 days.
+        assert_eq!(add_days("2024-02-28", 1), "2024-02-29");
+        assert_eq!(add_days("2024-02-28", 2), "2024-03-01");
+        // 2026 is not: Feb 28 -> Mar 1.
+        assert_eq!(add_days("2026-02-28", 1), "2026-03-01");
+    }
+
+    #[test]
+    fn add_days_spanning_many_months() {
+        // 100 days after 2026-01-01 -> 2026-04-11.
+        assert_eq!(add_days("2026-01-01", 100), "2026-04-11");
+    }
+
+    #[test]
+    fn add_days_passes_through_invalid_input() {
+        assert_eq!(add_days("not-a-date", 5), "not-a-date");
+    }
 }

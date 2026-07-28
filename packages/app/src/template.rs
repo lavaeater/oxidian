@@ -195,3 +195,126 @@ pub fn parse_template(source_path: &str, raw: &str) -> TemplateMeta {
 
     TemplateMeta { name, source_path: source_path.to_string(), filepath, body }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn vars() -> TemplateVars {
+        TemplateVars {
+            year: "2026".into(),
+            year_short: "26".into(),
+            month: "07".into(),
+            month_name: "July".into(),
+            date: "2026-07-21".into(),
+            day_name: "Tuesday".into(),
+            week: "30".into(),
+            title: "My Note".into(),
+            title_safe: "my-note".into(),
+            current_dir: "notes".into(),
+        }
+    }
+
+    #[test]
+    fn substitutes_oxid_brace_and_bare_forms() {
+        let v = vars();
+        assert_eq!(substitute_vars("${OXID_DATE_YEAR}", &v), "2026");
+        assert_eq!(substitute_vars("${OXID_TITLE}", &v), "My Note");
+        assert_eq!(substitute_vars("$OXID_TITLE", &v), "My Note");
+        // The longer bare token must win over its prefix.
+        assert_eq!(substitute_vars("$OXID_TITLE_SAFE", &v), "my-note");
+        assert_eq!(substitute_vars("$OXID_CURRENT_DIR", &v), "notes");
+    }
+
+    #[test]
+    fn substitutes_foam_and_vscode_aliases() {
+        let v = vars();
+        assert_eq!(substitute_vars("${FOAM_DATE_MONTH_NAME}", &v), "July");
+        assert_eq!(substitute_vars("${FOAM_TITLE}", &v), "My Note");
+        assert_eq!(substitute_vars("${CURRENT_YEAR}", &v), "2026");
+        assert_eq!(substitute_vars("${CURRENT_DATE}", &v), "2026-07-21");
+    }
+
+    #[test]
+    fn substitutes_multiple_occurrences_in_context() {
+        let v = vars();
+        let out = substitute_vars("# ${OXID_TITLE}\nweek ${OXID_DATE_WEEK} of ${OXID_DATE_YEAR}", &v);
+        assert_eq!(out, "# My Note\nweek 30 of 2026");
+    }
+
+    #[test]
+    fn strip_tabstops_replaces_placeholder_and_removes_empty() {
+        assert_eq!(strip_tabstops("Hello ${1:World}"), "Hello World");
+        assert_eq!(strip_tabstops("cursor${0}here"), "cursorhere");
+        assert_eq!(strip_tabstops("${2:a} and ${3:b}"), "a and b");
+    }
+
+    #[test]
+    fn strip_tabstops_only_strips_outer_of_nested() {
+        // Depth tracking keeps the inner tabstop text verbatim.
+        assert_eq!(strip_tabstops("${1:a${2:b}c}"), "a${2:b}c");
+    }
+
+    #[test]
+    fn strip_tabstops_leaves_non_tabstops_untouched() {
+        assert_eq!(strip_tabstops("price $5 and ${notavar}"), "price $5 and ${notavar}");
+        assert_eq!(strip_tabstops("plain text"), "plain text");
+    }
+
+    #[test]
+    fn from_json_parses_dates_and_slugifies_title() {
+        let json = r#"{"year":"2026","yearShort":"26","month":"07","monthName":"July","date":"2026-07-21","dayName":"Tuesday","week":"30"}"#;
+        let v = TemplateVars::from_json(json, "My Note!! Draft", "notes/daily");
+        assert_eq!(v.year, "2026");
+        assert_eq!(v.month_name, "July");
+        assert_eq!(v.day_name, "Tuesday");
+        assert_eq!(v.title, "My Note!! Draft");
+        // Non-alphanumerics collapse to single dashes, no leading/trailing dash.
+        assert_eq!(v.title_safe, "my-note-draft");
+        assert_eq!(v.current_dir, "notes/daily");
+    }
+
+    #[test]
+    fn from_json_tolerates_bad_json() {
+        let v = TemplateVars::from_json("not json", "Title", "");
+        assert_eq!(v.year, "");
+        assert_eq!(v.title, "Title");
+        assert_eq!(v.title_safe, "title");
+    }
+
+    #[test]
+    fn parse_template_reads_frontmatter_block() {
+        let raw = "---\noxid_template:\n  filepath: \"notes/${OXID_TITLE_SAFE}.md\"\n  description: \"Daily note\"\n---\n# Body here\n";
+        let meta = parse_template("templates/daily-note.md", raw);
+        assert_eq!(meta.name, "Daily note");
+        assert_eq!(meta.filepath, Some("notes/${OXID_TITLE_SAFE}.md".to_string()));
+        assert_eq!(meta.body, "# Body here\n");
+        assert_eq!(meta.source_path, "templates/daily-note.md");
+    }
+
+    #[test]
+    fn parse_template_recognizes_foam_block() {
+        let raw = "---\nfoam_template:\n  filepath: out.md\n---\nbody";
+        let meta = parse_template("t/x.md", raw);
+        assert_eq!(meta.filepath, Some("out.md".to_string()));
+        assert_eq!(meta.body, "body");
+    }
+
+    #[test]
+    fn parse_template_name_falls_back_to_filename() {
+        let raw = "# no frontmatter";
+        let meta = parse_template("templates/weekly-review.md", raw);
+        // Dashes become spaces, extension stripped, no description present.
+        assert_eq!(meta.name, "weekly review");
+        assert_eq!(meta.filepath, None);
+        assert_eq!(meta.body, "# no frontmatter");
+    }
+
+    #[test]
+    fn parse_template_without_closing_fence_keeps_raw_body() {
+        let raw = "---\noxid_template:\n  filepath: x.md\nno closing fence";
+        let meta = parse_template("t/a.md", raw);
+        assert_eq!(meta.body, raw);
+        assert_eq!(meta.filepath, None);
+    }
+}

@@ -8,3 +8,8 @@ dioxus = { workspace = true }
 dioxus-use-js = { workspace = true }
 log = { workspace = true }
 
+[dev-dependencies]
+# Render components to a string on the native target for tests. No SSR ships in
+# production — this is purely a test driver.
+dioxus-ssr = "0.8.0-alpha.0"
+
