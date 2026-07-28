@@ -298,11 +298,16 @@ fn close_tab(mut tabs: Signal<Vec<Tab>>, mut active: Signal<Option<String>>, pat
 // the trait has a `render(&self, props: NavPluginProps) -> Element` method using
 // Dioxus's `VNode` API. That is left as future work.
 
+// Placeholder for the future runtime registry described above. Nothing reads it
+// yet — the picker (`nav-style-picker`) and `nav_dispatch` are still hardcoded —
+// so it's `allow(dead_code)` until the registry is wired up.
+#[allow(dead_code)]
 pub struct NavPlugin {
     pub id: &'static str,
     pub label: &'static str,
 }
 
+#[allow(dead_code)]
 static NAV_PLUGINS: &[NavPlugin] = &[
     NavPlugin { id: "tree", label: "Tree" },
     NavPlugin { id: "flat", label: "Flat list" },
@@ -2578,7 +2583,7 @@ fn ColumnView(
 
     // Right-column contents: the open child directory.
     let oc = open_child.read().clone();
-    let (right_root, right_dirs, right_base) = if let Some(ref child) = oc {
+    let (right_root, right_dirs, _right_base) = if let Some(ref child) = oc {
         let right_files: Vec<FileMeta> = left_dirs.iter()
             .find(|(p, _)| p == child)
             .map(|(_, f)| f.clone())

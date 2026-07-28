@@ -130,7 +130,7 @@ pub async fn write_file(cfg: &GithubConfig, path: &str, content: &str, sha: &str
         .await
         .map_err(|e| VaultError::Http(e.to_string()))?;
 
-    #[derive(Deserialize)] struct WriteResp { file_path: String }
+    #[derive(Deserialize)] struct WriteResp {}
     let _: WriteResp = check(resp).await?.json().await.map_err(|e| VaultError::Http(e.to_string()))?;
     Ok(sha.to_string()) // GitLab doesn't return a new blob SHA in the write response
 }
