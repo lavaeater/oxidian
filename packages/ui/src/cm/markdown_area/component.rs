@@ -44,6 +44,7 @@ use_js!("assets/markdown_area.js"::{
     setup_tasks,
     setup_selection,
     setup_keyboard,
+    setup_scroll,
     read_state,
     apply_html_and_restore_cursor
 });
@@ -359,6 +360,7 @@ pub fn MarkdownArea(
             let _: Result<(), _> = setup_tasks(&editor_id).await;
             let _: Result<(), _> = setup_selection(&editor_id).await;
             let _: Result<(), _> = setup_keyboard(&editor_id).await;
+            let _: Result<(), _> = setup_scroll(&editor_id).await;
         });
     });
 

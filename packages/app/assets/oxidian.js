@@ -236,6 +236,53 @@ export function apply_slash(snippet, slashLen) {
     el.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
+// ── Sign-in link (portable config) ────────────────────────────────────────────
+// A "sign-in link" carries the vault config in the URL *fragment* so it can be
+// bookmarked / stored in a password manager and restored in one click — handy
+// where the browser wipes localStorage between sessions (e.g. a managed work
+// profile that clears site data on exit). The token rides in the `#fragment`,
+// which is never sent to any server; we strip it from the address bar the moment
+// it's read so it doesn't linger in history or a copy-pasted URL.
+
+// Build a shareable sign-in link for the given config JSON.
+export function build_signin_link(cfgJson) {
+    return location.origin + location.pathname + '#cfg=' + base64UrlEncode(cfgJson);
+}
+
+// If the current URL carries a `#cfg=…` sign-in link, return the decoded config
+// JSON and strip the fragment. Returns '' when there is none.
+export function read_signin_link() {
+    const m = (location.hash || '').match(/[#&]cfg=([^&]+)/);
+    if (!m) return '';
+    let json;
+    try { json = base64UrlDecode(m[1]); } catch (_) { return ''; }
+    try {
+        history.replaceState(null, '', location.origin + location.pathname + location.search);
+    } catch (_) { }
+    return json;
+}
+
+// Ask the browser to keep our storage persistent (resists eviction under storage
+// pressure). Best-effort and silent — not available in every browser, and it
+// does NOT override an enterprise "clear on exit" policy.
+export function request_persistent_storage() {
+    try {
+        if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
+    } catch (_) { }
+}
+
+// UTF-8-safe base64 in the URL-safe alphabet, no padding.
+function base64UrlEncode(str) {
+    return btoa(unescape(encodeURIComponent(str)))
+        .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function base64UrlDecode(s) {
+    s = s.replace(/-/g, '+').replace(/_/g, '/');
+    while (s.length % 4) s += '=';
+    return decodeURIComponent(escape(atob(s)));
+}
+
 // ── Kanban drag data ──────────────────────────────────────────────────────────
 
 export function get_drag_data() {

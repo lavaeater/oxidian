@@ -339,6 +339,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
     let mut sidebar_open = use_signal(|| true);
     let mut bookmarks: Signal<Vec<String>> = use_signal(Vec::new);
     let mut show_switcher = use_signal(|| false);
+    let mut link_copied = use_signal(|| false);
     let mut show_palette = use_signal(|| false);
     let mut show_new_file = use_signal(|| false);
     let mut show_new_folder = use_signal(|| false);
@@ -448,6 +449,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
     let cfg_delete = config.clone();
     let cfg_move = config.clone();
     let cfg_tmpl_run = config.clone();
+    let cfg_link = config.clone();
 
     // ── Command actions ───────────────────────────────────────────────────────
     // Shared, Copy callbacks so the same logic runs from a toolbar button, the
@@ -638,6 +640,32 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                             title: "Today's note",
                             onclick: move |_| run_daily.call(()),
                             IcoCalendar { size: 16 }
+                        }
+                        // Sign-in link is a web-only affordance: it carries the
+                        // config in a bookmarkable URL for browsers that wipe
+                        // localStorage between sessions. Native builds persist
+                        // the token via `native_store`, so it's hidden there.
+                        if cfg!(target_arch = "wasm32") {
+                            button {
+                                class: "sidebar-icon-btn",
+                                title: if link_copied() { "Sign-in link copied!" } else { "Copy sign-in link" },
+                                onclick: {
+                                    let cfg_link = cfg_link.clone();
+                                    move |_| {
+                                        let cfg_link = cfg_link.clone();
+                                        spawn(async move {
+                                            let link = state::signin_link(&cfg_link).await;
+                                            if !link.is_empty() {
+                                                js::copy_to_clipboard(link);
+                                                link_copied.set(true);
+                                                crate::sleep_ms(1800).await;
+                                                link_copied.set(false);
+                                            }
+                                        });
+                                    }
+                                },
+                                IcoLink2 { size: 16 }
+                            }
                         }
                         button {
                             class: "sidebar-icon-btn",

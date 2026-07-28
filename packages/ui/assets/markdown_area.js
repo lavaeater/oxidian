@@ -217,6 +217,71 @@ export function read_state(id) {
     return cursor + "\n" + text;
 }
 
+// ── Keep the writing line comfortable ────────────────────────────────────────
+// Typing near the bottom of the viewport leaves the caret cramped against the
+// edge. This keeps the *active line* inside a comfortable vertical band of the
+// scroll container, smoothly nudging the document up once the user pauses. It
+// reacts only to editing (`input`), so scrolling up to re-read is never yanked
+// back down.
+
+const RECENTER_DELAY_MS = 400;
+// Comfortable band + landing target, as fractions of the container height.
+const BAND_TOP = 0.25, BAND_BOTTOM = 0.62, TARGET = 0.42;
+
+export function setup_scroll(id) {
+    const el = document.getElementById(id);
+    if (!el || el.dataset.scrollSetup) return;
+    el.dataset.scrollSetup = '1';
+    let timer = null;
+    el.addEventListener('input', function () {
+        clearTimeout(timer);
+        timer = setTimeout(function () { recenterActiveLine(el); }, RECENTER_DELAY_MS);
+    });
+}
+
+// Force an immediate recenter (used by tests and any explicit caller).
+export function recenter_caret(id) {
+    const el = document.getElementById(id);
+    if (el) recenterActiveLine(el);
+}
+
+// The scroll container: the editor element itself when it overflows (the
+// `.md-area` is `overflow-y: auto`), otherwise the nearest scrollable ancestor.
+function scrollContainer(el) {
+    let p = el;
+    while (p) {
+        const oy = getComputedStyle(p).overflowY;
+        if ((oy === 'auto' || oy === 'scroll') && p.scrollHeight > p.clientHeight + 1) return p;
+        p = p.parentElement;
+    }
+    return null;
+}
+
+function recenterActiveLine(el) {
+    const line = el.querySelector('.md-line--active') || activeLineFromSelection(el);
+    if (!line) return;
+    const cont = scrollContainer(el);
+    if (!cont) return;
+    const y = line.getBoundingClientRect().top - cont.getBoundingClientRect().top;
+    const h = cont.clientHeight;
+    if (y >= h * BAND_TOP && y <= h * BAND_BOTTOM) return; // already comfortable
+    cont.scrollBy({ top: y - h * TARGET, behavior: 'smooth' });
+}
+
+// Fallback when no line carries the active class yet (e.g. right after a
+// programmatic caret restore): derive the line from the current selection.
+function activeLineFromSelection(el) {
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount || !el.contains(sel.anchorNode)) return null;
+    let cur = sel.anchorNode;
+    if (cur.nodeType !== 1) cur = cur.parentElement;
+    while (cur && cur !== el) {
+        if (cur.classList && cur.classList.contains('md-line')) return cur;
+        cur = cur.parentElement;
+    }
+    return null;
+}
+
 // Places a collapsed caret `offset` characters into a single `.md-line`. When
 // the line has no text node (an empty line), the caret is set on the element
 // itself so it still lands on that blank line.
