@@ -8,7 +8,13 @@ use app::views::{Settings, VaultBrowser};
 const FAVICON: Asset = asset!("/assets/favicon.ico");
 
 fn main() {
-    dioxus::launch(App);
+    // The default menu bar is disabled: on Linux/GTK3, muda's `init_for_gtk_window`
+    // recurses inside `gtk_widget_realize` until the main thread's stack overflows,
+    // so the app aborts before the first frame. We don't use a native menu anyway —
+    // all commands live in the in-app toolbar.
+    dioxus::LaunchBuilder::desktop()
+        .with_cfg(dioxus::desktop::Config::new().with_menu(None))
+        .launch(App);
 }
 
 #[component]
