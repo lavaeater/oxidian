@@ -1,10 +1,13 @@
 //! One pass over a note's content, producing everything the index knows about
 //! it. Pure: no I/O, no network, no platform. See `docs/dataview.md` §4.1.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::frontmatter;
 use crate::tasks::{self, Task};
+use crate::value::Value;
 
 /// Everything extracted from a single note.
 ///
@@ -15,8 +18,9 @@ use crate::tasks::{self, Task};
 pub struct PageData {
     pub path: String,
     pub sha: String,
-    /// Frontmatter as scalar key/value pairs, in document order.
-    pub frontmatter: Vec<(String, String)>,
+    /// Typed fields: frontmatter keys merged with inline `key:: value` fields.
+    /// Frontmatter wins on a collision, being the more deliberate declaration.
+    pub fields: BTreeMap<String, Value>,
     /// Tags from `#inline` use and from a frontmatter `tags:` key, without `#`.
     pub tags: Vec<String>,
     /// `[[WikiLink]]` targets as written (no `|display` part, unresolved).
@@ -42,9 +46,15 @@ impl PageData {
         }
     }
 
-    /// A frontmatter value by key.
-    pub fn field(&self, key: &str) -> Option<&str> {
-        self.frontmatter.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
+    /// A field by name, case-insensitively (note authors are inconsistent about
+    /// `Rating` vs `rating`).
+    pub fn field(&self, key: &str) -> Option<&Value> {
+        self.fields.get(key).or_else(|| {
+            self.fields
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case(key))
+                .map(|(_, v)| v)
+        })
     }
 
     pub fn has_tag(&self, tag: &str) -> bool {
@@ -72,6 +82,7 @@ pub fn extract(path: &str, sha: &str, content: &str) -> PageData {
 
     let mut links = Vec::new();
     let mut headings = Vec::new();
+    let mut inline_fields: Vec<(String, String)> = Vec::new();
     let mut in_fence = false;
 
     for line in body.lines() {
@@ -87,14 +98,24 @@ pub fn extract(path: &str, sha: &str, content: &str) -> PageData {
         }
         collect_tags(line, &mut tags);
         collect_links(line, &mut links);
+        collect_inline_fields(line, &mut inline_fields);
     }
 
     dedup_preserving_order(&mut tags);
 
+    // Inline fields first so frontmatter overwrites them on a collision.
+    let mut fields: BTreeMap<String, Value> = inline_fields
+        .into_iter()
+        .map(|(k, v)| (k, Value::infer(&v)))
+        .collect();
+    for (k, v) in fm_pairs {
+        fields.insert(k, Value::infer(&v));
+    }
+
     PageData {
         path: path.to_string(),
         sha: sha.to_string(),
-        frontmatter: fm_pairs,
+        fields,
         tags,
         links,
         headings,
@@ -154,6 +175,51 @@ fn collect_links(line: &str, out: &mut Vec<String>) {
     }
 }
 
+/// Inline fields: `key:: value` on its own line (optionally behind a list
+/// bullet or blockquote marker), and the bracketed forms `[key:: value]` /
+/// `(key:: value)` embedded mid-sentence. Later occurrences of a key win.
+fn collect_inline_fields(line: &str, out: &mut Vec<(String, String)>) {
+    let mut consumed_brackets = false;
+    for (open, close) in [('[', ']'), ('(', ')')] {
+        let mut rest = line;
+        while let Some(start) = rest.find(open) {
+            rest = &rest[start + 1..];
+            let Some(end) = rest.find(close) else { break };
+            let inner = &rest[..end];
+            rest = &rest[end + 1..];
+            // `[[WikiLink]]` opens with a second bracket and is not a field.
+            if inner.starts_with(open) {
+                continue;
+            }
+            if let Some((k, v)) = split_field(inner) {
+                out.push((k, v));
+                consumed_brackets = true;
+            }
+        }
+    }
+    if consumed_brackets {
+        return;
+    }
+    // Line form: strip a leading bullet / blockquote marker, then split.
+    let bare = line
+        .trim_start()
+        .trim_start_matches(['>', '-', '*', '+'])
+        .trim_start();
+    if let Some((k, v)) = split_field(bare) {
+        out.push((k, v));
+    }
+}
+
+/// `key:: value` → `("key", "value")`, rejecting empty or bracket-bearing keys.
+fn split_field(s: &str) -> Option<(String, String)> {
+    let (key, value) = s.split_once("::")?;
+    let key = key.trim();
+    if key.is_empty() || key.contains(['[', ']', '(', ')', ':', '#']) {
+        return None;
+    }
+    Some((key.to_string(), value.trim().to_string()))
+}
+
 fn dedup_preserving_order(v: &mut Vec<String>) {
     let mut seen = std::collections::HashSet::new();
     v.retain(|t| seen.insert(t.to_lowercase()));
@@ -178,11 +244,37 @@ not a #tag and not [[a link]] and not a # heading\n\
     }
 
     #[test]
-    fn reads_frontmatter_fields() {
+    fn reads_frontmatter_fields_with_inferred_types() {
         let p = page();
-        assert_eq!(p.field("title"), Some("Deus Ex"));
-        assert_eq!(p.field("rating"), Some("9"));
+        assert_eq!(p.field("title"), Some(&Value::Str("Deus Ex".into())));
+        assert_eq!(p.field("rating"), Some(&Value::Num(9.0)), "9 is a number, not \"9\"");
+        assert_eq!(p.field("RATING"), Some(&Value::Num(9.0)), "lookup is case-insensitive");
         assert_eq!(p.field("nope"), None);
+    }
+
+    #[test]
+    fn reads_inline_fields_in_both_forms() {
+        let p = extract(
+            "a.md",
+            "s",
+            "length:: 20 hours\nRated (rating:: 9) by me\n- status:: playing\n",
+        );
+        assert_eq!(p.field("length"), Some(&Value::Str("20 hours".into())));
+        assert_eq!(p.field("rating"), Some(&Value::Num(9.0)));
+        assert_eq!(p.field("status"), Some(&Value::Str("playing".into())), "bullet is stripped");
+    }
+
+    #[test]
+    fn frontmatter_beats_an_inline_field_of_the_same_name() {
+        let p = extract("a.md", "s", "---\nrating: 9\n---\nrating:: 3\n");
+        assert_eq!(p.field("rating"), Some(&Value::Num(9.0)));
+    }
+
+    #[test]
+    fn wikilinks_are_not_mistaken_for_inline_fields() {
+        let p = extract("a.md", "s", "See [[Some::Note]] and [[Plain]]\n");
+        assert!(p.fields.is_empty(), "got {:?}", p.fields);
+        assert_eq!(p.links, vec!["Some::Note", "Plain"]);
     }
 
     #[test]

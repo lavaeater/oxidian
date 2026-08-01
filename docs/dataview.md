@@ -1,8 +1,12 @@
 # Oxidian — Dataview (US 18.1 / 18.2)
 
-**Status:** design / analysis. Nothing here is implemented yet.
+**Status:** phases 0–3 implemented; phase 4 (editor wiring) is the next step — see §9 for the phase table.
 **Branch:** `data-view`.
+**Code:** `packages/index` (`extract`, `value`, `frontmatter`, `tasks`, `Index`, `dql/{parse,eval,render}`), `packages/app/src/vault_index.rs`.
+
 **Prior art:** [obsidian-dataview](https://github.com/blacksmithgu/obsidian-dataview) (DQL + DataviewJS), and its successor experiment [datacore](https://github.com/blacksmithgu/datacore), which exists largely because Dataview's re-query-everything-on-every-change model does not scale.
+
+> Sections 2–8 are the original analysis, kept as written so the reasoning behind the design stays legible. Where a gap has since been closed, §9 and §10 say so — the analysis text is not retro-edited.
 
 ---
 
@@ -292,9 +296,9 @@ Each phase is independently useful and shippable.
 |---|---|---|
 | **0** ✅ | `tasks_cache` → the `packages/index` crate: `PageData`, extraction, SHA-diff refresh; Tasks panel migrated (`app::vault_index`). **No user-visible change**, no dataview yet. | — |
 | **1** | Move the index off `localStorage` onto IndexedDB (web) / `native_store` file (native). Call `request_persistent_storage()`; show quota in Settings. | 0 |
-| **2** 🚧 | Extraction completeness. Done in phase 0: `#tag` index (`Index::tag_counts` / `pages_with_tag` — the **Tags pane**, US 14, is now mostly a UI job), headings, links, frontmatter `tags:`. Remaining: the typed `Value` model, list-aware frontmatter, inline `key::` fields. | 0 |
-| **3** | DQL parser + evaluator, pure, unit-tested against Dataview's documented examples. No UI. | 2 |
-| **4** | `LIST` and `TABLE` rendering in the editor's fenced-block path, with inline error display. **This is the first shippable dataview.** | 3 |
+| **2** ✅ | Extraction completeness: typed `Value` model with real dates and durations (`value.rs`), inline `key:: value` fields in line and bracketed forms, `#tag` index (`Index::tag_counts` / `pages_with_tag` — the **Tags pane**, US 14, is now mostly a UI job), headings, links. | 0 |
+| **3** ✅ | DQL lexer, parser, and evaluator (`dql/`), pure and unit-tested. `TABLE [WITHOUT ID]` / `LIST` / `TASK`, `FROM` (folder, tag, link, `outgoing()`, `and`/`or`/`-`), `WHERE`, `SORT`, `LIMIT`, ~20 built-in functions. Errors are values. **Deferred:** `GROUP BY`, `FLATTEN`, `CALENDAR` — each parses to a clear "not supported yet" message rather than a confusing syntax error. | 2 |
+| **4** 🚧 | Rendering. Done: `dql::render` turns a result into escaped HTML (table / list / task list, error block, empty state) and `dql::run` is the one call the UI needs. Remaining: the editor wiring — `MarkdownArea` must render a `dataview` fence through a caller-supplied block renderer (the `ui` crate can't depend on `index`), swapping back to raw source when the cursor enters the block. **That is the first shippable dataview.** | 3 |
 | **5** | `TASK` queries with click-to-toggle write-back (reuses `tasks.rs`). | 4 |
 | **6** | Inline `` `= expr` `` queries. | 3 |
 | **7** | Full content mirror + archive seeding (§7); offline vault; full-text search stops using the search API. | 1 |

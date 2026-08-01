@@ -21,9 +21,11 @@
 //! a stale entry is impossible, not merely unlikely. Opening a settled vault
 //! therefore costs a single HTTP request.
 
+pub mod dql;
 pub mod extract;
 pub mod frontmatter;
 pub mod tasks;
+pub mod value;
 
 use std::collections::{BTreeMap, HashSet};
 
@@ -31,6 +33,7 @@ use serde::{Deserialize, Serialize};
 use vault::FileMeta;
 
 pub use extract::PageData;
+pub use value::{Date, Value};
 pub use tasks::{Priority, Task};
 
 /// Bumped whenever the on-disk shape changes; a mismatch discards the cache
