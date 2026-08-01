@@ -86,6 +86,7 @@ dependencies = [
  "dirs 5.0.1",
  "futures",
  "gloo-timers",
+ "index",
  "jni 0.21.1",
  "js-sys",
  "log",
@@ -1585,7 +1586,7 @@ dependencies = [
 [[package]]
 name = "dioxus-use-js"
 version = "0.4.7"
-source = "git+https://github.com/lavaeater/dioxus-use-js.git?branch=dioxus-v0.8.0#1d80d8e8c69fb9d3eee3df419e18c9518899d4c5"
+source = "git+https://github.com/lavaeater/dioxus-use-js.git?branch=dioxus-v0.8.0#82fce3da4f054d98dbe27d7cfd8e43dd956d39f0"
 dependencies = [
  "dioxus",
  "dioxus-use-js-macro",
@@ -1595,10 +1596,10 @@ dependencies = [
 
 [[package]]
 name = "dioxus-use-js-macro"
-version = "0.4.7"
-source = "git+https://github.com/lavaeater/dioxus-use-js.git?branch=dioxus-v0.8.0#1d80d8e8c69fb9d3eee3df419e18c9518899d4c5"
+version = "0.4.9"
+source = "git+https://github.com/lavaeater/dioxus-use-js.git?branch=dioxus-v0.8.0#82fce3da4f054d98dbe27d7cfd8e43dd956d39f0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.0",
  "blake3",
  "debugid",
  "indexmap",
@@ -1609,7 +1610,7 @@ dependencies = [
  "swc_ecma_ast",
  "swc_ecma_parser",
  "swc_ecma_visit",
- "syn 2.0.119",
+ "syn 3.0.3",
 ]
 
 [[package]]
@@ -2826,6 +2827,16 @@ name = "imgref"
 version = "1.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "89194689a993ab15268672e99e7b0e19da2da3268ac682e8f02d29d4d1434cd7"
+
+[[package]]
+name = "index"
+version = "0.1.4"
+dependencies = [
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "vault",
+]
 
 [[package]]
 name = "indexmap"

@@ -442,11 +442,13 @@ pub fn MarkdownArea(
                 return;
             };
 
-            if let Some(url) = payload.strip_prefix("nav:")
-                && let Some(cb) = on_navigate
-            {
-                cb(url.to_string());
-            } else {
+            // A wikilink click is terminal; anything else falls through to the
+            // checkbox handler below. Do NOT fold this into a let-chain with
+            // `on_navigate` — a nav click with no handler must still stop here.
+            if let Some(url) = payload.strip_prefix("nav:") {
+                if let Some(cb) = on_navigate {
+                    cb(url.to_string());
+                }
                 return;
             }
 

@@ -74,7 +74,7 @@ Listed roughly by priority / dependency order. Filtered to the web + Android foc
 |----|---------|--------|
 | US 5.1 | **Extract to note** — selection → new note + `[[link]]` | Medium |
 | US 5.2 | **Merge notes** — append + delete source + update links | Medium |
-| US 18.1 / 18.2 | **Dataview** — SQL-like query blocks rendered inline | Large |
+| US 18.1 / 18.2 | **Dataview** — SQL-like query blocks rendered inline — designed in [`dataview.md`](dataview.md), phased 0→8; phase 0 (shared vault index) **in progress** on branch `data-view` | Large |
 
 ### Publishing & export
 
@@ -112,7 +112,8 @@ M3  Editing productivity        ✅ Slash, Properties, Toolbar, Daily note, temp
 M4  Local git (desktop)         ⬜ Deprioritized (desktop not a focus)
 M5  Knowledge graph             ✅ Force-directed graph, WikiLink index, Backlinks
                                  ⬜ Hover preview, local graph (remaining)
-M6  Note refactoring            ⬜ Not started (Extract, Merge, Dataview)
+M6  Note refactoring            ⬜ Not started (Extract, Merge)
+                                 🚧 Dataview — see docs/dataview.md; phase 0 (packages/index) under way
 M7  Multi-provider & mobile     ✅ GitHub + GitLab + OAuth device flow, Android (fully working)
                                  ⬜ Android Keystore, mobile gestures; Gitea/iOS parked
 M8  Publish & export            ✅ Single-note HTML export
@@ -132,6 +133,11 @@ Ordered for the web + Android focus (no desktop/local-git dependencies):
 5. **Weekly/Monthly notes + natural-language dates** (US 3.2/3.3) — completes M3.
 
 *(Done: Command Palette + global keyboard-shortcut framework — US 2.)*
+
+**Cross-cutting, started on `data-view`:** the shared vault index (`packages/index`) generalises
+`tasks_cache`'s blob-SHA diffing so Tasks, backlinks, graph, the Tags pane, and Dataview all read
+one incrementally-refreshed index instead of three partial ones. It is a prerequisite for Dataview
+(phases 0–2 in [`dataview.md`](dataview.md)) and makes the **Tags pane (US 14)** mostly a UI job.
 
 ---
 

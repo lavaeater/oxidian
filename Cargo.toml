@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "packages/ui",
     "packages/vault",
+    "packages/index",
     "packages/app",
     "packages/web",
     "packages/desktop",
@@ -21,4 +22,5 @@ log = "0.4"
 # workspace
 ui = { path = "packages/ui" }
 vault = { path = "packages/vault" }
+index = { path = "packages/index" }
 app = { path = "packages/app" }

@@ -4,7 +4,7 @@ use crate::icons::{
     IcoFolderPlus, IcoFolderTree, IcoLayoutList, IcoLink2, IcoListChecks, IcoNetwork, IcoSearch,
     IcoSettings, IcoTrash2, IcoX,
 };
-use crate::tasks::{self, Task};
+use index::tasks::{self, Task};
 use dioxus::prelude::*;
 use ui::{MarkdownArea, MarkdownAreaVariant};
 use vault::{FileMeta, GithubConfig, SearchResult};
@@ -138,6 +138,25 @@ fn extract_headings(content: &str) -> Vec<(u8, String)> {
             Some((level as u8, text.trim().to_string()))
         })
         .collect()
+}
+
+/// Stamp `updated: <today>` into a note's frontmatter on save, returning `None`
+/// when it already says today (so a note is rewritten at most once per day).
+///
+/// A git host knows commit dates, not file mtimes, and asking for the last
+/// commit touching a path costs one request per file — unaffordable at vault
+/// scale. Since we own the write path, we record the date in the note itself,
+/// which makes `updated` exact, queryable, and version-controlled.
+/// See `docs/dataview.md` §2.5.
+async fn stamped_for_save(content: &str) -> Option<String> {
+    let today = crate::dates::today().await;
+    if today.is_empty() {
+        return None;
+    }
+    if index::frontmatter::get_key(content, "updated").as_deref() == Some(today.as_str()) {
+        return None;
+    }
+    Some(index::frontmatter::set_key(content, "updated", &today))
 }
 
 fn word_count(text: &str) -> usize {
@@ -1259,15 +1278,17 @@ fn EditorPane(
                 && old_content != old_saved
             {
                 let name = old_p.rsplit('/').next().unwrap_or(old_p).to_string();
+                let to_write = stamped_for_save(&old_content).await.unwrap_or(old_content);
                 if let Ok(new_sha) = vault::dispatch::write_file(
                     &cfg,
                     old_p,
-                    &old_content,
+                    &to_write,
                     &old_sha,
                     &format!("Update {name}"),
                 )
                 .await
                 {
+                    crate::vault_index::update_page(old_p, &new_sha, &to_write).await;
                     file_sha.set(new_sha);
                 }
             }
@@ -1324,19 +1345,31 @@ fn EditorPane(
             }
             save_status.set(SaveStatus::Saving);
             let name = path.rsplit('/').next().unwrap_or(&path).to_string();
+            let to_write = stamped_for_save(&snapshot).await.unwrap_or_else(|| snapshot.clone());
             match vault::dispatch::write_file(
                 &cfg,
                 &path,
-                &snapshot,
+                &to_write,
                 &sha,
                 &format!("Update {name}"),
             )
             .await
             {
                 Ok(new_sha) => {
-                    index.with_mut(|idx| idx.reindex_file(&path, &snapshot));
+                    index.with_mut(|idx| idx.reindex_file(&path, &to_write));
+                    crate::vault_index::update_page(&path, &new_sha, &to_write).await;
                     file_sha.set(new_sha);
-                    saved_content.set(snapshot);
+                    // Adopt the stamped text only if the user hasn't typed since
+                    // the snapshot was taken — otherwise we would overwrite the
+                    // keystrokes made while the write was in flight. Those land
+                    // (and get stamped) on the next save.
+                    let mut content = content;
+                    if content.peek().as_str() == snapshot.as_str() {
+                        content.set(to_write.clone());
+                        saved_content.set(to_write);
+                    } else {
+                        saved_content.set(snapshot);
+                    }
                     save_status.set(SaveStatus::Saved);
                 }
                 Err(e) => {
@@ -2137,7 +2170,7 @@ fn TasksView(
         let cfg = cfg_scan.clone();
         loading.set(true);
         spawn(async move {
-            let mut t = crate::tasks_cache::scan(&cfg, &snapshot).await;
+            let mut t = crate::vault_index::refresh(&cfg, &snapshot).await.tasks();
             t.sort_by(tasks::cmp);
             all_tasks.set(t);
             loading.set(false);
@@ -2179,7 +2212,7 @@ fn TasksView(
                 .is_ok()
                 {
                     // The file changed remotely; force a fresh read next scan.
-                    crate::tasks_cache::invalidate(&task.path).await;
+                    crate::vault_index::invalidate(&task.path).await;
                 }
             }
         });

@@ -41,6 +41,10 @@ async fn check(resp: reqwest::Response) -> Result<reqwest::Response, VaultError>
 #[derive(Deserialize)]
 struct TreeResponse {
     tree: Vec<TreeEntry>,
+    /// GitHub sets this when the recursive listing hit its limit (~100k entries
+    /// or 7 MB) and silently dropped the rest. See `list_files`.
+    #[serde(default)]
+    truncated: bool,
 }
 
 #[derive(Deserialize)]
@@ -59,13 +63,28 @@ fn tree_url(cfg: &GithubConfig) -> String {
     )
 }
 
+/// One directory level. `sha` is a tree SHA (or the branch name at the root);
+/// entry paths are bare names, not full paths.
+fn subtree_url(cfg: &GithubConfig, sha: &str) -> String {
+    format!("{API}/repos/{}/{}/git/trees/{sha}", cfg.owner, cfg.repo)
+}
+
+/// Join a directory prefix and an entry name, keeping root-level paths bare.
+fn join_path(prefix: &str, name: &str) -> String {
+    if prefix.is_empty() { name.to_string() } else { format!("{prefix}/{name}") }
+}
+
 /// Keep markdown notes plus `.gitkeep` placeholders so empty folders (created
 /// via "New folder" / Kanban columns) still appear in the tree; drop trees and
 /// non-note blobs.
+fn keep_blob(path: &str) -> bool {
+    path.ends_with(".md") || path.ends_with(".gitkeep")
+}
+
 fn tree_to_files(tree: TreeResponse) -> Vec<FileMeta> {
     tree.tree
         .into_iter()
-        .filter(|e| e.kind == "blob" && (e.path.ends_with(".md") || e.path.ends_with(".gitkeep")))
+        .filter(|e| e.kind == "blob" && keep_blob(&e.path))
         .map(|e| FileMeta {
             path: e.path,
             sha: e.sha,
@@ -74,17 +93,56 @@ fn tree_to_files(tree: TreeResponse) -> Vec<FileMeta> {
         .collect()
 }
 
-pub async fn list_files(cfg: &GithubConfig) -> Result<Vec<FileMeta>, VaultError> {
-    let resp = get(&tree_url(cfg), &cfg.token)
+async fn fetch_tree(cfg: &GithubConfig, url: &str) -> Result<TreeResponse, VaultError> {
+    let resp = get(url, &cfg.token)
         .send()
         .await
         .map_err(|e| VaultError::Http(e.to_string()))?;
-    let tree: TreeResponse = check(resp)
+    check(resp)
         .await?
         .json()
         .await
-        .map_err(|e| VaultError::Http(e.to_string()))?;
-    Ok(tree_to_files(tree))
+        .map_err(|e| VaultError::Http(e.to_string()))
+}
+
+/// The whole vault listing, normally in a single recursive tree request.
+///
+/// If GitHub reports the recursive listing as `truncated` (~100k entries or
+/// 7 MB — reachable in a big vault with attachments), the response is silently
+/// missing files, which would show up as notes vanishing from the tree and as
+/// wrong query results once the index is built on top of this. In that case we
+/// fall back to walking one directory at a time, which costs one request per
+/// directory but is complete. The fallback is rare enough not to be worth
+/// parallelising.
+pub async fn list_files(cfg: &GithubConfig) -> Result<Vec<FileMeta>, VaultError> {
+    let tree = fetch_tree(cfg, &tree_url(cfg)).await?;
+    if !tree.truncated {
+        return Ok(tree_to_files(tree));
+    }
+    walk_tree(cfg).await
+}
+
+/// Breadth-first directory walk, used only when the recursive listing truncates.
+async fn walk_tree(cfg: &GithubConfig) -> Result<Vec<FileMeta>, VaultError> {
+    let mut files = Vec::new();
+    // (tree sha, path prefix); the branch name resolves as the root tree.
+    let mut queue = vec![(cfg.branch.clone(), String::new())];
+    while let Some((sha, prefix)) = queue.pop() {
+        let tree = fetch_tree(cfg, &subtree_url(cfg, &sha)).await?;
+        for entry in tree.tree {
+            let path = join_path(&prefix, &entry.path);
+            match entry.kind.as_str() {
+                "tree" => queue.push((entry.sha, path)),
+                "blob" if keep_blob(&path) => files.push(FileMeta {
+                    path,
+                    sha: entry.sha,
+                    size: entry.size.unwrap_or(0),
+                }),
+                _ => {}
+            }
+        }
+    }
+    Ok(files)
 }
 
 // ── read_file ─────────────────────────────────────────────────────────────────
@@ -474,6 +532,34 @@ mod tests {
         // Missing size defaults to 0.
         assert_eq!(files[1].size, 0);
         assert_eq!(files[0].sha, "s1");
+    }
+
+    #[test]
+    fn truncated_flag_is_parsed_and_defaults_to_false() {
+        let plain: TreeResponse = serde_json::from_str(r#"{"tree":[]}"#).unwrap();
+        assert!(!plain.truncated, "absent flag must not be treated as truncated");
+        let cut: TreeResponse =
+            serde_json::from_str(r#"{"tree":[],"truncated":true}"#).unwrap();
+        assert!(cut.truncated, "a truncated listing must be detected, not silently used");
+    }
+
+    #[test]
+    fn subtree_url_and_path_joining_for_the_walk_fallback() {
+        assert_eq!(
+            subtree_url(&cfg(), "abc123"),
+            "https://api.github.com/repos/me/notes/git/trees/abc123"
+        );
+        // Root entries stay bare; nested ones get the prefix.
+        assert_eq!(join_path("", "a.md"), "a.md");
+        assert_eq!(join_path("notes", "a.md"), "notes/a.md");
+        assert_eq!(join_path("notes/sub", "a.md"), "notes/sub/a.md");
+    }
+
+    #[test]
+    fn keep_blob_matches_the_recursive_filter() {
+        assert!(keep_blob("a.md"));
+        assert!(keep_blob("empty/.gitkeep"));
+        assert!(!keep_blob("img.png"));
     }
 
     #[test]
