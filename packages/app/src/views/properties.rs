@@ -1,7 +1,6 @@
 /// YAML frontmatter properties editor.
 /// Renders the `---\nkey: value\n---` block at the top of a note
 /// as a collapsible key→value UI. Edits write back into the content signal.
-
 use dioxus::prelude::*;
 
 // ── YAML parser (minimal) ─────────────────────────────────────────────────────

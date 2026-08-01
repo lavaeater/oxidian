@@ -44,7 +44,7 @@ pub fn Settings(
                         verification_uri_complete: uri_complete,
                     });
                     loop {
-                        sleep_ms(interval as u32 * 1000).await;
+                        sleep_ms(interval * 1000).await;
                         // User may have cancelled
                         if !matches!(oauth_phase(), OAuthPhase::AwaitingAuth { .. }) { break; }
                         match poll_device_token(&device_code).await {

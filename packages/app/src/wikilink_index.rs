@@ -3,7 +3,6 @@
 /// We fetch file content lazily: files are added as the user opens them
 /// (content is already loaded), and a full index build can be triggered
 /// explicitly (fetches all remaining files).
-
 /// A single directed link: source_path → target_title.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Link {

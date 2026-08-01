@@ -12,9 +12,15 @@ fn main() {
     // recurses inside `gtk_widget_realize` until the main thread's stack overflows,
     // so the app aborts before the first frame. We don't use a native menu anyway —
     // all commands live in the in-app toolbar.
+    #[cfg(feature = "desktop")]
     dioxus::LaunchBuilder::desktop()
         .with_cfg(dioxus::desktop::Config::new().with_menu(None))
         .launch(App);
+
+    // Without the renderer feature (plain `cargo check`/`cargo test` over the
+    // workspace) there is no `dioxus::desktop`; keep the crate compiling.
+    #[cfg(not(feature = "desktop"))]
+    dioxus::launch(App);
 }
 
 #[component]

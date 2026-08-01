@@ -89,10 +89,10 @@ fn with_cache<T>(f: impl FnOnce(&mut BTreeMap<String, String>) -> T) -> T {
 }
 
 fn persist(map: &BTreeMap<String, String>) {
-    if let Ok(s) = serde_json::to_string(map) {
-        if let Err(e) = std::fs::write(store_path(), s) {
-            console_log(&format!("[oxidian] native_store write failed: {e}"));
-        }
+    if let Ok(s) = serde_json::to_string(map)
+        && let Err(e) = std::fs::write(store_path(), s)
+    {
+        console_log(&format!("[oxidian] native_store write failed: {e}"));
     }
 }
 

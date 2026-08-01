@@ -25,7 +25,7 @@ need_stdout = false
 [jobs.nextest]
 command = [
     "sh", "-c",
-    "cargo llvm-cov nextest --hide-progress-bar --failure-output final | awk '/^Filename/{printf \"%-40s %9s %8s %13s %9s\\n\",\"File\",\"MissLine\",\"Line%\",\"MissBranch\",\"Branch%\"; printf \"%s\\n\",\"----------------------------------------\"; next} /^-/{next} NF==13{printf \"%-40s %9s %8s %13s %9s\\n\",$1,$9,$10,$12,$13; next} {print}'"
+    "cargo llvm-cov nextest -p app -p ui -p vault --hide-progress-bar --failure-output final | awk '/^Filename/{printf \"%-40s %9s %8s %13s %9s\\n\",\"File\",\"MissLine\",\"Line%\",\"MissBranch\",\"Branch%\"; printf \"%s\\n\",\"----------------------------------------\"; next} /^-/{next} NF==13{printf \"%-40s %9s %8s %13s %9s\\n\",$1,$9,$10,$12,$13; next} {print}'"
 ]
 need_stdout = true
 analyzer = "nextest"
@@ -33,7 +33,7 @@ analyzer = "nextest"
 [jobs.nextest-cov]
 command = [
     "sh", "-c",
-    "out=$(cargo llvm-cov nextest --hide-progress-bar --failure-output final 2>&1); s=$?; printf '%s\\n' \"$out\" | awk -v failed=$s '/^Filename/{printf \"%-40s %9s %8s %13s %9s\\n\",\"File\",\"MissLine\",\"Line%\",\"MissBranch\",\"Branch%\"; printf \"%-40s\\n\",\"----------------------------------------\"; next} /^-+$/{next} NF==13{printf \"%-40s %9s %8s %13s %9s\\n\",$1,$9,$10,$12,$13; next} failed{print}'"
+    "out=$(cargo llvm-cov nextest -p app -p ui -p vault --hide-progress-bar --failure-output final 2>&1); s=$?; printf '%s\\n' \"$out\" | awk -v failed=$s '/^Filename/{printf \"%-40s %9s %8s %13s %9s\\n\",\"File\",\"MissLine\",\"Line%\",\"MissBranch\",\"Branch%\"; printf \"%-40s\\n\",\"----------------------------------------\"; next} /^-+$/{next} NF==13{printf \"%-40s %9s %8s %13s %9s\\n\",$1,$9,$10,$12,$13; next} failed{print}'"
 ]
 need_stdout = true
 analyzer = "nextest"
@@ -51,12 +51,11 @@ need_stdout = true
 [jobs.test-all]
 command = [
     "sh", "-c",
-    "cargo llvm-cov nextest --hide-progress-bar --failure-output final && (cd e2e && npm test)"
+    "cargo llvm-cov nextest -p app -p ui -p vault --hide-progress-bar --failure-output final && (cd e2e && npm test)"
 ]
 need_stdout = true
 
 [keybindings]
-s = "job:clippy-server"
 c = "job:clippy-client"
 t = "job:nextest"
 v = "job:nextest-cov"

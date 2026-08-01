@@ -336,8 +336,7 @@ pub fn tokenize_line(line: &str, line_offset: usize) -> Vec<Token> {
         );
 
         // Inline code: `...`
-        if bytes[pos] == b'`' {
-            if let Some(end) = find_closing(bytes, pos + 1, b'`') {
+        if bytes[pos] == b'`' && let Some(end) = find_closing(bytes, pos + 1, b'`') {
                 flush_plain(line, line_offset, plain_start, pos, &mut tokens);
                 tokens.push(Token {
                     kind: TokenKind::Code,
@@ -347,12 +346,10 @@ pub fn tokenize_line(line: &str, line_offset: usize) -> Vec<Token> {
                 pos = end + 1;
                 plain_start = pos;
                 continue;
-            }
         }
 
         // Strikethrough: ~~...~~
-        if pos + 1 < len && bytes[pos] == b'~' && bytes[pos + 1] == b'~' {
-            if let Some(end) = find_double_closing(bytes, pos + 2, b'~') {
+        if pos + 1 < len && bytes[pos] == b'~' && bytes[pos + 1] == b'~' && let Some(end) = find_double_closing(bytes, pos + 2, b'~') {
                 flush_plain(line, line_offset, plain_start, pos, &mut tokens);
                 tokens.push(Token {
                     kind: TokenKind::Strikethrough,
@@ -362,7 +359,6 @@ pub fn tokenize_line(line: &str, line_offset: usize) -> Vec<Token> {
                 pos = end + 2;
                 plain_start = pos;
                 continue;
-            }
         }
 
         // Bold+Italic: ***...*** or ___...___  (must precede Bold and Italic checks)
@@ -513,8 +509,8 @@ fn parse_image(bytes: &[u8], line_offset: usize, pos: usize) -> Option<(Token, u
 /// Find a single closing `marker` byte, requiring at least one char between
 /// opener and closer (no empty spans).
 fn find_closing(bytes: &[u8], start: usize, marker: u8) -> Option<usize> {
-    for i in start..bytes.len() {
-        if bytes[i] == marker && i > start {
+    for (i, item) in bytes.iter().enumerate().skip(start) {
+        if *item == marker && i > start {
             return Some(i);
         }
     }
@@ -549,8 +545,8 @@ fn find_triple_closing(bytes: &[u8], start: usize, marker: u8) -> Option<usize> 
 
 /// Find `]` without crossing a `[` or newline (no nested brackets).
 fn find_bracket_close(bytes: &[u8], start: usize) -> Option<usize> {
-    for i in start..bytes.len() {
-        match bytes[i] {
+    for (i, item) in bytes.iter().enumerate().skip(start) {
+        match item {
             b']' => return Some(i),
             b'[' | b'\n' => return None,
             _ => {}
@@ -561,8 +557,8 @@ fn find_bracket_close(bytes: &[u8], start: usize) -> Option<usize> {
 
 /// Find `)` without crossing a newline.
 fn find_paren_close(bytes: &[u8], start: usize) -> Option<usize> {
-    for i in start..bytes.len() {
-        match bytes[i] {
+    for (i, item) in bytes.iter().enumerate().skip(start) {
+        match item {
             b')' => return Some(i),
             b'\n' => return None,
             _ => {}

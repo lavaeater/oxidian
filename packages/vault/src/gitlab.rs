@@ -1,6 +1,5 @@
 /// GitLab API backend — mirrors the github module but targets the GitLab v4 API.
 /// Base URL: https://gitlab.com/api/v4  (or user-provided for self-hosted).
-
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::Deserialize;
 

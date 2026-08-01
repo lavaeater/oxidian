@@ -2,7 +2,6 @@
 ///
 /// Renders via a clean HTML-only pass (no contenteditable, no marker spans,
 /// no CSS classes that require the Oxidian stylesheet).
-
 use ui::tokenizer::{tokenize, TokenKind};
 
 pub fn to_html(title: &str, markdown: &str) -> String {

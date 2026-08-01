@@ -1,25 +1,25 @@
-use dioxus::prelude::*;
 use crate::icons::{
-    IcoBookmark, IcoBookmarkCheck, IcoCalendar, IcoChevronDown, IcoChevronLeft,
-    IcoChevronRight, IcoDownload, IcoFileText, IcoFilePlus, IcoFolderClosed,
-    IcoFolderOpen, IcoFolderPlus, IcoFolderTree, IcoLayoutList, IcoLink2,
-    IcoListChecks, IcoNetwork, IcoSearch, IcoSettings, IcoTrash2, IcoX, IcoFolderKanban,
+    IcoBookmark, IcoBookmarkCheck, IcoCalendar, IcoChevronDown, IcoChevronLeft, IcoChevronRight,
+    IcoDownload, IcoFilePlus, IcoFileText, IcoFolderClosed, IcoFolderKanban, IcoFolderOpen,
+    IcoFolderPlus, IcoFolderTree, IcoLayoutList, IcoLink2, IcoListChecks, IcoNetwork, IcoSearch,
+    IcoSettings, IcoTrash2, IcoX,
 };
 use crate::tasks::{self, Task};
+use dioxus::prelude::*;
 use ui::{MarkdownArea, MarkdownAreaVariant};
 use vault::{FileMeta, GithubConfig, SearchResult};
 
+use super::graph::GraphView;
+use super::kanban::KanbanBoard;
+use super::properties::PropertiesPanel;
+use super::slash::SlashMenu;
+use super::toolbar::FormattingToolbar;
 use crate::console_log;
 use crate::export;
 use crate::js;
 use crate::state;
 use crate::template::{self, TemplateMeta};
 use crate::wikilink_index::WikiLinkIndex;
-use super::graph::GraphView;
-use super::kanban::KanbanBoard;
-use super::properties::PropertiesPanel;
-use super::slash::SlashMenu;
-use super::toolbar::FormattingToolbar;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -38,13 +38,16 @@ async fn apply_template(
     let vars = template::TemplateVars::from_json(&date_json, "", current_dir);
 
     if vars.year.is_empty() || vars.month.is_empty() || vars.date.is_empty() {
-        load_error.set(Some("Could not read current date — please try again.".to_string()));
+        load_error.set(Some(
+            "Could not read current date — please try again.".to_string(),
+        ));
         return;
     }
 
     if let Some(ref fp_tmpl) = meta.filepath {
         let path = template::substitute_vars(fp_tmpl, &vars)
-            .trim_start_matches('/').to_string();
+            .trim_start_matches('/')
+            .to_string();
         if files.read().iter().any(|f| f.path == path) {
             open.set(Some(path));
         } else {
@@ -103,9 +106,15 @@ fn fuzzy_match(haystack: &str, needle: &str) -> bool {
 fn fuzzy_score(path: &str, needle: &str) -> usize {
     let name = path.rsplit('/').next().unwrap_or(path).to_lowercase();
     let q = needle.to_lowercase();
-    if name == q { return 1000; }
-    if name.starts_with(&q) { return 500; }
-    if name.contains(&q) { return 200; }
+    if name == q {
+        return 1000;
+    }
+    if name.starts_with(&q) {
+        return 500;
+    }
+    if name.contains(&q) {
+        return 200;
+    }
     let mut score = 0usize;
     let mut last = 0usize;
     for nc in q.chars() {
@@ -118,14 +127,17 @@ fn fuzzy_score(path: &str, needle: &str) -> usize {
 }
 
 fn extract_headings(content: &str) -> Vec<(u8, String)> {
-    content.lines().filter_map(|line| {
-        let level = line.bytes().take_while(|&b| b == b'#').count();
-        if level >= 1 && level <= 6 && line.as_bytes().get(level) == Some(&b' ') {
-            Some((level as u8, line[level + 1..].trim().to_string()))
-        } else {
-            None
-        }
-    }).collect()
+    content
+        .lines()
+        .filter_map(|line| {
+            let level = line.bytes().take_while(|&b| b == b'#').count();
+            if !(1..=6).contains(&level) {
+                return None;
+            }
+            let text = line[level..].strip_prefix(' ')?;
+            Some((level as u8, text.trim().to_string()))
+        })
+        .collect()
 }
 
 fn word_count(text: &str) -> usize {
@@ -135,29 +147,43 @@ fn word_count(text: &str) -> usize {
 // ── Save status ───────────────────────────────────────────────────────────────
 
 #[derive(Clone, PartialEq)]
-enum SaveStatus { Idle, Countdown(u8), Saving, Saved, Error(String) }
+enum SaveStatus {
+    Idle,
+    Countdown(u8),
+    Saving,
+    Saved,
+    Error(String),
+}
 
 impl SaveStatus {
     fn label(&self) -> String {
         match self {
             SaveStatus::Idle | SaveStatus::Saved => "Saved".into(),
             SaveStatus::Countdown(n) => format!("Saving in {n}s…"),
-            SaveStatus::Saving  => "Saving…".into(),
+            SaveStatus::Saving => "Saving…".into(),
             SaveStatus::Error(_) => "Save failed".into(),
         }
     }
     fn css_class(&self) -> &str {
         match self {
-            SaveStatus::Error(_)   => "save-status save-status--error",
+            SaveStatus::Error(_) => "save-status save-status--error",
             SaveStatus::Countdown(_) => "save-status save-status--unsaved",
-            SaveStatus::Saving     => "save-status save-status--saving",
+            SaveStatus::Saving => "save-status save-status--saving",
             _ => "save-status",
         }
     }
 }
 
 #[derive(Clone, PartialEq)]
-enum Panel { Files, Search, Backlinks, Graph, Bookmarks, Kanban, Tasks }
+enum Panel {
+    Files,
+    Search,
+    Backlinks,
+    Graph,
+    Bookmarks,
+    Kanban,
+    Tasks,
+}
 
 // ── Command palette ─────────────────────────────────────────────────────────
 // Every action reachable from the Command Palette (Ctrl/⌘-P). `VaultBrowser`
@@ -183,28 +209,38 @@ enum Cmd {
 
 impl Cmd {
     const ALL: &'static [Cmd] = &[
-        Cmd::QuickSwitcher, Cmd::NewFile, Cmd::NewFolder, Cmd::DailyNote, Cmd::ExportHtml,
-        Cmd::ToggleSidebar, Cmd::ToggleSplit,
-        Cmd::GoFiles, Cmd::GoSearch, Cmd::GoBacklinks, Cmd::GoGraph, Cmd::GoBookmarks,
-        Cmd::GoKanban, Cmd::GoTasks,
+        Cmd::QuickSwitcher,
+        Cmd::NewFile,
+        Cmd::NewFolder,
+        Cmd::DailyNote,
+        Cmd::ExportHtml,
+        Cmd::ToggleSidebar,
+        Cmd::ToggleSplit,
+        Cmd::GoFiles,
+        Cmd::GoSearch,
+        Cmd::GoBacklinks,
+        Cmd::GoGraph,
+        Cmd::GoBookmarks,
+        Cmd::GoKanban,
+        Cmd::GoTasks,
     ];
 
     fn title(self) -> &'static str {
         match self {
             Cmd::QuickSwitcher => "Go to file…",
-            Cmd::NewFile       => "New note",
-            Cmd::NewFolder     => "New folder",
-            Cmd::DailyNote     => "Open today's daily note",
-            Cmd::ExportHtml    => "Export current note as HTML",
+            Cmd::NewFile => "New note",
+            Cmd::NewFolder => "New folder",
+            Cmd::DailyNote => "Open today's daily note",
+            Cmd::ExportHtml => "Export current note as HTML",
             Cmd::ToggleSidebar => "Toggle sidebar",
-            Cmd::ToggleSplit   => "Toggle editor split",
-            Cmd::GoFiles       => "Show: Files",
-            Cmd::GoSearch      => "Show: Search",
-            Cmd::GoBacklinks   => "Show: Backlinks",
-            Cmd::GoGraph       => "Show: Graph",
-            Cmd::GoBookmarks   => "Show: Bookmarks",
-            Cmd::GoKanban      => "Show: Kanban",
-            Cmd::GoTasks       => "Show: Tasks",
+            Cmd::ToggleSplit => "Toggle editor split",
+            Cmd::GoFiles => "Show: Files",
+            Cmd::GoSearch => "Show: Search",
+            Cmd::GoBacklinks => "Show: Backlinks",
+            Cmd::GoGraph => "Show: Graph",
+            Cmd::GoBookmarks => "Show: Bookmarks",
+            Cmd::GoKanban => "Show: Kanban",
+            Cmd::GoTasks => "Show: Tasks",
         }
     }
 
@@ -220,19 +256,19 @@ impl Cmd {
     fn keywords(self) -> &'static str {
         match self {
             Cmd::QuickSwitcher => "switch open jump find",
-            Cmd::NewFile       => "create page",
-            Cmd::NewFolder     => "create directory",
-            Cmd::DailyNote     => "today journal calendar",
-            Cmd::ExportHtml    => "download save html",
+            Cmd::NewFile => "create page",
+            Cmd::NewFolder => "create directory",
+            Cmd::DailyNote => "today journal calendar",
+            Cmd::ExportHtml => "download save html",
             Cmd::ToggleSidebar => "hide show panel",
-            Cmd::ToggleSplit   => "pane two columns",
-            Cmd::GoFiles       => "tree explorer",
-            Cmd::GoSearch      => "find grep",
-            Cmd::GoBacklinks   => "links references",
-            Cmd::GoGraph       => "network",
-            Cmd::GoBookmarks   => "saved pinned",
-            Cmd::GoKanban      => "board",
-            Cmd::GoTasks       => "todo checklist due priority overview",
+            Cmd::ToggleSplit => "pane two columns",
+            Cmd::GoFiles => "tree explorer",
+            Cmd::GoSearch => "find grep",
+            Cmd::GoBacklinks => "links references",
+            Cmd::GoGraph => "network",
+            Cmd::GoBookmarks => "saved pinned",
+            Cmd::GoKanban => "board",
+            Cmd::GoTasks => "todo checklist due priority overview",
         }
     }
 }
@@ -253,20 +289,28 @@ enum PaletteAction {
 // clicking the tab pins it, so the next open spawns a fresh preview tab instead.
 
 #[derive(Clone, PartialEq)]
-struct Tab { path: String, pinned: bool }
+struct Tab {
+    path: String,
+    pinned: bool,
+}
 
 /// Open `path` in a pane: activate it if already open, otherwise reuse the
 /// pane's preview (unpinned) tab, or append a new preview tab. Sets `active`,
 /// which drives the pane's load effect.
 fn open_in_pane(mut tabs: Signal<Vec<Tab>>, mut active: Signal<Option<String>>, path: String) {
-    if active.peek().as_deref() == Some(path.as_str()) { return; }
+    if active.peek().as_deref() == Some(path.as_str()) {
+        return;
+    }
     let already = tabs.peek().iter().any(|t| t.path == path);
     if !already {
         tabs.with_mut(|ts| {
             if let Some(preview) = ts.iter_mut().find(|t| !t.pinned) {
                 preview.path = path.clone();
             } else {
-                ts.push(Tab { path: path.clone(), pinned: false });
+                ts.push(Tab {
+                    path: path.clone(),
+                    pinned: false,
+                });
             }
         });
     }
@@ -277,11 +321,15 @@ fn open_in_pane(mut tabs: Signal<Vec<Tab>>, mut active: Signal<Option<String>>, 
 fn close_tab(mut tabs: Signal<Vec<Tab>>, mut active: Signal<Option<String>>, path: &str) {
     let idx = tabs.peek().iter().position(|t| t.path == path);
     let Some(idx) = idx else { return };
-    tabs.with_mut(|ts| { ts.remove(idx); });
+    tabs.with_mut(|ts| {
+        ts.remove(idx);
+    });
     if active.peek().as_deref() == Some(path) {
         let next = {
             let ts = tabs.peek();
-            ts.get(idx).or_else(|| ts.get(idx.wrapping_sub(1))).map(|t| t.path.clone())
+            ts.get(idx)
+                .or_else(|| ts.get(idx.wrapping_sub(1)))
+                .map(|t| t.path.clone())
         };
         active.set(next);
     }
@@ -309,8 +357,14 @@ pub struct NavPlugin {
 
 #[allow(dead_code)]
 static NAV_PLUGINS: &[NavPlugin] = &[
-    NavPlugin { id: "tree", label: "Tree" },
-    NavPlugin { id: "flat", label: "Flat list" },
+    NavPlugin {
+        id: "tree",
+        label: "Tree",
+    },
+    NavPlugin {
+        id: "flat",
+        label: "Flat list",
+    },
 ];
 
 // ── VaultBrowser ──────────────────────────────────────────────────────────────
@@ -361,8 +415,11 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
     // Route an open request to whichever pane is focused. Copy (captures only
     // Copy signals) so it can be used inside many event closures.
     let open_focused = move |path: String| {
-        if focused() == 1 { open_in_pane(tabs_b, active_b, path); }
-        else { open_in_pane(tabs_a, active_a, path); }
+        if focused() == 1 {
+            open_in_pane(tabs_b, active_b, path);
+        } else {
+            open_in_pane(tabs_a, active_a, path);
+        }
     };
     // The focused pane's open mailbox, for APIs that take a Signal (templates).
     let focused_open_mbx = move || if focused() == 1 { open_b } else { open_a };
@@ -375,7 +432,10 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
             let file_result = vault::dispatch::list_files(&cfg).await;
             let bm = state::load_bookmarks().await;
             match file_result {
-                Ok(mut list) => { list.sort_by(|a, b| a.path.cmp(&b.path)); files.set(list); }
+                Ok(mut list) => {
+                    list.sort_by(|a, b| a.path.cmp(&b.path));
+                    files.set(list);
+                }
                 Err(e) => load_error.set(Some(e.to_string())),
             }
             bookmarks.set(bm);
@@ -394,17 +454,24 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
     use_effect(move || {
         let cfg = cfg_tmpl.clone();
         let prefix = format!("{}/", cfg.templates_dir);
-        let paths: Vec<String> = files.read()
+        let paths: Vec<String> = files
+            .read()
             .iter()
             .filter(|f| f.path.starts_with(&prefix))
             .map(|f| f.path.clone())
             .collect();
         spawn(async move {
-            if paths.is_empty() { templates.set(vec![]); return; }
+            if paths.is_empty() {
+                templates.set(vec![]);
+                return;
+            }
             let contents = vault::dispatch::read_many(&cfg, &paths).await;
-            templates.set(contents.iter()
-                .map(|(p, c)| template::parse_template(p, c))
-                .collect());
+            templates.set(
+                contents
+                    .iter()
+                    .map(|(p, c)| template::parse_template(p, c))
+                    .collect(),
+            );
         });
     });
 
@@ -413,7 +480,9 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
     // Handle new-file result: refresh list then open the file.
     let cfg = config.clone();
     use_effect(move || {
-        let Some(path) = new_file_result() else { return };
+        let Some(path) = new_file_result() else {
+            return;
+        };
         new_file_result.set(None);
         show_new_file.set(false);
         let cfg = cfg.clone();
@@ -465,18 +534,28 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
     let run_daily = use_callback(move |_: ()| {
         let cfg = cfg_daily.clone();
         let tmpl_path = cfg.daily_note_template.clone();
-        let tmpl = templates.read().iter().find(|t| t.source_path == tmpl_path).cloned();
+        let tmpl = templates
+            .read()
+            .iter()
+            .find(|t| t.source_path == tmpl_path)
+            .cloned();
         let open_mbx = focused_open_mbx();
         spawn(async move {
             if let Some(meta) = tmpl {
                 apply_template(&meta, &cfg, files, open_mbx, load_error, "").await;
             } else {
                 let date = crate::dates::today().await;
-                if date.is_empty() { return; }
+                if date.is_empty() {
+                    return;
+                }
                 let path = format!("{date}.md");
                 let _ = vault::dispatch::create_file(
-                    &cfg, &path, &format!("# {date}\n\n"), &format!("Daily note {date}"),
-                ).await;
+                    &cfg,
+                    &path,
+                    &format!("# {date}\n\n"),
+                    &format!("Daily note {date}"),
+                )
+                .await;
                 if let Ok(mut list) = vault::dispatch::list_files(&cfg).await {
                     list.sort_by(|a, b| a.path.cmp(&b.path));
                     files.set(list);
@@ -506,7 +585,12 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
     // Export the focused note as standalone HTML (uses the focused-pane mirrors).
     let run_export = use_callback(move |_: ()| {
         if let Some(p) = active_path() {
-            let title = p.rsplit('/').next().unwrap_or(&p).trim_end_matches(".md").to_string();
+            let title = p
+                .rsplit('/')
+                .next()
+                .unwrap_or(&p)
+                .trim_end_matches(".md")
+                .to_string();
             let html = export::to_html(&title, &content.read());
             js::download_file(format!("{title}.html"), html);
         }
@@ -516,26 +600,26 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
     let run_cmd = use_callback(move |cmd: Cmd| {
         match cmd {
             Cmd::QuickSwitcher => show_switcher.set(true),
-            Cmd::NewFile       => show_new_file.set(true),
-            Cmd::NewFolder     => show_new_folder.set(true),
-            Cmd::DailyNote     => run_daily.call(()),
-            Cmd::ExportHtml    => run_export.call(()),
+            Cmd::NewFile => show_new_file.set(true),
+            Cmd::NewFolder => show_new_folder.set(true),
+            Cmd::DailyNote => run_daily.call(()),
+            Cmd::ExportHtml => run_export.call(()),
             Cmd::ToggleSidebar => sidebar_open.set(!sidebar_open()),
-            Cmd::ToggleSplit   => split.set(!split()),
-            Cmd::GoFiles       => panel.set(Panel::Files),
-            Cmd::GoSearch      => panel.set(Panel::Search),
-            Cmd::GoBacklinks   => panel.set(Panel::Backlinks),
-            Cmd::GoGraph       => panel.set(Panel::Graph),
-            Cmd::GoBookmarks   => panel.set(Panel::Bookmarks),
-            Cmd::GoKanban      => panel.set(Panel::Kanban),
-            Cmd::GoTasks       => panel.set(Panel::Tasks),
+            Cmd::ToggleSplit => split.set(!split()),
+            Cmd::GoFiles => panel.set(Panel::Files),
+            Cmd::GoSearch => panel.set(Panel::Search),
+            Cmd::GoBacklinks => panel.set(Panel::Backlinks),
+            Cmd::GoGraph => panel.set(Panel::Graph),
+            Cmd::GoBookmarks => panel.set(Panel::Bookmarks),
+            Cmd::GoKanban => panel.set(Panel::Kanban),
+            Cmd::GoTasks => panel.set(Panel::Tasks),
         }
         show_palette.set(false);
     });
 
     // Global keyboard shortcuts (web/desktop; harmless no-op on mobile).
     let on_shortcut = use_callback(move |id: String| match id.as_str() {
-        "palette"  => show_palette.set(true),
+        "palette" => show_palette.set(true),
         "switcher" => show_switcher.set(true),
         _ => {}
     });
@@ -545,11 +629,19 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
         let cfg = cfg_delete.clone();
         spawn(async move {
             let name = file.name().to_string();
-            let confirmed = js::confirm_dialog(
-                &format!("Delete '{name}'? This cannot be undone.")
-            ).await;
-            if !confirmed { return; }
-            match vault::dispatch::delete_file(&cfg, &file.path, &file.sha, &format!("Delete {name}")).await {
+            let confirmed =
+                js::confirm_dialog(&format!("Delete '{name}'? This cannot be undone.")).await;
+            if !confirmed {
+                return;
+            }
+            match vault::dispatch::delete_file(
+                &cfg,
+                &file.path,
+                &file.sha,
+                &format!("Delete {name}"),
+            )
+            .await
+            {
                 Ok(()) => {
                     files.with_mut(|f| f.retain(|fi| fi.path != file.path));
                     // Drop the (now-gone) file from any pane that had it open.
@@ -569,26 +661,47 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
             let mut parts = payload.splitn(2, '\x1e');
             let kind = parts.next().unwrap_or("").to_string();
             let src = parts.next().unwrap_or("").trim_matches('/').to_string();
-            if src.is_empty() { return; }
+            if src.is_empty() {
+                return;
+            }
             let dest = dest_dir.trim_matches('/').to_string();
             let name = src.rsplit('/').next().unwrap_or(&src).to_string();
             let src_parent = src.rfind('/').map(|i| &src[..i]).unwrap_or("");
 
             // No-op: already directly inside the destination folder.
-            if src_parent == dest { return; }
-            let new_path = if dest.is_empty() { name.clone() } else { format!("{dest}/{name}") };
+            if src_parent == dest {
+                return;
+            }
+            let new_path = if dest.is_empty() {
+                name.clone()
+            } else {
+                format!("{dest}/{name}")
+            };
             // Can't drop a folder into itself or a descendant.
-            if kind == "dir" && (dest == src || dest.starts_with(&format!("{src}/"))) { return; }
+            if kind == "dir" && (dest == src || dest.starts_with(&format!("{src}/"))) {
+                return;
+            }
 
-            let dest_label = if dest.is_empty() { "vault root".to_string() } else { dest.clone() };
-            let confirmed = js::confirm_dialog(&format!("Move '{name}' into '{dest_label}'?")).await;
-            if !confirmed { return; }
+            let dest_label = if dest.is_empty() {
+                "vault root".to_string()
+            } else {
+                dest.clone()
+            };
+            let confirmed =
+                js::confirm_dialog(&format!("Move '{name}' into '{dest_label}'?")).await;
+            if !confirmed {
+                return;
+            }
 
             let snapshot = files.peek().clone();
             let result = if kind == "dir" {
                 vault::dispatch::move_dir(&cfg, &src, &new_path, &snapshot).await
             } else {
-                let sha = snapshot.iter().find(|f| f.path == src).map(|f| f.sha.clone()).unwrap_or_default();
+                let sha = snapshot
+                    .iter()
+                    .find(|f| f.path == src)
+                    .map(|f| f.sha.clone())
+                    .unwrap_or_default();
                 vault::dispatch::move_file(&cfg, &src, &sha, &new_path).await
             };
             match result {
@@ -601,18 +714,30 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                     // moved file or a file inside the moved folder, in both panes.
                     let rewrite = |p: &str| -> Option<String> {
                         if kind == "dir" {
-                            if p == src { Some(new_path.clone()) }
-                            else { p.strip_prefix(&format!("{src}/")).map(|rel| format!("{new_path}/{rel}")) }
-                        } else if p == src { Some(new_path.clone()) } else { None }
+                            if p == src {
+                                Some(new_path.clone())
+                            } else {
+                                p.strip_prefix(&format!("{src}/"))
+                                    .map(|rel| format!("{new_path}/{rel}"))
+                            }
+                        } else if p == src {
+                            Some(new_path.clone())
+                        } else {
+                            None
+                        }
                     };
                     for (mut tabs, mut active) in [(tabs_a, active_a), (tabs_b, active_b)] {
                         tabs.with_mut(|ts| {
                             for t in ts.iter_mut() {
-                                if let Some(n) = rewrite(&t.path) { t.path = n; }
+                                if let Some(n) = rewrite(&t.path) {
+                                    t.path = n;
+                                }
                             }
                         });
                         let cur = active.peek().clone();
-                        if let Some(n) = cur.and_then(|c| rewrite(&c)) { active.set(Some(n)); }
+                        if let Some(n) = cur.and_then(|c| rewrite(&c)) {
+                            active.set(Some(n));
+                        }
                     }
                 }
                 Err(e) => load_error.set(Some(format!("Move failed: {e}"))),
@@ -1101,13 +1226,17 @@ fn EditorPane(
     // Pin the active tab once its document is edited (so the next open spawns a
     // fresh preview tab instead of replacing this one).
     use_effect(move || {
-        if loading_file() { return; }
-        if content() != saved_content() {
-            if let Some(p) = active.peek().clone() {
-                tabs.with_mut(|ts| {
-                    if let Some(t) = ts.iter_mut().find(|t| t.path == p && !t.pinned) { t.pinned = true; }
-                });
-            }
+        if loading_file() {
+            return;
+        }
+        if content() != saved_content()
+            && let Some(p) = active.peek().clone()
+        {
+            tabs.with_mut(|ts| {
+                if let Some(t) = ts.iter_mut().find(|t| t.path == p && !t.pinned) {
+                    t.pinned = true;
+                }
+            });
         }
     });
 
@@ -1125,16 +1254,24 @@ fn EditorPane(
         let old_content = content.peek().clone();
         let old_saved = saved_content.peek().clone();
         spawn(async move {
-            if let Some(ref old_p) = old_path {
-                if !old_sha.is_empty() && old_content != old_saved {
-                    let name = old_p.rsplit('/').next().unwrap_or(old_p).to_string();
-                    if let Ok(new_sha) = vault::dispatch::write_file(
-                        &cfg, old_p, &old_content, &old_sha, &format!("Update {name}")
-                    ).await {
-                        file_sha.set(new_sha);
-                    }
+            if let Some(ref old_p) = old_path
+                && !old_sha.is_empty()
+                && old_content != old_saved
+            {
+                let name = old_p.rsplit('/').next().unwrap_or(old_p).to_string();
+                if let Ok(new_sha) = vault::dispatch::write_file(
+                    &cfg,
+                    old_p,
+                    &old_content,
+                    &old_sha,
+                    &format!("Update {name}"),
+                )
+                .await
+                {
+                    file_sha.set(new_sha);
                 }
             }
+
             match vault::dispatch::read_file(&cfg, &p).await {
                 Ok(fc) => {
                     console_log(&format!("[oxidian] loaded {p} sha={}", fc.sha));
@@ -1167,19 +1304,35 @@ fn EditorPane(
         spawn(async move {
             for remaining in (1u8..5).rev() {
                 sleep_ms(1000).await;
-                if edit_gen() != this_gen { return; }
+                if edit_gen() != this_gen {
+                    return;
+                }
                 save_status.set(SaveStatus::Countdown(remaining));
             }
             sleep_ms(1000).await;
-            if edit_gen() != this_gen { return; }
+            if edit_gen() != this_gen {
+                return;
+            }
             let Some(path) = active() else { return };
             let sha = file_sha();
-            if sha.is_empty() { return; }
+            if sha.is_empty() {
+                return;
+            }
             let snapshot = content();
-            if snapshot == saved_content() { return; }
+            if snapshot == saved_content() {
+                return;
+            }
             save_status.set(SaveStatus::Saving);
             let name = path.rsplit('/').next().unwrap_or(&path).to_string();
-            match vault::dispatch::write_file(&cfg, &path, &snapshot, &sha, &format!("Update {name}")).await {
+            match vault::dispatch::write_file(
+                &cfg,
+                &path,
+                &snapshot,
+                &sha,
+                &format!("Update {name}"),
+            )
+            .await
+            {
                 Ok(new_sha) => {
                     index.with_mut(|idx| idx.reindex_file(&path, &snapshot));
                     file_sha.set(new_sha);
@@ -1187,7 +1340,9 @@ fn EditorPane(
                     save_status.set(SaveStatus::Saved);
                 }
                 Err(e) => {
-                    console_log(&format!("[oxidian] auto-save: write_file FAILED for {path}: {e}"));
+                    console_log(&format!(
+                        "[oxidian] auto-save: write_file FAILED for {path}: {e}"
+                    ));
                     tracing::error!("auto-save: write_file failed for {path}: {e}");
                     save_status.set(SaveStatus::Error(e.to_string()));
                 }
@@ -1201,22 +1356,39 @@ fn EditorPane(
         spawn(async move {
             loop {
                 sleep_ms(150).await;
-                if focused() != pane_idx || active().is_none() { slash_query.set(None); continue; }
+                if focused() != pane_idx || active().is_none() {
+                    slash_query.set(None);
+                    continue;
+                }
                 let q = js::slash_query().await;
-                if q == js::NO_SLASH { slash_query.set(None); } else { slash_query.set(Some(q)); }
+                if q == js::NO_SLASH {
+                    slash_query.set(None);
+                } else {
+                    slash_query.set(Some(q));
+                }
             }
         });
     });
 
     // Pre-compute for rsx.
     let path_opt = active.read().clone();
-    let is_bookmarked = path_opt.as_ref().map(|p| bookmarks.read().contains(p)).unwrap_or(false);
+    let is_bookmarked = path_opt
+        .as_ref()
+        .map(|p| bookmarks.read().contains(p))
+        .unwrap_or(false);
     let words = word_count(&content.read());
     let status_class = save_status.read().css_class().to_string();
     let status_label = save_status.read().label();
-    let status_title = match &*save_status.read() { SaveStatus::Error(e) => e.clone(), _ => String::new() };
+    let status_title = match &*save_status.read() {
+        SaveStatus::Error(e) => e.clone(),
+        _ => String::new(),
+    };
     let is_focused = focused() == pane_idx;
-    let col_class = if is_focused { "editor-pane-col editor-pane-col--focused" } else { "editor-pane-col" };
+    let col_class = if is_focused {
+        "editor-pane-col editor-pane-col--focused"
+    } else {
+        "editor-pane-col"
+    };
     let cfg_slash = config.clone();
 
     rsx! {
@@ -1426,23 +1598,40 @@ fn NewFileModal(
 
     let current_dir_effect = current_dir.clone();
     use_effect(move || {
-        if !trigger() { return; }
+        if !trigger() {
+            return;
+        }
         trigger.set(false);
         let raw = name.read().trim().to_string();
-        if raw.is_empty() { error.set(Some("Enter a file name.".into())); return; }
+        if raw.is_empty() {
+            error.set(Some("Enter a file name.".into()));
+            return;
+        }
         // Leading "/" means root-relative; otherwise place in current_dir.
         let resolved = resolve_folder_path(&current_dir_effect, &raw);
-        let path = if resolved.ends_with(".md") { resolved } else { format!("{resolved}.md") };
+        let path = if resolved.ends_with(".md") {
+            resolved
+        } else {
+            format!("{resolved}.md")
+        };
         let title = path.trim_end_matches(".md").to_string();
         let cfg = config.clone();
         creating.set(true);
         error.set(None);
         spawn(async move {
             match vault::dispatch::create_file(
-                &cfg, &path, &format!("# {title}\n\n"), &format!("Create {path}")
-            ).await {
-                Ok(_)  => result.set(Some(path)),
-                Err(e) => { error.set(Some(e.to_string())); creating.set(false); }
+                &cfg,
+                &path,
+                &format!("# {title}\n\n"),
+                &format!("Create {path}"),
+            )
+            .await
+            {
+                Ok(_) => result.set(Some(path)),
+                Err(e) => {
+                    error.set(Some(e.to_string()));
+                    creating.set(false);
+                }
             }
         });
     });
@@ -1450,9 +1639,15 @@ fn NewFileModal(
     let preview = {
         let raw = name.read();
         let r = raw.trim();
-        if r.is_empty() { String::new() } else {
+        if r.is_empty() {
+            String::new()
+        } else {
             let resolved = resolve_folder_path(&current_dir, r);
-            if resolved.ends_with(".md") { resolved } else { format!("{resolved}.md") }
+            if resolved.ends_with(".md") {
+                resolved
+            } else {
+                format!("{resolved}.md")
+            }
         }
     };
 
@@ -1506,6 +1701,7 @@ fn NewFileModal(
 /// Resolve a folder-name input into a full vault path:
 ///  - leading "/"  → root-relative (ignore the current folder)
 ///  - otherwise    → relative to `parent` (the current folder) if present
+///
 /// Intermediate folders are created implicitly (mkdir -p style) since git
 /// derives directories from the blob path.
 fn resolve_folder_path(parent: &Option<String>, raw: &str) -> String {
@@ -1533,20 +1729,33 @@ fn NewFolderModal(
 
     let parent_effect = parent.clone();
     use_effect(move || {
-        if !trigger() { return; }
+        if !trigger() {
+            return;
+        }
         trigger.set(false);
         let raw = name.read().trim().to_string();
-        if raw.is_empty() { error.set(Some("Enter a folder name.".into())); return; }
+        if raw.is_empty() {
+            error.set(Some("Enter a folder name.".into()));
+            return;
+        }
         let folder = resolve_folder_path(&parent_effect, &raw);
-        if folder.is_empty() { error.set(Some("Enter a folder name.".into())); return; }
+        if folder.is_empty() {
+            error.set(Some("Enter a folder name.".into()));
+            return;
+        }
         let path = format!("{folder}/.gitkeep");
         let cfg = config.clone();
         creating.set(true);
         error.set(None);
         spawn(async move {
-            match vault::dispatch::create_file(&cfg, &path, "", &format!("Create folder {folder}")).await {
-                Ok(_)  => on_created(()),
-                Err(e) => { error.set(Some(e.to_string())); creating.set(false); }
+            match vault::dispatch::create_file(&cfg, &path, "", &format!("Create folder {folder}"))
+                .await
+            {
+                Ok(_) => on_created(()),
+                Err(e) => {
+                    error.set(Some(e.to_string()));
+                    creating.set(false);
+                }
             }
         });
     });
@@ -1554,7 +1763,11 @@ fn NewFolderModal(
     let preview = {
         let raw = name.read();
         let r = raw.trim();
-        if r.is_empty() { String::new() } else { resolve_folder_path(&parent, r) }
+        if r.is_empty() {
+            String::new()
+        } else {
+            resolve_folder_path(&parent, r)
+        }
     };
 
     rsx! {
@@ -1618,22 +1831,35 @@ fn SearchPanel(config: GithubConfig, on_select: EventHandler<String>) -> Element
     use_effect(move || {
         let q = query();
         let cfg = config.clone();
-        if q.trim().is_empty() { results.set(vec![]); return; }
+        if q.trim().is_empty() {
+            results.set(vec![]);
+            return;
+        }
         searching.set(true);
         search_error.set(None);
         spawn(async move {
             sleep_ms(500).await;
-            if query() != q { return; }
+            if query() != q {
+                return;
+            }
             match vault::github::search_code(&cfg, &q).await {
-                Ok(r)  => results.set(r),
+                Ok(r) => results.set(r),
                 Err(e) => search_error.set(Some(e.to_string())),
             }
             searching.set(false);
         });
     });
 
-    let items: Vec<(String, String, String)> = results.read().iter()
-        .map(|r| (r.path.clone(), r.path.rsplit('/').next().unwrap_or(&r.path).to_string(), r.fragment.clone()))
+    let items: Vec<(String, String, String)> = results
+        .read()
+        .iter()
+        .map(|r| {
+            (
+                r.path.clone(),
+                r.path.rsplit('/').next().unwrap_or(&r.path).to_string(),
+                r.fragment.clone(),
+            )
+        })
         .collect();
 
     rsx! {
@@ -1752,16 +1978,19 @@ fn QuickSwitcher(
         let mut v: Vec<_> = if q.is_empty() {
             files.iter().map(|f| (0usize, f)).take(8).collect()
         } else {
-            let mut ranked: Vec<_> = files.iter()
+            let mut ranked: Vec<_> = files
+                .iter()
                 .filter(|f| fuzzy_match(&f.path.to_lowercase(), &q))
                 .map(|f| (fuzzy_score(&f.path, &q), f))
                 .collect();
-            ranked.sort_by(|a, b| b.0.cmp(&a.0));
+            ranked.sort_by_key(|b| std::cmp::Reverse(b.0));
             ranked.truncate(8);
             ranked
         };
         first_path = v.first().map(|(_, f)| f.path.clone());
-        v.drain(..).map(|(_, f)| (f.path.clone(), f.name().to_string(), f.dir().to_string())).collect()
+        v.drain(..)
+            .map(|(_, f)| (f.path.clone(), f.name().to_string(), f.dir().to_string()))
+            .collect()
     };
 
     rsx! {
@@ -1777,9 +2006,7 @@ fn QuickSwitcher(
                     oninput: move |e| query.set(e.value()),
                     onkeydown: move |e| {
                         if e.key() == Key::Escape { on_close(()); }
-                        if e.key() == Key::Enter {
-                            if let Some(ref p) = first_path { on_select(p.clone()); }
-                        }
+                        if e.key() == Key::Enter && let Some(ref p) = first_path { on_select(p.clone()); }
                     },
                 }
                 if items.is_empty() {
@@ -1819,22 +2046,32 @@ fn CommandPalette(
     // (label, hint, keywords, action)
     let mut items: Vec<(String, String, String, PaletteAction)> = Vec::new();
     for c in Cmd::ALL.iter().copied() {
-        items.push((c.title().into(), c.hint().into(), c.keywords().into(), PaletteAction::Cmd(c)));
+        items.push((
+            c.title().into(),
+            c.hint().into(),
+            c.keywords().into(),
+            PaletteAction::Cmd(c),
+        ));
     }
     for t in &templates {
-        items.push((format!("Template: {}", t.name), "New note".into(), "template new note".into(),
-            PaletteAction::Template(t.clone())));
+        items.push((
+            format!("Template: {}", t.name),
+            "New note".into(),
+            "template new note".into(),
+            PaletteAction::Template(t.clone()),
+        ));
     }
 
     let q = query.read().to_lowercase();
-    let mut matches: Vec<(String, String, PaletteAction)> = items.into_iter()
+    let mut matches: Vec<(String, String, PaletteAction)> = items
+        .into_iter()
         .filter(|(label, _, keywords, _)| {
             q.is_empty() || fuzzy_match(&label.to_lowercase(), &q) || keywords.contains(&q)
         })
         .map(|(label, hint, _, action)| (label, hint, action))
         .collect();
     if !q.is_empty() {
-        matches.sort_by(|a, b| fuzzy_score(&b.0, &q).cmp(&fuzzy_score(&a.0, &q)));
+        matches.sort_by_key(|b| std::cmp::Reverse(fuzzy_score(&b.0, &q)));
     }
     let first = matches.first().map(|(_, _, a)| a.clone());
     let empty = matches.is_empty();
@@ -1852,9 +2089,7 @@ fn CommandPalette(
                     oninput: move |e| query.set(e.value()),
                     onkeydown: move |e| {
                         if e.key() == Key::Escape { on_close(()); }
-                        if e.key() == Key::Enter {
-                            if let Some(a) = &first { on_run(a.clone()); }
-                        }
+                        if e.key() == Key::Enter && let Some(a) = &first { on_run(a.clone()); }
                     },
                 }
                 if empty {
@@ -1914,23 +2149,37 @@ fn TasksView(
     let cfg_toggle = config.clone();
     let toggle = use_callback(move |task: Task| {
         all_tasks.with_mut(|ts| {
-            if let Some(t) = ts.iter_mut().find(|t| t.path == task.path && t.line == task.line) {
+            if let Some(t) = ts
+                .iter_mut()
+                .find(|t| t.path == task.path && t.line == task.line)
+            {
                 t.checked = !t.checked;
             }
         });
         let cfg = cfg_toggle.clone();
         let today_now = today.read().as_deref().unwrap_or("").to_string();
         spawn(async move {
-            if let Ok(fc) = vault::dispatch::read_file(&cfg, &task.path).await {
-                if let Some(new_content) = tasks::toggled_content(&fc.content, &task, &today_now) {
-                    let name = task.path.rsplit('/').next().unwrap_or(&task.path).to_string();
-                    if vault::dispatch::write_file(
-                        &cfg, &task.path, &new_content, &fc.sha,
-                        &format!("Toggle task in {name}"),
-                    ).await.is_ok() {
-                        // The file changed remotely; force a fresh read next scan.
-                        crate::tasks_cache::invalidate(&task.path).await;
-                    }
+            if let Ok(fc) = vault::dispatch::read_file(&cfg, &task.path).await
+                && let Some(new_content) = tasks::toggled_content(&fc.content, &task, &today_now)
+            {
+                let name = task
+                    .path
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or(&task.path)
+                    .to_string();
+                if vault::dispatch::write_file(
+                    &cfg,
+                    &task.path,
+                    &new_content,
+                    &fc.sha,
+                    &format!("Toggle task in {name}"),
+                )
+                .await
+                .is_ok()
+                {
+                    // The file changed remotely; force a fresh read next scan.
+                    crate::tasks_cache::invalidate(&task.path).await;
                 }
             }
         });
@@ -1943,7 +2192,9 @@ fn TasksView(
     let mut groups: Vec<(String, Vec<Task>)> = {
         let mut by_file: std::collections::BTreeMap<String, Vec<Task>> = Default::default();
         for t in all_tasks.read().iter() {
-            if hide && t.checked { continue; }
+            if hide && t.checked {
+                continue;
+            }
             by_file.entry(t.path.clone()).or_default().push(t.clone());
         }
         by_file.into_iter().collect()
@@ -2087,14 +2338,21 @@ fn GraphPanel(
     let total = files.len();
     let edges = index.edges(&files);
 
-    let connected: std::collections::HashSet<String> = edges.iter()
+    let connected: std::collections::HashSet<String> = edges
+        .iter()
         .flat_map(|(s, t)| [s.clone(), t.clone()])
         .collect();
 
-    let nodes: Vec<(String, String, bool)> = files.iter()
+    let nodes: Vec<(String, String, bool)> = files
+        .iter()
         .filter(|f| active.as_deref() == Some(f.as_str()) || connected.contains(*f))
         .map(|f| {
-            let label = f.rsplit('/').next().unwrap_or(f).trim_end_matches(".md").to_string();
+            let label = f
+                .rsplit('/')
+                .next()
+                .unwrap_or(f)
+                .trim_end_matches(".md")
+                .to_string();
             let is_active = active.as_deref() == Some(f.as_str());
             (f.clone(), label, is_active)
         })
@@ -2134,7 +2392,15 @@ struct NavCallbacks {
 }
 
 fn nav_dispatch(id: &'static str, cb: NavCallbacks) -> Element {
-    let NavCallbacks { files, active, selected_dir, on_select, on_select_dir, on_delete, on_move } = cb;
+    let NavCallbacks {
+        files,
+        active,
+        selected_dir,
+        on_select,
+        on_select_dir,
+        on_delete,
+        on_move,
+    } = cb;
     match id {
         "flat" => rsx! {
             FlatList {
@@ -2180,19 +2446,30 @@ fn nav_dispatch(id: &'static str, cb: NavCallbacks) -> Element {
 // same JS-backed helpers the Kanban board uses.
 
 /// Builds the `ondrop` payload for a draggable file.
-fn file_drag_payload(path: &str) -> String { format!("file\x1e{path}") }
+fn file_drag_payload(path: &str) -> String {
+    format!("file\x1e{path}")
+}
 /// Builds the `ondrop` payload for a draggable folder.
-fn dir_drag_payload(prefix: &str) -> String { format!("dir\x1e{prefix}") }
+fn dir_drag_payload(prefix: &str) -> String {
+    format!("dir\x1e{prefix}")
+}
 
 // ── File tree ─────────────────────────────────────────────────────────────────
 
 fn group_by_dir(files: &[FileMeta], prefix: &str) -> (Vec<FileMeta>, Vec<(String, Vec<FileMeta>)>) {
-    let strip = if prefix.is_empty() { String::new() } else { format!("{prefix}/") };
+    let strip = if prefix.is_empty() {
+        String::new()
+    } else {
+        format!("{prefix}/")
+    };
     let mut root: Vec<FileMeta> = Vec::new();
     let mut dirs: Vec<(String, Vec<FileMeta>)> = Vec::new();
     for file in files {
-        let relative = if strip.is_empty() { file.path.as_str() }
-                       else { file.path.strip_prefix(&strip).unwrap_or(&file.path) };
+        let relative = if strip.is_empty() {
+            file.path.as_str()
+        } else {
+            file.path.strip_prefix(&strip).unwrap_or(&file.path)
+        };
         if let Some(slash) = relative.find('/') {
             let child_name = &relative[..slash];
             let child_prefix = if prefix.is_empty() {
@@ -2291,14 +2568,20 @@ fn FileTreeDir(
 ) -> Element {
     let prefix_slash = format!("{prefix}/");
     let contains_active = |a: &Option<String>| {
-        a.as_deref().map(|p| p.starts_with(&prefix_slash)).unwrap_or(false)
+        a.as_deref()
+            .map(|p| p.starts_with(&prefix_slash))
+            .unwrap_or(false)
     };
     let mut collapsed = use_signal(|| !contains_active(&active()));
     let mut drag_over = use_signal(|| false);
     // Auto-expand when the active file moves into this directory.
     let prefix_slash_effect = prefix_slash.clone();
     use_effect(move || {
-        if active().as_deref().map(|a| a.starts_with(&prefix_slash_effect)).unwrap_or(false) {
+        if active()
+            .as_deref()
+            .map(|a| a.starts_with(&prefix_slash_effect))
+            .unwrap_or(false)
+        {
             collapsed.set(false);
         }
     });
@@ -2308,9 +2591,13 @@ fn FileTreeDir(
     let prefix_click = prefix.clone();
     let prefix_drag = prefix.clone();
     let prefix_drop = prefix.clone();
-    let dir_class = if drag_over() { "file-tree-dir-name file-tree-dir-name--drop" }
-                    else if is_selected { "file-tree-dir-name file-tree-dir-name--active" }
-                    else { "file-tree-dir-name" };
+    let dir_class = if drag_over() {
+        "file-tree-dir-name file-tree-dir-name--drop"
+    } else if is_selected {
+        "file-tree-dir-name file-tree-dir-name--active"
+    } else {
+        "file-tree-dir-name"
+    };
     rsx! {
         div { class: "file-tree-dir",
             div {
@@ -2436,7 +2723,8 @@ fn FlatList(
     let q = filter.read().to_lowercase();
 
     // Build sorted, filtered file list.
-    let filtered: Vec<&FileMeta> = files.iter()
+    let filtered: Vec<&FileMeta> = files
+        .iter()
         .filter(|f| f.name() != ".gitkeep")
         .filter(|f| q.is_empty() || f.path.to_lowercase().contains(&q))
         .collect();
@@ -2444,7 +2732,11 @@ fn FlatList(
     // Group into (folder_or_root, files) sections preserving sort order.
     let mut sections: Vec<(String, Vec<FileMeta>)> = Vec::new();
     for file in &filtered {
-        let dir = file.path.rfind('/').map(|i| file.path[..i].to_string()).unwrap_or_default();
+        let dir = file
+            .path
+            .rfind('/')
+            .map(|i| file.path[..i].to_string())
+            .unwrap_or_default();
         if let Some(s) = sections.iter_mut().find(|(d, _)| d == &dir) {
             s.1.push((*file).clone());
         } else {
@@ -2552,7 +2844,9 @@ fn ColumnView(
 
     // Sync open_child with external selected_dir when col_path is root (initial load).
     use_effect(move || {
-        if !col_path.read().is_empty() { return; }
+        if !col_path.read().is_empty() {
+            return;
+        }
         if let Some(ref s) = selected_dir() {
             // If s is a direct child of root (no second slash), open it.
             if !s.contains('/') {
@@ -2560,7 +2854,9 @@ fn ColumnView(
             } else {
                 // Ancestor is the first path segment.
                 let anc = s.split('/').next().unwrap_or("").to_string();
-                if !anc.is_empty() { open_child.set(Some(anc)); }
+                if !anc.is_empty() {
+                    open_child.set(Some(anc));
+                }
             }
         }
     });
@@ -2572,7 +2868,9 @@ fn ColumnView(
         let mut acc = String::new();
         let mut v = vec![("⌂".to_string(), String::new())]; // root
         for seg in cp.split('/').filter(|s| !s.is_empty()) {
-            if !acc.is_empty() { acc.push('/'); }
+            if !acc.is_empty() {
+                acc.push('/');
+            }
             acc.push_str(seg);
             v.push((seg.to_string(), acc.clone()));
         }
@@ -2584,7 +2882,8 @@ fn ColumnView(
     // Right-column contents: the open child directory.
     let oc = open_child.read().clone();
     let (right_root, right_dirs, _right_base) = if let Some(ref child) = oc {
-        let right_files: Vec<FileMeta> = left_dirs.iter()
+        let right_files: Vec<FileMeta> = left_dirs
+            .iter()
             .find(|(p, _)| p == child)
             .map(|(_, f)| f.clone())
             .unwrap_or_default();

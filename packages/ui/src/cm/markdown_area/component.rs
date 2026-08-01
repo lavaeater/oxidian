@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
 use dioxus_use_js::use_js;
 
-use super::tokenizer::{tokenize, tokenize_line, Token, TokenKind};
+use super::tokenizer::{Token, TokenKind, tokenize, tokenize_line};
 
 // ── Variant ───────────────────────────────────────────────────────────────────
 
@@ -167,14 +167,22 @@ fn push_token_html(source: &str, token: &Token, out: &mut String) {
             let indent = format!("{}em", *depth as f32 * 1.5);
             out.push_str(&format!(
                 "<span class=\"md-token md-list-item{}\" style=\"padding-left:{indent}\">",
-                if *ordered { " md-list-ordered" } else { " md-list-unordered" }
+                if *ordered {
+                    " md-list-ordered"
+                } else {
+                    " md-list-unordered"
+                }
             ));
             marker(&raw[..prefix_len], out);
             push_inline_html(source, token.content_range.clone(), out);
             out.push_str("</span>");
         }
 
-        TokenKind::TaskItem { checked, depth, bracket_pos } => {
+        TokenKind::TaskItem {
+            checked,
+            depth,
+            bracket_pos,
+        } => {
             let prefix_len = bracket_pos - token.range.start;
             let indent = format!("{}em", *depth as f32 * 1.5);
             let bracket_text = if *checked { "[x]" } else { "[ ]" };
@@ -185,9 +193,7 @@ fn push_token_html(source: &str, token: &Token, out: &mut String) {
             out.push_str(&format!(
                 "<span class=\"md-task-checkbox\" \
                  data-pos=\"{}\" data-checked=\"{}\">{} </span>",
-                bracket_pos,
-                checked,
-                bracket_text,
+                bracket_pos, checked, bracket_text,
             ));
             push_inline_html(source, token.content_range.clone(), out);
             out.push_str("</span>");
@@ -213,7 +219,10 @@ fn push_token_html(source: &str, token: &Token, out: &mut String) {
             out.push_str("</a>");
         }
 
-        TokenKind::WikiLink { target_range, display_range } => {
+        TokenKind::WikiLink {
+            target_range,
+            display_range,
+        } => {
             let target = &source[target_range.clone()];
             let target_escaped = escaped_attr(target);
             out.push_str(&format!(
@@ -260,7 +269,10 @@ fn push_token_html(source: &str, token: &Token, out: &mut String) {
             out.push_str("</span>");
         }
 
-        TokenKind::TableRow { cells, is_separator } => {
+        TokenKind::TableRow {
+            cells,
+            is_separator,
+        } => {
             if *is_separator {
                 // Render as an invisible line divider; raw text appears as marker when active.
                 out.push_str("<span class=\"md-token md-table-sep\">");
@@ -274,7 +286,11 @@ fn push_token_html(source: &str, token: &Token, out: &mut String) {
                     // Emit everything up to the cell (includes leading pipe + space)
                     let up_to = cell.start - base;
                     for ch in raw[consumed..up_to].chars() {
-                        if ch == '|' { marker("|", out); } else { push_escaped_char(ch, out); }
+                        if ch == '|' {
+                            marker("|", out);
+                        } else {
+                            push_escaped_char(ch, out);
+                        }
                     }
                     out.push_str("<span class=\"md-table-cell\">");
                     push_inline_html(source, cell.clone(), out);
@@ -283,7 +299,11 @@ fn push_token_html(source: &str, token: &Token, out: &mut String) {
                 }
                 // Trailing pipe(s) and whitespace
                 for ch in raw[consumed..].chars() {
-                    if ch == '|' { marker("|", out); } else { push_escaped_char(ch, out); }
+                    if ch == '|' {
+                        marker("|", out);
+                    } else {
+                        push_escaped_char(ch, out);
+                    }
                 }
                 out.push_str("</span>");
             }
@@ -331,7 +351,7 @@ pub fn MarkdownArea(
     onfocus: Option<EventHandler<FocusEvent>>,
     onblur: Option<EventHandler<FocusEvent>>,
 ) -> Element {
-    let id = use_memo(|| next_editor_id());
+    let id = use_memo(next_editor_id);
     let mut is_focused = use_signal(|| false);
 
     // rendered_html is a manually-managed signal rather than a reactive memo.
@@ -344,8 +364,9 @@ pub fn MarkdownArea(
     });
 
     use_effect(move || {
-        let src = content();     // subscribe to content changes
-        if !is_focused() {       // also subscribe to focus changes
+        let src = content(); // subscribe to content changes
+        if !is_focused() {
+            // also subscribe to focus changes
             let tokens = tokenize(&src);
             rendered_html.set(tokens_to_html(&src, &tokens));
         }
@@ -403,7 +424,8 @@ pub fn MarkdownArea(
             } else {
                 // Normal keystroke: update content only; rendered_html stays
                 // untouched while focused to avoid resetting the cursor.
-                let text = payload.split_once('\n')
+                let text = payload
+                    .split_once('\n')
                     .map(|(_, t)| t)
                     .unwrap_or(&payload)
                     .to_string();
@@ -420,42 +442,46 @@ pub fn MarkdownArea(
                 return;
             };
 
-            if let Some(url) = payload.strip_prefix("nav:") {
-                if let Some(cb) = on_navigate {
-                    cb(url.to_string());
-                }
+            if let Some(url) = payload.strip_prefix("nav:")
+                && let Some(cb) = on_navigate
+            {
+                cb(url.to_string());
+            } else {
                 return;
             }
 
-            if let Some(rest) = payload.strip_prefix("cb:") {
-                if let Some((pos_str, was_checked_str)) = rest.split_once(':') {
-                    if let Ok(hint_pos) = pos_str.parse::<usize>() {
-                        let was_checked = was_checked_str == "1";
-                        let new_bracket = if was_checked { "[ ]" } else { "[x]" };
-                        let mut src = content.read().clone();
-                        // Re-tokenize current content to find the actual bracket
-                        // position — the hint from data-pos may be stale if the
-                        // user edited above this line while focused.
-                        let tokens = tokenize(&src);
-                        let actual_pos = tokens.iter()
-                            .filter_map(|t| match &t.kind {
-                                TokenKind::TaskItem { checked, bracket_pos, .. }
-                                    if *checked == was_checked => Some(*bracket_pos),
-                                _ => None,
-                            })
-                            .min_by_key(|&p| p.abs_diff(hint_pos));
-                        if let Some(pos) = actual_pos {
-                            if pos + 3 <= src.len() {
-                                src.replace_range(pos..pos + 3, new_bracket);
-                                // Update rendered_html immediately so the toggle
-                                // is visible without waiting for blur — the
-                                // use_effect guard skips updates while focused.
-                                let new_html = tokens_to_html(&src, &tokenize(&src));
-                                rendered_html.set(new_html);
-                                content.set(src);
-                            }
-                        }
-                    }
+            if let Some(rest) = payload.strip_prefix("cb:")
+                && let Some((pos_str, was_checked_str)) = rest.split_once(':')
+                && let Ok(hint_pos) = pos_str.parse::<usize>()
+            {
+                let was_checked = was_checked_str == "1";
+                let new_bracket = if was_checked { "[ ]" } else { "[x]" };
+                let mut src = content.read().clone();
+                // Re-tokenize current content to find the actual bracket
+                // position — the hint from data-pos may be stale if the
+                // user edited above this line while focused.
+                let tokens = tokenize(&src);
+                let actual_pos = tokens
+                    .iter()
+                    .filter_map(|t| match &t.kind {
+                        TokenKind::TaskItem {
+                            checked,
+                            bracket_pos,
+                            ..
+                        } if *checked == was_checked => Some(*bracket_pos),
+                        _ => None,
+                    })
+                    .min_by_key(|&p| p.abs_diff(hint_pos));
+                if let Some(pos) = actual_pos
+                    && pos + 3 <= src.len()
+                {
+                    src.replace_range(pos..pos + 3, new_bracket);
+                    // Update rendered_html immediately so the toggle
+                    // is visible without waiting for blur — the
+                    // use_effect guard skips updates while focused.
+                    let new_html = tokens_to_html(&src, &tokenize(&src));
+                    rendered_html.set(new_html);
+                    content.set(src);
                 }
             }
         });

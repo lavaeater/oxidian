@@ -45,11 +45,8 @@ pub fn use_global_shortcuts(on_shortcut: Callback<String>) {
     use_effect(move || {
         spawn(async move {
             let mut eval = document::eval(INSTALL_JS);
-            loop {
-                match eval.recv::<String>().await {
-                    Ok(id) => on_shortcut.call(id),
-                    Err(_) => break,
-                }
+            while let Ok(id) = eval.recv::<String>().await {
+                on_shortcut.call(id)
             }
         });
     });
