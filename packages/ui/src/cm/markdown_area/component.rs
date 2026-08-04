@@ -46,39 +46,165 @@ use_js!("assets/markdown_area.js"::{
     setup_keyboard,
     setup_scroll,
     read_state,
+    read_click,
     apply_html_and_restore_cursor
 });
 
+// ── Rendered blocks ───────────────────────────────────────────────────────────
+
+/// Turns a fenced block into HTML. Called with `(language, body)`; returning an
+/// empty string means "not mine" and the block stays plain source.
+///
+/// This is a callback rather than something `ui` does itself because the
+/// renderers live above us — `dataview` needs the vault index, which this crate
+/// cannot depend on.
+///
+/// A plain `Rc<dyn Fn>` rather than a Dioxus `Callback` so that rendering stays
+/// callable from pure functions, with no Dioxus runtime in scope.
+type RenderFn = dyn Fn(&str, &str) -> String;
+
+#[derive(Clone)]
+pub struct BlockRenderer(std::rc::Rc<RenderFn>);
+
+impl BlockRenderer {
+    pub fn new(f: impl Fn(&str, &str) -> String + 'static) -> Self {
+        Self(std::rc::Rc::new(f))
+    }
+
+    fn call(&self, lang: &str, body: &str) -> String {
+        (self.0)(lang, body)
+    }
+}
+
+impl PartialEq for BlockRenderer {
+    /// Identity, so a renderer built once (`use_hook`) doesn't re-render the
+    /// editor on every pass. Building a fresh one each render would.
+    fn eq(&self, other: &Self) -> bool {
+        std::rc::Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+/// A fenced block currently shown as rendered output instead of source.
+struct RenderedBlock {
+    /// Byte range of the whole block, opening fence line through closing fence.
+    range: std::ops::Range<usize>,
+    html: String,
+}
+
+/// Which fenced blocks render, given where the caret is.
+///
+/// A block containing the caret is left as source — that is the editor's whole
+/// premise, applied to a block instead of a line: you see the output until you
+/// go in to edit it.
+fn rendered_blocks(
+    source: &str,
+    tokens: &[Token],
+    cursor: Option<usize>,
+    renderer: Option<&BlockRenderer>,
+) -> Vec<RenderedBlock> {
+    let Some(renderer) = renderer else {
+        return Vec::new();
+    };
+    let mut blocks = Vec::new();
+    for (i, token) in tokens.iter().enumerate() {
+        let TokenKind::CodeFence { lang_range: Some(lang) } = &token.kind else {
+            continue;
+        };
+        // The matching closing fence. An unterminated block is still being
+        // typed, so it renders as nothing at all.
+        let Some(close) = tokens[i + 1..]
+            .iter()
+            .find(|t| matches!(t.kind, TokenKind::CodeFence { .. }))
+        else {
+            continue;
+        };
+        let range = token.range.start..close.range.end;
+        if cursor.is_some_and(|c| range.contains(&c) || c == range.end) {
+            continue;
+        }
+        // Body: everything between the two fence lines, without the newline
+        // that ends the opening fence.
+        let body_start = (token.range.end + 1).min(close.range.start);
+        let body = source[body_start..close.range.start].trim_end_matches('\n');
+        let html = renderer.call(source[lang.clone()].trim(), body);
+        if !html.is_empty() {
+            blocks.push(RenderedBlock { range, html });
+        }
+    }
+    blocks
+}
+
+/// The class for the `.md-line` starting at `pos`.
+///
+/// The source lines of a rendered block stay in the DOM — they are what the
+/// document model reads back — but are hidden. The block's *first* line hosts
+/// the rendered output, so only its tokens are hidden, not the line itself.
+fn line_class(blocks: &[RenderedBlock], pos: usize) -> &'static str {
+    for b in blocks {
+        if pos == b.range.start {
+            return " md-render-host";
+        }
+        if pos > b.range.start && pos < b.range.end {
+            return " md-render-hidden";
+        }
+    }
+    ""
+}
+
 // ── HTML rendering ────────────────────────────────────────────────────────────
 
-fn tokens_to_html(source: &str, tokens: &[Token]) -> String {
+/// The editor's full HTML for `source`, with fenced blocks rendered through
+/// `renderer` unless the caret (`cursor`) is inside them.
+fn render_html(source: &str, cursor: Option<usize>, renderer: Option<&BlockRenderer>) -> String {
+    let tokens = tokenize(source);
+    let blocks = rendered_blocks(source, &tokens, cursor, renderer);
+    tokens_to_html(source, &tokens, &blocks)
+}
+
+fn tokens_to_html(source: &str, tokens: &[Token], blocks: &[RenderedBlock]) -> String {
     let mut out = String::with_capacity(source.len() * 3);
     let mut last_end = 0;
 
-    out.push_str("<div class=\"md-line\">");
+    out.push_str(&format!("<div class=\"md-line{}\">", line_class(blocks, 0)));
 
     for token in tokens {
         if token.range.start > last_end {
-            emit_gap_html(source, last_end, token.range.start, &mut out);
+            emit_gap_html(source, last_end, token.range.start, blocks, &mut out);
         }
         push_token_html(source, token, &mut out);
+        // The rendered output lives inside the block's first line, after the
+        // (hidden) opening fence, so it sits exactly where the block does.
+        if let Some(b) = blocks.iter().find(|b| b.range.start == token.range.start) {
+            out.push_str(&format!(
+                "<div class=\"md-render\" data-md-render data-edit-offset=\"{}\">{}</div>",
+                b.range.start, b.html
+            ));
+        }
         last_end = token.range.end;
     }
 
     if last_end < source.len() {
-        emit_gap_html(source, last_end, source.len(), &mut out);
+        emit_gap_html(source, last_end, source.len(), blocks, &mut out);
     }
 
     out.push_str("</div>");
     out
 }
 
-fn emit_gap_html(source: &str, start: usize, end: usize, out: &mut String) {
-    for ch in source[start..end].chars() {
+fn emit_gap_html(
+    source: &str,
+    start: usize,
+    end: usize,
+    blocks: &[RenderedBlock],
+    out: &mut String,
+) {
+    for (i, ch) in source[start..end].char_indices() {
         if ch == '\n' {
             // Close the current line div and open a new one.
             // Block divs create implicit line breaks; no <br> needed.
-            out.push_str("</div><div class=\"md-line\">");
+            out.push_str("</div><div class=\"md-line");
+            out.push_str(line_class(blocks, start + i + 1));
+            out.push_str("\">");
         } else {
             push_escaped_char(ch, out);
         }
@@ -348,6 +474,15 @@ pub fn MarkdownArea(
     #[props(default)] placeholder: String,
     /// Called with the target note/URL when a WikiLink or Link is clicked.
     on_navigate: Option<EventHandler<String>>,
+    /// Called when something inside rendered output is clicked, with that
+    /// element's `data-action` payload. The editor doesn't interpret it: the
+    /// same crate that rendered the block decides what its actions mean.
+    on_block_action: Option<EventHandler<String>>,
+    /// Renders fenced code blocks (` ```dataview `, …) as output. See
+    /// [`BlockRenderer`]; without one, every fence stays plain source.
+    /// (`ReadSignal` only so it stays `Copy` — the editor's event handlers
+    /// are `FnMut` closures that each need it.)
+    render_block: ReadSignal<Option<BlockRenderer>>,
     onfocus: Option<EventHandler<FocusEvent>>,
     onblur: Option<EventHandler<FocusEvent>>,
 ) -> Element {
@@ -357,18 +492,19 @@ pub fn MarkdownArea(
     // rendered_html is a manually-managed signal rather than a reactive memo.
     // We only push updates when the editor is NOT focused, so that typing never
     // replaces dangerous_inner_html under the user's cursor.
-    let mut rendered_html = use_signal(|| {
-        let src = content.peek();
-        let tokens = tokenize(&src);
-        tokens_to_html(&src, &tokens)
-    });
+    let mut rendered_html =
+        use_signal(|| render_html(&content.peek(), None, render_block.read().as_ref()));
 
     use_effect(move || {
         let src = content(); // subscribe to content changes
+        // Subscribing to the renderer too: a caller that swaps it in (because
+        // the data behind it changed) means the same source renders differently
+        // and the block has to be repainted.
+        let renderer = render_block();
         if !is_focused() {
             // also subscribe to focus changes
-            let tokens = tokenize(&src);
-            rendered_html.set(tokens_to_html(&src, &tokens));
+            // No caret in the editor, so every renderable block renders.
+            rendered_html.set(render_html(&src, None, renderer.as_ref()));
         }
     });
 
@@ -416,8 +552,8 @@ pub fn MarkdownArea(
                 // line-deterministic offsets even empty/blank lines get a real
                 // offset, so leaving a block now re-renders on mobile too.
                 if cursor >= 0 {
-                    let tokens = tokenize(&text);
-                    let new_html = tokens_to_html(&text, &tokens);
+                    let new_html =
+                        render_html(&text, Some(cursor as usize), render_block.read().as_ref());
                     let _: Result<(), _> =
                         apply_html_and_restore_cursor(&editor_id, &new_html, cursor).await;
                 }
@@ -437,7 +573,10 @@ pub fn MarkdownArea(
     let handle_click = move || {
         let editor_id = id();
         spawn(async move {
-            let payload: Result<String, _> = read_state(&editor_id).await;
+            // `read_click`, not `read_state`: both are destructive reads and a
+            // click arrives alongside a selectionchange, so sharing one would
+            // let this handler eat the input handler's re-render.
+            let payload: Result<String, _> = read_click(&editor_id).await;
             let Ok(payload) = payload else {
                 return;
             };
@@ -448,6 +587,29 @@ pub fn MarkdownArea(
             if let Some(url) = payload.strip_prefix("nav:") {
                 if let Some(cb) = on_navigate {
                     cb(url.to_string());
+                }
+                return;
+            }
+
+            // An action inside rendered output — a dataview task checkbox,
+            // say. The editor has already flipped it optimistically; making it
+            // true is the host's job.
+            if let Some(action) = payload.strip_prefix("act:") {
+                if let Some(cb) = on_block_action {
+                    cb(action.to_string());
+                }
+                return;
+            }
+
+            // Clicking rendered output asks to edit the source behind it. The
+            // caret offset is unaffected by folding — rendered output is not
+            // part of the document model — so we can hand it straight back.
+            if let Some(offset) = payload.strip_prefix("edit:") {
+                if let Ok(offset) = offset.parse::<usize>() {
+                    let src = content.read().clone();
+                    let html = render_html(&src, Some(offset), render_block.read().as_ref());
+                    let _: Result<(), _> =
+                        apply_html_and_restore_cursor(&editor_id, &html, offset as i64).await;
                 }
                 return;
             }
@@ -481,8 +643,7 @@ pub fn MarkdownArea(
                     // Update rendered_html immediately so the toggle
                     // is visible without waiting for blur — the
                     // use_effect guard skips updates while focused.
-                    let new_html = tokens_to_html(&src, &tokenize(&src));
-                    rendered_html.set(new_html);
+                    rendered_html.set(render_html(&src, None, render_block.read().as_ref()));
                     content.set(src);
                 }
             }
@@ -520,8 +681,18 @@ mod tests {
     /// The exact HTML the editor paints for a given markdown source — this is
     /// the rendering contract, so any drift here is a visible editor regression.
     fn html(src: &str) -> String {
-        let tokens = tokenize(src);
-        tokens_to_html(src, &tokens)
+        render_html(src, None, None)
+    }
+
+    /// A renderer that claims `demo` fences and shouts the body back.
+    fn demo_renderer() -> BlockRenderer {
+        BlockRenderer::new(|lang, body| {
+            if lang == "demo" {
+                format!("<b>{}</b>", body.to_uppercase())
+            } else {
+                String::new()
+            }
+        })
     }
 
     #[test]
@@ -598,6 +769,66 @@ mod tests {
         assert!(checked.contains("data-checked=\"true\""));
         let unchecked = html("- [ ] todo");
         assert!(unchecked.contains("data-checked=\"false\""));
+    }
+
+    // ── Rendered blocks ──────────────────────────────────────────────────────
+
+    const DEMO: &str = "before\n```demo\nquery\n```\nafter";
+
+    #[test]
+    fn a_claimed_fence_renders_and_its_source_is_hidden_but_present() {
+        let out = render_html(DEMO, None, Some(&demo_renderer()));
+        assert!(out.contains("<b>QUERY</b>"), "got: {out}");
+        // The source must still be in the DOM: it is what the document model
+        // reads back, and losing it would lose the note's text.
+        assert!(out.contains("query"));
+        assert!(out.contains("md-render-host"), "the fence line hosts the output");
+        assert_eq!(out.matches("md-render-hidden").count(), 2, "body + closing fence");
+        // Lines outside the block are untouched.
+        assert!(out.contains("<div class=\"md-line\">"));
+    }
+
+    #[test]
+    fn the_caret_inside_a_block_shows_its_source_instead() {
+        // Offset 12 is inside "query" (line 3 of DEMO).
+        let out = render_html(DEMO, Some(12), Some(&demo_renderer()));
+        assert!(!out.contains("<b>QUERY</b>"), "editing shows source, not output");
+        assert!(!out.contains("md-render"));
+        // Leaving the block again brings the output back.
+        assert!(render_html(DEMO, Some(0), Some(&demo_renderer())).contains("<b>QUERY</b>"));
+    }
+
+    #[test]
+    fn line_count_is_the_same_folded_or_not() {
+        // The caret offsets the JS side computes are line-based, so folding a
+        // block must never change how many `.md-line` divs exist.
+        let folded = render_html(DEMO, None, Some(&demo_renderer()));
+        let source = render_html(DEMO, Some(12), Some(&demo_renderer()));
+        assert_eq!(
+            folded.matches("class=\"md-line").count(),
+            source.matches("class=\"md-line").count(),
+        );
+        assert_eq!(folded.matches("class=\"md-line").count(), 5);
+    }
+
+    #[test]
+    fn an_unclaimed_or_unterminated_fence_stays_source() {
+        // A language the renderer doesn't claim.
+        let rust = render_html("```rust\nfn f() {}\n```", None, Some(&demo_renderer()));
+        assert!(!rust.contains("md-render"));
+        // Still being typed: no closing fence yet.
+        let half = render_html("```demo\nquer", None, Some(&demo_renderer()));
+        assert!(!half.contains("md-render"));
+        // And with no renderer at all, nothing changes.
+        assert!(!render_html(DEMO, None, None).contains("md-render"));
+    }
+
+    #[test]
+    fn the_output_carries_the_offset_that_reopens_the_source() {
+        let out = render_html(DEMO, None, Some(&demo_renderer()));
+        // 7 = start of the ```demo line ("before\n" is 7 bytes).
+        assert!(out.contains("data-edit-offset=\"7\""), "got: {out}");
+        assert!(out.contains("data-md-render"), "excluded from the document model");
     }
 
     #[test]

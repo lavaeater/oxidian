@@ -4,6 +4,7 @@ use crate::icons::{
     IcoFolderPlus, IcoFolderTree, IcoLayoutList, IcoLink2, IcoListChecks, IcoNetwork, IcoSearch,
     IcoSettings, IcoTrash2, IcoX,
 };
+use index::Index;
 use index::tasks::{self, Task};
 use dioxus::prelude::*;
 use ui::{MarkdownArea, MarkdownAreaVariant};
@@ -423,6 +424,13 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
     let mut show_new_folder = use_signal(|| false);
     let mut new_file_result: Signal<Option<String>> = use_signal(|| None);
     let index: Signal<WikiLinkIndex> = use_signal(WikiLinkIndex::new);
+    // The shared vault index — frontmatter, tags, links and tasks for every
+    // note. Dataview blocks query it, so it has to be in memory, not just in
+    // the store. Provided here and consumed by whoever needs it below.
+    let mut vault_idx = crate::vault_index::provide();
+    // Bumped to force a refresh even when the file listing hasn't changed —
+    // what "Rebuild" in the storage footer does.
+    let mut index_gen = use_signal(|| 0u32);
     let mut templates: Signal<Vec<TemplateMeta>> = use_signal(Vec::new);
     let mut board_root: Signal<String> = use_signal(String::new);
     let mut board_input: Signal<String> = use_signal(String::new);
@@ -464,6 +472,22 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
             if !saved_board.is_empty() {
                 board_root.set(saved_board.clone());
                 board_input.set(saved_board);
+            }
+        });
+    });
+
+    // Keep the vault index current. The stored copy loads instantly so blocks
+    // render on first paint; the refresh that follows only reads notes whose
+    // blob SHA changed, so an unchanged vault costs zero file requests.
+    let cfg_idx = config.clone();
+    use_effect(move || {
+        let cfg = cfg_idx.clone();
+        let _ = index_gen();
+        let listing = files();
+        spawn(async move {
+            vault_idx.set(crate::vault_index::load().await);
+            if !listing.is_empty() {
+                vault_idx.set(crate::vault_index::refresh(&cfg, &listing).await);
             }
         });
     });
@@ -997,6 +1021,8 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                         },
                     }
                 }
+
+                StorageFooter { on_rebuild: move |_| index_gen += 1 }
             }
 
             // ── Drawer scrim (mobile only — `.sidebar-scrim` is display:none on
@@ -1184,6 +1210,104 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
     }
 }
 
+
+// Where the vault index lives, and how much room it has left.
+//
+// Worth surfacing because the index is the one piece of local state that grows
+// with the vault, and on web it lives in a quota the browser may evict. The
+// "Rebuild" button is the escape hatch: the index is only a cache, so throwing
+// it away costs one slow refresh and can never cost data.
+#[component]
+fn StorageFooter(on_rebuild: EventHandler<()>) -> Element {
+    let mut vault_idx = crate::vault_index::use_index();
+    let mut rebuilding = use_signal(|| false);
+    // Re-measured whenever the index changes, which is when the number moves.
+    let estimate = use_resource(move || async move {
+        let _ = vault_idx.read();
+        crate::js::storage_estimate().await
+    });
+
+    let pages = vault_idx.read().len();
+    let detail = match estimate.read().as_ref() {
+        Some((usage, quota, persisted)) => {
+            let used = if *usage < 0 { "—".to_string() } else { human_bytes(*usage as u64) };
+            // No quota on native, and browsers that decline to report one.
+            let of = if *quota <= 0 { String::new() } else { format!(" of {}", human_bytes(*quota as u64)) };
+            let evictable = if *persisted { "" } else { " · evictable" };
+            format!("{used}{of} used{evictable}")
+        }
+        None => "measuring…".to_string(),
+    };
+
+    rsx! {
+        div { class: "storage-footer",
+            div { class: "storage-line",
+                span { "{pages} notes indexed" }
+                button {
+                    class: "storage-rebuild",
+                    disabled: rebuilding(),
+                    title: "Discard the local index and read the vault again",
+                    onclick: move |_| {
+                        rebuilding.set(true);
+                        spawn(async move {
+                            crate::vault_index::clear().await;
+                            vault_idx.set(index::Index::new());
+                            // Re-triggering the file listing re-runs the refresh
+                            // effect, which is what actually repopulates it.
+                            on_rebuild.call(());
+                            rebuilding.set(false);
+                        });
+                    },
+                    if rebuilding() { "Rebuilding…" } else { "Rebuild" }
+                }
+            }
+            div { class: "storage-detail", "{detail}" }
+        }
+    }
+}
+
+/// Bytes as something a person can read. Binary units, one decimal above KB.
+fn human_bytes(n: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut v = n as f64;
+    let mut unit = 0;
+    while v >= 1024.0 && unit < UNITS.len() - 1 {
+        v /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{n} B")
+    } else {
+        format!("{v:.1} {}", UNITS[unit])
+    }
+}
+
+/// Flip one task in its file and fold the result back into the index.
+///
+/// Shared by the Tasks panel and by `TASK` results inside a dataview block:
+/// both flip optimistically in the UI first, so the write path has to behave
+/// identically or the two views drift apart. The file is re-read for a fresh
+/// SHA, which is what makes the write conflict-safe.
+///
+/// Returns the updated index, or `None` if the task could not be found or the
+/// write failed — in which case the optimistic flip was wrong and the next
+/// repaint corrects it.
+async fn write_task_toggle(cfg: &GithubConfig, task: &Task, today: &str) -> Option<Index> {
+    let fc = vault::dispatch::read_file(cfg, &task.path).await.ok()?;
+    let new_content = tasks::toggled_content(&fc.content, task, today)?;
+    let name = task.path.rsplit('/').next().unwrap_or(&task.path);
+    let new_sha = vault::dispatch::write_file(
+        cfg,
+        &task.path,
+        &new_content,
+        &fc.sha,
+        &format!("Toggle task in {name}"),
+    )
+    .await
+    .ok()?;
+    Some(crate::vault_index::update_page(&task.path, &new_sha, &new_content).await)
+}
+
 // ── Editor pane ─────────────────────────────────────────────────────────────
 //
 // One independent editor: its own tab list (`tabs`/`active`), document state,
@@ -1221,6 +1345,67 @@ fn EditorPane(
     let mut loaded_path: Signal<Option<String>> = use_signal(|| None);
     let mut loading_file = use_signal(|| false);
     let mut slash_query: Signal<Option<String>> = use_signal(|| None);
+
+    // ── Dataview blocks ──
+    // The editor renders ```dataview fences through this. It runs on every
+    // paint of the note, so it must stay synchronous: it reads the in-memory
+    // index and never touches the network. `today` is resolved once, up front,
+    // because `dates::today` is async and the renderer cannot await.
+    let mut vault_idx = crate::vault_index::use_index();
+    let mut today: Signal<Option<index::Date>> = use_signal(|| None);
+    use_effect(move || {
+        spawn(async move {
+            today.set(index::Date::parse(&crate::dates::today().await));
+        });
+    });
+    // A click inside rendered output. Today only `task:<line>:<path>`, from a
+    // TASK result: look the task up in the index (never trust text from the
+    // DOM for a write) and toggle it in its own file.
+    let cfg_action = config.clone();
+    let on_block_action = move |action: String| {
+        let Some(rest) = action.strip_prefix("task:") else {
+            return;
+        };
+        let Some((line, path)) = rest.split_once(':') else {
+            return;
+        };
+        let (Ok(line), path) = (line.parse::<usize>(), path.to_string()) else {
+            return;
+        };
+        let Some(task) = vault_idx
+            .peek()
+            .tasks()
+            .into_iter()
+            .find(|t| t.line == line && t.path == path)
+        else {
+            return;
+        };
+        let cfg = cfg_action.clone();
+        let today_str = today.peek().map_or_else(String::new, |d| d.to_string());
+        spawn(async move {
+            if let Some(idx) = write_task_toggle(&cfg, &task, &today_str).await {
+                vault_idx.set(idx);
+            }
+        });
+    };
+
+    // Rebuilt whenever the index or the date changes: the editor repaints its
+    // blocks when the renderer identity changes, which is how a query picks up
+    // notes that were indexed after the block was first drawn.
+    let render_block = use_memo(move || {
+        let _ = vault_idx.read();
+        let _ = today.read();
+        Some(ui::BlockRenderer::new(move |lang: &str, body: &str| {
+            if lang != "dataview" {
+                return String::new();
+            }
+            let ctx = index::dql::Context {
+                current_path: active.peek().clone().unwrap_or_default(),
+                today: *today.peek(),
+            };
+            index::dql::run(body, &vault_idx.peek(), &ctx)
+        }))
+    });
 
     // Mailbox: parent writes a path here to ask this pane to open it.
     use_effect(move || {
@@ -1288,7 +1473,7 @@ fn EditorPane(
                 )
                 .await
                 {
-                    crate::vault_index::update_page(old_p, &new_sha, &to_write).await;
+                    vault_idx.set(crate::vault_index::update_page(old_p, &new_sha, &to_write).await);
                     file_sha.set(new_sha);
                 }
             }
@@ -1357,7 +1542,7 @@ fn EditorPane(
             {
                 Ok(new_sha) => {
                     index.with_mut(|idx| idx.reindex_file(&path, &to_write));
-                    crate::vault_index::update_page(&path, &new_sha, &to_write).await;
+                    vault_idx.set(crate::vault_index::update_page(&path, &new_sha, &to_write).await);
                     file_sha.set(new_sha);
                     // Adopt the stamped text only if the user hasn't typed since
                     // the snapshot was taken — otherwise we would overwrite the
@@ -1542,6 +1727,8 @@ fn EditorPane(
                     content,
                     variant: MarkdownAreaVariant::Ghost,
                     placeholder: "Empty file.",
+                    render_block: render_block(),
+                    on_block_action,
                     onfocus: move |_| focused.set(pane_idx),
                 }
             } else {
@@ -2158,6 +2345,9 @@ fn TasksView(
     let mut loading = use_signal(|| true);
     let mut scan_gen = use_signal(|| 0u32);
     let mut hide_done = use_signal(|| true);
+    // This view's scan refreshes the shared index, so publish it — every other
+    // consumer (dataview blocks, most of all) gets the fresher data for free.
+    let mut vault_idx = crate::vault_index::use_index();
 
     // Today's date, for overdue styling (YYYY-MM-DD compares lexicographically).
     let today = use_resource(move || async move { crate::dates::today().await });
@@ -2170,7 +2360,9 @@ fn TasksView(
         let cfg = cfg_scan.clone();
         loading.set(true);
         spawn(async move {
-            let mut t = crate::vault_index::refresh(&cfg, &snapshot).await.tasks();
+            let idx = crate::vault_index::refresh(&cfg, &snapshot).await;
+            let mut t = idx.tasks();
+            vault_idx.set(idx);
             t.sort_by(tasks::cmp);
             all_tasks.set(t);
             loading.set(false);
@@ -2192,28 +2384,8 @@ fn TasksView(
         let cfg = cfg_toggle.clone();
         let today_now = today.read().as_deref().unwrap_or("").to_string();
         spawn(async move {
-            if let Ok(fc) = vault::dispatch::read_file(&cfg, &task.path).await
-                && let Some(new_content) = tasks::toggled_content(&fc.content, &task, &today_now)
-            {
-                let name = task
-                    .path
-                    .rsplit('/')
-                    .next()
-                    .unwrap_or(&task.path)
-                    .to_string();
-                if vault::dispatch::write_file(
-                    &cfg,
-                    &task.path,
-                    &new_content,
-                    &fc.sha,
-                    &format!("Toggle task in {name}"),
-                )
-                .await
-                .is_ok()
-                {
-                    // The file changed remotely; force a fresh read next scan.
-                    crate::vault_index::invalidate(&task.path).await;
-                }
+            if let Some(idx) = write_task_toggle(&cfg, &task, &today_now).await {
+                vault_idx.set(idx);
             }
         });
     });
@@ -3080,5 +3252,23 @@ fn ColumnView(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bytes_read_as_sizes_a_person_recognises() {
+        assert_eq!(human_bytes(0), "0 B");
+        assert_eq!(human_bytes(999), "999 B");
+        // Binary units: 1024 is the boundary, not 1000.
+        assert_eq!(human_bytes(1023), "1023 B");
+        assert_eq!(human_bytes(1024), "1.0 KB");
+        assert_eq!(human_bytes(1024 * 1024 * 3 / 2), "1.5 MB");
+        assert_eq!(human_bytes(5 * 1024 * 1024), "5.0 MB");
+        // Stops at the largest unit it knows rather than inventing one.
+        assert!(human_bytes(u64::MAX).ends_with(" TB"));
     }
 }

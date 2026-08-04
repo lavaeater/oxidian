@@ -4,7 +4,7 @@
 // the interactive complement to the tasks.rs unit tests.
 
 const { test, expect } = require("@playwright/test");
-const { seedConfig, mockGitHub } = require("./helpers");
+const { openFile, seedConfig, mockGitHub } = require("./helpers");
 
 test("clicking a task checkbox toggles it from unchecked to checked", async ({ page }) => {
   await mockGitHub(page, { "Tasks.md": "# Tasks\n\n- [ ] first thing\n- [x] done thing" });
@@ -12,7 +12,7 @@ test("clicking a task checkbox toggles it from unchecked to checked", async ({ p
 
   await page.goto("/");
   await expect(page.getByText("Oxidian", { exact: true })).toBeVisible();
-  await page.getByText("Tasks", { exact: false }).first().click();
+  await openFile(page, "Tasks");
 
   const editor = page.locator(".md-area");
   await expect(editor).toBeVisible();

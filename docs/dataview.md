@@ -1,6 +1,6 @@
 # Oxidian — Dataview (US 18.1 / 18.2)
 
-**Status:** phases 0–3 implemented; phase 4 (editor wiring) is the next step — see §9 for the phase table.
+**Status:** phases 0–5 implemented — a `dataview` block renders in the editor, folds back to source when you click it, and `TASK` results are clickable. The index lives in IndexedDB (web) / its own file (native). Phase 6 (inline expressions) is next; see §9 for the phase table.
 **Branch:** `data-view`.
 **Code:** `packages/index` (`extract`, `value`, `frontmatter`, `tasks`, `Index`, `dql/{parse,eval,render}`), `packages/app/src/vault_index.rs`.
 
@@ -221,7 +221,7 @@ Recommendation: **promote `tasks_cache.rs` into `packages/app/src/index/`**, wit
 
 | Mechanism | Capacity | Fit |
 |---|---|---|
-| `localStorage` | ~5 MB, synchronous, strings | **Config and small keys only.** What we use today; `tasks_cache` will outgrow it. |
+| `localStorage` | ~5 MB, synchronous, strings | **Config and small keys only** — which is now all it holds. |
 | **IndexedDB** | Quota-based, typically 60 % of free disk on Chrome/Firefox | **The default choice** for both index and mirror. Async, structured data, indexable keys. |
 | **OPFS** (Origin Private File System) | Same quota, file-shaped | Best fit for a *content mirror* — real files, sync access handles inside a worker, cheap streaming writes. |
 | **Cache Storage** | Same quota | Interesting for content: our keys are **blob SHAs**, i.e. content-addressed and immutable, which is exactly what a `Cache` is good at. |
@@ -260,6 +260,30 @@ One trait, three impls, e.g. `trait BlobStore { get(sha), put(sha, bytes), … }
 
 ---
 
+### 6.7 Where the bytes actually go
+
+Two stores, split by whether the data scales with the vault:
+
+| | Web | Native |
+|---|---|---|
+| Config, bookmarks, board (`js::ls_*`) | `localStorage` | `native_store`'s JSON map |
+| Vault index (`js::blob_*`) | IndexedDB (`oxidian`/`blobs`) | its own file in the app data dir |
+
+The index gets a file of its own on native rather than a key in the settings
+map for the same reason it gets IndexedDB on web: it is rewritten on every save,
+and folding it into the settings blob would re-encode and rewrite the token and
+every setting each time — with JSON-inside-JSON escaping roughly doubling it.
+
+Failure is always tolerable. `blob_set` swallows quota errors, `load` falls back
+to an empty index, and a wiped store costs exactly one slow refresh, because the
+repo is the source of truth. That is what makes **Rebuild** safe to offer as a
+one-click action.
+
+What the footer shows is worth having because both numbers are real limits:
+`navigator.storage.estimate()` reports the quota the browser is actually giving
+this origin, and `persisted()` says whether the browser may evict it under
+pressure. Native reports its own footprint and no quota.
+
 ## 7. Getting to the Obsidian model (full local vault)
 
 The end state you described — "vault fully downloaded to the device" — needs a **bulk seed**, because 5 000 sequential `read_file` calls is not a viable first-run experience.
@@ -288,6 +312,45 @@ Sync then becomes: seed once → tree-diff on open → read changed blobs → wr
 
 ---
 
+### 8.1 Folding without corrupting the document
+
+The editor's text model is the DOM: `read_state` rebuilds the note by walking
+the editor's line divs. Rendered output lives *in* that DOM, so it has to be
+invisible to the model or the first keystroke after a query block would write
+the rendered table into the note.
+
+Three rules make that hold:
+
+- **The source never leaves the DOM.** A folded block still emits one
+  `.md-line` per source line, with the same byte offsets; only CSS hides them
+  (`.md-render-hidden`, and `.md-render-host > .md-token` for the line that
+  carries the output). Caret offsets are therefore identical folded or not,
+  which is why unfolding can hand the same offset straight back.
+- **Output is marked `[data-md-render]`**, and every text/caret calculation in
+  `markdown_area.js` goes through `visibleText`, which skips those subtrees.
+  Nothing else may use `textContent`.
+- **Clicking output is a request, not an edit.** It records an offset that the
+  Rust side re-renders around, placing the caret in the source.
+
+Fold state is decided in Rust from the caret offset (`rendered_blocks`), not in
+CSS, so it is unit-testable and doesn't depend on `:has()` support.
+
+Clicking *inside* output is its own path again: an element with `data-action`
+sends its payload to the host and never moves the caret. Two things that look
+like details are load-bearing, both found by the e2e test:
+
+- The mousedown must `preventDefault`, or the caret moves into the block and the
+  resulting re-render detaches the node mid-click.
+- The optimistic flip must edit the checkbox's existing text node, not assign
+  `textContent`. Replacing the node under the pointer between mousedown and
+  mouseup makes the browser skip the `click` event altogether, so the action
+  silently never fires.
+
+One related bug fixed on the way: `read_state` was a single destructive read
+shared by the click and input handlers, and a click arrives alongside a
+selectionchange — whichever handler ran first ate the other's payload. Clicks
+now read `read_click`, a separate channel.
+
 ## 9. Proposed sequencing
 
 Each phase is independently useful and shippable.
@@ -295,11 +358,11 @@ Each phase is independently useful and shippable.
 | Phase | Deliverable | Depends on |
 |---|---|---|
 | **0** ✅ | `tasks_cache` → the `packages/index` crate: `PageData`, extraction, SHA-diff refresh; Tasks panel migrated (`app::vault_index`). **No user-visible change**, no dataview yet. | — |
-| **1** | Move the index off `localStorage` onto IndexedDB (web) / `native_store` file (native). Call `request_persistent_storage()`; show quota in Settings. | 0 |
+| **1** ✅ | Index off `localStorage`: `js::blob_*` — IndexedDB on web, its own file under `native_store` on native — with a one-time migration of an index left behind by an older build. A storage footer in the sidebar reports notes indexed, bytes used against quota, whether storage is evictable, and offers **Rebuild**. See §6.7. | 0 |
 | **2** ✅ | Extraction completeness: typed `Value` model with real dates and durations (`value.rs`), inline `key:: value` fields in line and bracketed forms, `#tag` index (`Index::tag_counts` / `pages_with_tag` — the **Tags pane**, US 14, is now mostly a UI job), headings, links. | 0 |
 | **3** ✅ | DQL lexer, parser, and evaluator (`dql/`), pure and unit-tested. `TABLE [WITHOUT ID]` / `LIST` / `TASK`, `FROM` (folder, tag, link, `outgoing()`, `and`/`or`/`-`), `WHERE`, `SORT`, `LIMIT`, ~20 built-in functions. Errors are values. **Deferred:** `GROUP BY`, `FLATTEN`, `CALENDAR` — each parses to a clear "not supported yet" message rather than a confusing syntax error. | 2 |
-| **4** 🚧 | Rendering. Done: `dql::render` turns a result into escaped HTML (table / list / task list, error block, empty state) and `dql::run` is the one call the UI needs. Remaining: the editor wiring — `MarkdownArea` must render a `dataview` fence through a caller-supplied block renderer (the `ui` crate can't depend on `index`), swapping back to raw source when the cursor enters the block. **That is the first shippable dataview.** | 3 |
-| **5** | `TASK` queries with click-to-toggle write-back (reuses `tasks.rs`). | 4 |
+| **4** ✅ | Rendering. `dql::render` turns a result into escaped HTML (table / list / task list, error block, empty state) and `dql::run` is the one call the UI makes. In the editor, `MarkdownArea` takes a `BlockRenderer` callback (the `ui` crate can't depend on `index`, so `app` supplies it) and shows a claimed fence as output, swapping back to source when the caret enters it — or when you click the output. **The first shippable dataview.** See §8.1 for how folding keeps the document model intact. | 3 |
+| **5** ✅ | `TASK` queries with click-to-toggle write-back. Rendered checkboxes carry a `data-action`; the editor forwards it to the host via `on_block_action`, which resolves the task **from the index** (never from DOM text) and writes through the same `write_task_toggle` the Tasks panel uses. | 4 |
 | **6** | Inline `` `= expr` `` queries. | 3 |
 | **7** | Full content mirror + archive seeding (§7); offline vault; full-text search stops using the search API. | 1 |
 | **8** | *(Maybe, maybe never)* `dataviewjs` via the plugin host API — opt-in per vault only. | plugin architecture |

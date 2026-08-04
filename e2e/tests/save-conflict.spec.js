@@ -5,7 +5,7 @@
 // unit test that maps 409 -> VaultError::Conflict.
 
 const { test, expect } = require("@playwright/test");
-const { seedConfig, mockGitHub } = require("./helpers");
+const { openFile, seedConfig, mockGitHub } = require("./helpers");
 
 test("a 409 on auto-save surfaces a conflict, not a silent overwrite", async ({ page }) => {
   // Every write returns 409.
@@ -15,7 +15,7 @@ test("a 409 on auto-save surfaces a conflict, not a silent overwrite", async ({ 
   await page.goto("/");
   // Wait for the vault sidebar to finish loading before opening the note.
   await expect(page.getByText("Oxidian", { exact: true })).toBeVisible();
-  await page.getByText("Note", { exact: false }).first().click();
+  await openFile(page, "Note");
   const editor = page.locator(".md-area");
   await expect(editor).toBeVisible();
   await expect(page.locator(".editor-filename")).toHaveText("Note.md");

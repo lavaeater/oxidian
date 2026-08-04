@@ -18,6 +18,69 @@ export function ls_remove(key) {
     localStorage.removeItem(key);
 }
 
+// ── Large blobs (IndexedDB) ──────────────────────────────────────────────────
+// `localStorage` caps out around 5 MB and is synchronous, which makes it the
+// wrong place for the vault index — a few thousand notes exceed it and the
+// write blocks the UI thread. IndexedDB has a quota in the hundreds of MB (and
+// no hard cap when storage is persisted), so anything that scales with vault
+// size lives here. Small, fixed-size settings stay in localStorage.
+//
+// Deliberately hand-rolled rather than pulling in a wrapper library: one object
+// store, three operations, no schema evolution to speak of.
+
+const BLOB_DB = 'oxidian';
+const BLOB_STORE = 'blobs';
+
+function blobDb() {
+    return new Promise((resolve, reject) => {
+        const req = indexedDB.open(BLOB_DB, 1);
+        req.onupgradeneeded = () => {
+            const db = req.result;
+            if (!db.objectStoreNames.contains(BLOB_STORE)) db.createObjectStore(BLOB_STORE);
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+    });
+}
+
+function blobTx(mode, run) {
+    return blobDb().then(db => new Promise((resolve, reject) => {
+        const tx = db.transaction(BLOB_STORE, mode);
+        const req = run(tx.objectStore(BLOB_STORE));
+        tx.oncomplete = () => { db.close(); resolve(req ? req.result : undefined); };
+        tx.onerror = () => { db.close(); reject(tx.error); };
+    }));
+}
+
+// Returns '' when the key is absent, matching `ls_get`, so callers treat a
+// missing store and an empty store the same way.
+export function blob_get(key) {
+    return blobTx('readonly', st => st.get(key)).then(v => v || '').catch(() => '');
+}
+
+export function blob_set(key, value) {
+    // Swallows quota errors: the index is a cache, and failing to save it must
+    // never break the app — the next refresh simply rebuilds it.
+    return blobTx('readwrite', st => st.put(value, key)).then(() => true).catch(() => false);
+}
+
+export function blob_remove(key) {
+    return blobTx('readwrite', st => st.delete(key)).then(() => true).catch(() => false);
+}
+
+// `[usage, quota, persisted]` in bytes, for the storage readout in Settings.
+// -1 for usage/quota when the browser won't say (Safari, mostly).
+export function storage_estimate() {
+    const persisted = () => (navigator.storage && navigator.storage.persisted)
+        ? navigator.storage.persisted() : Promise.resolve(false);
+    if (!navigator.storage || !navigator.storage.estimate) {
+        return persisted().then(p => [-1, -1, p ? 1 : 0]);
+    }
+    return Promise.all([navigator.storage.estimate(), persisted()])
+        .then(([est, p]) => [est.usage ?? -1, est.quota ?? -1, p ? 1 : 0])
+        .catch(() => [-1, -1, 0]);
+}
+
 // ── Dates ────────────────────────────────────────────────────────────────────
 
 // Today's date as YYYY-MM-DD.

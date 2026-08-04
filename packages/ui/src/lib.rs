@@ -7,6 +7,6 @@ mod navbar;
 pub use navbar::Navbar;
 
 mod cm;
-pub use cm::{MarkdownArea, MarkdownAreaVariant};
+pub use cm::{BlockRenderer, MarkdownArea, MarkdownAreaVariant};
 pub use cm::tokenizer;
 

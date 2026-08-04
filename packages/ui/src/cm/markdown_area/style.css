@@ -305,3 +305,23 @@
   padding: 0.05em 0.5em;
   margin: 0 -0.5em;
 }
+
+/* ── Rendered blocks ──
+   A fenced block whose language has a renderer (```dataview) shows its output
+   instead of its source, until the caret goes in. The source lines stay in the
+   DOM either way — they are the document — so this is purely visual: the first
+   line of the block hosts the output and hides its own tokens, the rest hide
+   entirely. `[data-md-render]` marks the output as *not* note text; the JS side
+   excludes it from every caret and text calculation. */
+.md-render-host > .md-token,
+.md-render-hidden {
+  display: none;
+}
+
+.md-render {
+  /* Inert: clicks are caught by the editor and turned into "show me the
+     source", rather than dropping a caret inside the output. */
+  user-select: none;
+  cursor: pointer;
+  margin: 0.4em 0;
+}

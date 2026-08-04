@@ -113,3 +113,50 @@ pub fn remove(key: &str) {
         persist(m);
     });
 }
+
+// ── Large blobs ───────────────────────────────────────────────────────────────
+// The vault index scales with the vault and is rewritten on every save. Keeping
+// it in the settings map would mean re-encoding and rewriting every setting (and
+// the token) each time, and JSON-inside-JSON doubles it through escaping. So a
+// blob gets its own file, written verbatim. Mirrors IndexedDB on web.
+
+fn blob_path(key: &str) -> PathBuf {
+    let dir = base_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    // Keys are internal constants, but a path separator would still escape the
+    // directory, so make the name safe regardless.
+    let safe: String = key
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+        .collect();
+    dir.join(format!("{safe}.json"))
+}
+
+pub fn blob_get(key: &str) -> String {
+    std::fs::read_to_string(blob_path(key)).unwrap_or_default()
+}
+
+pub fn blob_set(key: &str, value: &str) {
+    if let Err(e) = std::fs::write(blob_path(key), value) {
+        console_log(&format!("[oxidian] blob write failed: {e}"));
+    }
+}
+
+pub fn blob_remove(key: &str) {
+    let _ = std::fs::remove_file(blob_path(key));
+}
+
+/// `(usage, quota)` in bytes. Native has no quota, so only the store's own
+/// footprint is reported and the quota is `-1` ("not applicable").
+pub fn usage() -> (i64, i64) {
+    let dir = base_dir();
+    let total: u64 = std::fs::read_dir(&dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| e.metadata().ok())
+        .filter(|m| m.is_file())
+        .map(|m| m.len())
+        .sum();
+    (total as i64, -1)
+}

@@ -17,6 +17,7 @@ mod bindings {
     use dioxus_use_js::use_js;
     use_js!("assets/oxidian.js"::{
         ls_get, ls_set, ls_remove,
+        blob_get, blob_set, blob_remove, storage_estimate,
         today, date_vars,
         confirm_dialog, copy_to_clipboard,
         focus_selector, scroll_active_into_view, start_sidebar_resize,
@@ -72,6 +73,65 @@ pub fn ls_remove(key: impl Into<String>) {
     #[cfg(not(target_arch = "wasm32"))]
     {
         crate::native_store::remove(&key);
+    }
+}
+
+// ── Large blobs ───────────────────────────────────────────────────────────────
+
+// Anything that scales with the size of the vault goes here instead of
+// `localStorage`: IndexedDB on web, a file of its own on native. Small,
+// fixed-size settings stay in `ls_*`. See `crate::vault_index` and `docs/dataview.md` §6.7.
+
+/// Reads a blob, returning `""` when absent (as `ls_get` does).
+pub async fn blob_get(key: &str) -> String {
+    #[cfg(target_arch = "wasm32")]
+    {
+        bindings::blob_get(key).await.unwrap_or_default()
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        crate::native_store::blob_get(key)
+    }
+}
+
+/// Writes a blob. Awaited rather than fire-and-forget so a caller that writes
+/// and immediately reads back (or navigates away) sees its own write.
+pub async fn blob_set(key: &str, value: impl Into<String>) {
+    let value = value.into();
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _: Result<bool, _> = bindings::blob_set(key, value).await;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        crate::native_store::blob_set(key, &value);
+    }
+}
+
+pub async fn blob_remove(key: &str) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _: Result<bool, _> = bindings::blob_remove(key).await;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        crate::native_store::blob_remove(key);
+    }
+}
+
+/// `(usage, quota, persisted)` in bytes. `-1` for a figure the platform won't
+/// report — quota is always `-1` on native, where there isn't one.
+pub async fn storage_estimate() -> (i64, i64, bool) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let v: [i64; 3] = bindings::storage_estimate().await.unwrap_or([-1, -1, 0]);
+        (v[0], v[1], v[2] == 1)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let (usage, quota) = crate::native_store::usage();
+        // A file in the app's private directory is as persistent as it gets.
+        (usage, quota, true)
     }
 }
 

@@ -5,8 +5,8 @@
 //! originates from a note is escaped: note content is untrusted input as far as
 //! the renderer is concerned, and it is being injected via `dangerous_inner_html`.
 //!
-//! Links render as `<a data-wikilink="…">`, which is the same hook the editor
-//! already uses for `[[wikilinks]]`, so navigation comes for free.
+//! Links render as `<a data-navigate="…">` — the same attribute the editor's
+//! own `[[wikilinks]]` carry — so clicking one in a result navigates for free.
 
 use crate::tasks::Task;
 use crate::value::Value;
@@ -32,7 +32,7 @@ pub fn escape(s: &str) -> String {
 fn value_html(v: &Value) -> String {
     match v {
         Value::Link(target) => format!(
-            "<a class=\"md-wikilink\" data-wikilink=\"{0}\">{0}</a>",
+            "<a class=\"md-wikilink\" data-navigate=\"{0}\">{0}</a>",
             escape(target)
         ),
         Value::List(items) => {
@@ -121,10 +121,13 @@ fn tasks_html(tasks: &[Task]) -> String {
             };
             // data-path/data-line are the write-back coordinates: clicking the
             // box toggles the source line in that file, as the Tasks panel does.
+            // `data-action` is what the host actually reacts to — the line comes
+            // first so the path, which may contain anything, can be the tail.
             format!(
-                "<li class=\"dataview-task\" data-path=\"{}\" data-line=\"{}\">\
-                 <span class=\"md-task-checkbox\" data-checked=\"{checked}\">{}</span>\
-                 <span class=\"dataview-task-text\">{}</span>{prio}{due}</li>",
+                "<li class=\"dataview-task\" data-path=\"{0}\" data-line=\"{1}\">\
+                 <span class=\"md-task-checkbox\" data-checked=\"{checked}\" \
+                 data-action=\"task:{1}:{0}\">{2}</span>\
+                 <span class=\"dataview-task-text\">{3}</span>{prio}{due}</li>",
                 escape(&t.path),
                 t.line,
                 if t.checked { "[x]" } else { "[ ]" },
@@ -155,7 +158,7 @@ mod tests {
         let html = result_html(&table());
         assert!(html.contains("<th>File</th><th>rating</th>"));
         assert!(html.contains("data-path=\"games/Deus Ex.md\""));
-        assert!(html.contains("data-wikilink=\"Deus Ex\""));
+        assert!(html.contains("data-navigate=\"Deus Ex\""));
         assert!(html.contains("<td>9</td>"), "numbers lose the .0");
         assert!(html.contains("<td></td>"), "a null cell is blank, not 'null'");
         // The block is inert: the editor must not let the caret inside it.
@@ -199,6 +202,9 @@ mod tests {
         assert!(html.contains("data-path=\"games/Deus Ex.md\""));
         assert!(html.contains("data-line=\"7\""));
         assert!(html.contains("data-checked=\"false\""));
+        // The action the host writes back from: line first, path last, so a
+        // path containing a colon still parses.
+        assert!(html.contains("data-action=\"task:7:games/Deus Ex.md\""));
         assert!(html.contains("📅 2026-09-01"));
         assert!(html.contains('⏫'), "priority emoji is shown");
     }
