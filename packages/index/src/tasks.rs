@@ -222,6 +222,87 @@ fn flip_checkbox(line: &str) -> Option<String> {
     None
 }
 
+/// Removes `tasks` from `content`, returning the remaining text and the raw
+/// lines that were taken out (in file order).
+///
+/// Lines are located the same way [`toggled_content`] locates them — by index,
+/// falling back to a parsed-text match — so a stale scan still finds the right
+/// line. Tasks that can't be found are simply skipped: the caller is moving
+/// lines between files, and inventing a line would be worse than moving fewer.
+///
+/// Indentation is preserved, because a task's indent carries meaning (a subtask
+/// under a parent bullet), and so does whatever the line says after the
+/// checkbox — due dates, priority, tags all ride along untouched.
+pub fn extract_lines(content: &str, tasks: &[Task]) -> (String, Vec<String>) {
+    let lines: Vec<&str> = content.lines().collect();
+    let mut taken: Vec<usize> = Vec::new();
+    for task in tasks {
+        if let Some(idx) = locate_excluding(&lines, task, &taken) {
+            taken.push(idx);
+        }
+    }
+    taken.sort_unstable();
+
+    let moved: Vec<String> = taken.iter().map(|&i| lines[i].to_string()).collect();
+    let mut out = String::new();
+    let mut first = true;
+    for (i, l) in lines.iter().enumerate() {
+        if taken.contains(&i) {
+            continue;
+        }
+        if !first {
+            out.push('\n');
+        }
+        out.push_str(l);
+        first = false;
+    }
+    if content.ends_with('\n') && !out.is_empty() {
+        out.push('\n');
+    }
+    (out, moved)
+}
+
+/// Like [`locate`], but never returns a line that was already claimed — two
+/// tasks with identical text must map to two different lines, not the same one
+/// twice.
+fn locate_excluding(lines: &[&str], task: &Task, taken: &[usize]) -> Option<usize> {
+    let matches = |line: &str| {
+        parse_line(&task.path, 0, line)
+            .map(|t| t.text == task.text)
+            .unwrap_or(false)
+    };
+    if !taken.contains(&task.line)
+        && lines.get(task.line).map(|l| matches(l)).unwrap_or(false)
+    {
+        return Some(task.line);
+    }
+    lines
+        .iter()
+        .enumerate()
+        .find(|(i, l)| !taken.contains(i) && matches(l))
+        .map(|(i, _)| i)
+}
+
+/// Appends task lines to the end of `content`, separated by a blank line when
+/// the note already has body text.
+///
+/// Returns `content` unchanged when there is nothing to append, so a caller that
+/// over-eagerly asks to move zero tasks doesn't dirty the file.
+pub fn append_lines(content: &str, lines: &[String]) -> String {
+    if lines.is_empty() {
+        return content.to_string();
+    }
+    let body = content.trim_end_matches('\n');
+    let mut out = String::with_capacity(content.len() + lines.len() * 40);
+    if !body.trim().is_empty() {
+        out.push_str(body);
+        out.push_str("\n\n");
+    }
+    out.push_str(&lines.join("\n"));
+    out.push('\n');
+    out
+}
+
 /// Sort order for the view: open tasks first, then by due date (earliest first,
 /// undated last), then priority, then text.
 pub fn cmp(a: &Task, b: &Task) -> std::cmp::Ordering {
@@ -277,6 +358,90 @@ mod tests {
         let task = &parse_file("a.md", src)[0];
         let out = toggled_content(src, task, "2026-06-11").unwrap();
         assert_eq!(out, "- [ ] done\n");
+    }
+
+    #[test]
+    fn extract_pulls_task_lines_and_leaves_the_rest() {
+        let src = "# Notes\n\n- [ ] one\nsome prose\n- [ ] two\n";
+        let tasks = parse_file("a.md", src);
+        let (rest, moved) = extract_lines(src, &tasks);
+        assert_eq!(rest, "# Notes\n\nsome prose\n");
+        assert_eq!(moved, vec!["- [ ] one", "- [ ] two"]);
+    }
+
+    #[test]
+    fn extract_preserves_indentation_and_metadata() {
+        let src = "- [ ] parent\n    - [ ] child 📅 2026-06-15 ⏫\n";
+        let tasks = parse_file("a.md", src);
+        let (_, moved) = extract_lines(src, &tasks[1..]);
+        assert_eq!(moved, vec!["    - [ ] child 📅 2026-06-15 ⏫"]);
+    }
+
+    #[test]
+    fn extract_returns_lines_in_file_order_not_argument_order() {
+        let src = "- [ ] a\n- [ ] b\n- [ ] c\n";
+        let all = parse_file("a.md", src);
+        let scrambled = vec![all[2].clone(), all[0].clone()];
+        let (rest, moved) = extract_lines(src, &scrambled);
+        assert_eq!(moved, vec!["- [ ] a", "- [ ] c"]);
+        assert_eq!(rest, "- [ ] b\n");
+    }
+
+    #[test]
+    fn extract_maps_duplicate_texts_to_distinct_lines() {
+        // Two identical tasks must take two lines, not the same line twice.
+        let src = "- [ ] same\n- [ ] same\n- [ ] other\n";
+        let tasks = parse_file("a.md", src);
+        let (rest, moved) = extract_lines(src, &tasks[..2]);
+        assert_eq!(moved, vec!["- [ ] same", "- [ ] same"]);
+        assert_eq!(rest, "- [ ] other\n");
+    }
+
+    #[test]
+    fn extract_skips_tasks_that_are_no_longer_there() {
+        let src = "- [ ] still here\n";
+        let ghost = parse_file("a.md", "- [ ] deleted elsewhere");
+        let (rest, moved) = extract_lines(src, &ghost);
+        assert_eq!(rest, src);
+        assert!(moved.is_empty());
+    }
+
+    #[test]
+    fn extract_can_empty_a_file() {
+        let src = "- [ ] only\n";
+        let tasks = parse_file("a.md", src);
+        let (rest, moved) = extract_lines(src, &tasks);
+        assert_eq!(rest, "");
+        assert_eq!(moved.len(), 1);
+    }
+
+    #[test]
+    fn append_separates_from_existing_body() {
+        let out = append_lines("# Today\n", &["- [ ] a".to_string()]);
+        assert_eq!(out, "# Today\n\n- [ ] a\n");
+    }
+
+    #[test]
+    fn append_to_empty_note_adds_no_leading_blank_line() {
+        assert_eq!(append_lines("", &["- [ ] a".to_string()]), "- [ ] a\n");
+        assert_eq!(append_lines("\n\n", &["- [ ] a".to_string()]), "- [ ] a\n");
+    }
+
+    #[test]
+    fn append_of_nothing_leaves_content_untouched() {
+        assert_eq!(append_lines("# Today\n", &[]), "# Today\n");
+    }
+
+    #[test]
+    fn extract_then_append_round_trips_a_move() {
+        let src = "# Source\n\n- [ ] move me 📅 2026-06-15\n- [x] done\n";
+        let open: Vec<Task> = parse_file("a.md", src).into_iter().filter(|t| !t.checked).collect();
+        let (rest, moved) = extract_lines(src, &open);
+        assert_eq!(rest, "# Source\n\n- [x] done\n");
+        assert_eq!(
+            append_lines("# Today\n", &moved),
+            "# Today\n\n- [ ] move me 📅 2026-06-15\n"
+        );
     }
 
     #[test]

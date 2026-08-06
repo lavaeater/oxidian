@@ -31,10 +31,12 @@ test("dragging a note onto a folder moves it there after confirmation", async ({
   await note.dragTo(folder);
 
   // The move is create-at-new + delete-old (no native move in the Contents API).
+  // Both legs are polled: the DELETE is issued after the PUT resolves, so a bare
+  // assertion here races the round trip whenever the machine is loaded.
   await expect
     .poll(() => requests.filter((r) => r === "PUT Archive/Inbox.md").length)
     .toBe(1);
-  expect(requests).toContain("DELETE Inbox.md");
+  await expect.poll(() => requests).toContain("DELETE Inbox.md");
 
   // The note left the root; expanding Archive shows it in its new home.
   await expect(page.locator(".file-entry-name")).toHaveText([]);

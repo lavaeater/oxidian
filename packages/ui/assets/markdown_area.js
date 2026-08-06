@@ -13,6 +13,13 @@ export function setup_tasks(id) {
     el.addEventListener('mousedown', function (e) {
         const nav = e.target.closest('[data-navigate]');
         if (nav) {
+            // Same reason as the action path below: letting the caret land here
+            // fires a selectionchange, the editor re-renders the now-active line
+            // as source, and the node is detached before `click` arrives — so
+            // the navigation would be silently dropped. `preventDefault` on
+            // mousedown does not cancel the click, so a real <a href> (an
+            // external markdown link) still follows its href.
+            e.preventDefault();
             el._navClick = nav.dataset.navigate;
             return;
         }

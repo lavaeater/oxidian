@@ -1013,6 +1013,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                             TasksView {
                                 config: config.clone(),
                                 files,
+                                templates,
                                 on_open: move |path: String| {
                                     open_focused(path);
                                     sidebar_open.set(false);
@@ -1308,6 +1309,119 @@ async fn write_task_toggle(cfg: &GithubConfig, task: &Task, today: &str) -> Opti
     Some(crate::vault_index::update_page(&task.path, &new_sha, &new_content).await)
 }
 
+/// Today's periodic note: the path it lives at, and the body to seed it with if
+/// it isn't there yet.
+///
+/// The daily-note *template* owns the path (its `filepath:` is where the user's
+/// journal actually lives — a dated folder tree, typically), so this resolves
+/// through the template exactly as the "Today's note" button does. Without a
+/// configured template it falls back to `YYYY-MM-DD.md` at the vault root, which
+/// is what that button does too.
+async fn todays_note(cfg: &GithubConfig, templates: &[TemplateMeta]) -> Option<(String, String)> {
+    let date_json = crate::dates::date_vars_json().await;
+    let vars = template::TemplateVars::from_json(&date_json, "", "");
+    if vars.year.is_empty() || vars.month.is_empty() || vars.date.is_empty() {
+        return None;
+    }
+    let tmpl = templates
+        .iter()
+        .find(|t| t.source_path == cfg.daily_note_template);
+    match tmpl.and_then(|t| t.filepath.as_ref().map(|fp| (t, fp))) {
+        Some((t, fp)) => {
+            let path = template::substitute_vars(fp, &vars)
+                .trim_start_matches('/')
+                .to_string();
+            let body = template::strip_tabstops(&template::substitute_vars(&t.body, &vars));
+            Some((path, body))
+        }
+        None => {
+            let date = crate::dates::today().await;
+            if date.is_empty() {
+                return None;
+            }
+            Some((format!("{date}.md"), format!("# {date}\n\n")))
+        }
+    }
+}
+
+/// Moves `tasks` out of the notes holding them and appends them to `dest`,
+/// creating `dest` (seeded with `dest_body`) when it doesn't exist.
+///
+/// The destination is written **first**, then each source. If a source write
+/// fails the task shows up in both notes — visible and fixable — whereas the
+/// other order would drop it on the floor. Tasks already living in `dest` are
+/// skipped rather than moved onto themselves.
+///
+/// Returns the refreshed index, or an error message fit to show the user.
+async fn move_tasks(
+    cfg: &GithubConfig,
+    tasks: &[Task],
+    dest: &str,
+    dest_body: &str,
+) -> Result<Index, String> {
+    let mut by_file: std::collections::BTreeMap<String, Vec<Task>> = Default::default();
+    for t in tasks.iter().filter(|t| t.path != dest) {
+        by_file.entry(t.path.clone()).or_default().push(t.clone());
+    }
+    if by_file.is_empty() {
+        return Err("Nothing to move.".to_string());
+    }
+
+    // Cut the lines out of each source, in memory. Nothing is written yet: if a
+    // read fails we want to have changed nothing at all.
+    let mut moved_lines: Vec<String> = Vec::new();
+    let mut rewrites: Vec<(String, String, String)> = Vec::new(); // path, content, sha
+    for (path, items) in &by_file {
+        let fc = vault::dispatch::read_file(cfg, path)
+            .await
+            .map_err(|e| format!("Could not read {path}: {e}"))?;
+        let (rest, moved) = tasks::extract_lines(&fc.content, items);
+        if moved.is_empty() {
+            continue;
+        }
+        moved_lines.extend(moved);
+        rewrites.push((path.clone(), rest, fc.sha));
+    }
+    if moved_lines.is_empty() {
+        return Err("Those tasks are no longer in their notes — rescan and retry.".to_string());
+    }
+
+    // Destination first.
+    let dest_name = dest.rsplit('/').next().unwrap_or(dest);
+    let msg = format!("Move {} task(s) to {dest_name}", moved_lines.len());
+    let (dest_content, dest_sha) = match vault::dispatch::read_file(cfg, dest).await {
+        Ok(fc) => (tasks::append_lines(&fc.content, &moved_lines), Some(fc.sha)),
+        // Not there yet — this is the "creating it if it doesn't exist" path.
+        Err(_) => (tasks::append_lines(dest_body, &moved_lines), None),
+    };
+    let dest_new_sha = match dest_sha {
+        Some(sha) => vault::dispatch::write_file(cfg, dest, &dest_content, &sha, &msg)
+            .await
+            .map_err(|e| format!("Could not write {dest}: {e}"))?,
+        None => vault::dispatch::create_file(cfg, dest, &dest_content, &msg)
+            .await
+            .map_err(|e| format!("Could not create {dest}: {e}"))?,
+    };
+    let mut idx = crate::vault_index::update_page(dest, &dest_new_sha, &dest_content).await;
+
+    // Then the sources.
+    for (path, content, sha) in &rewrites {
+        let msg = format!("Move task(s) out of {}", path.rsplit('/').next().unwrap_or(path));
+        match vault::dispatch::write_file(cfg, path, content, sha, &msg).await {
+            Ok(new_sha) => {
+                idx = crate::vault_index::update_page(path, &new_sha, content).await;
+            }
+            Err(e) => {
+                return Err(format!(
+                    "Moved to {dest_name}, but could not update {path} ({e}) — \
+                     the tasks are now in both notes."
+                ));
+            }
+        }
+    }
+    Ok(idx)
+}
+
 // ── Editor pane ─────────────────────────────────────────────────────────────
 //
 // One independent editor: its own tab list (`tabs`/`active`), document state,
@@ -1358,11 +1472,78 @@ fn EditorPane(
             today.set(index::Date::parse(&crate::dates::today().await));
         });
     });
-    // A click inside rendered output. Today only `task:<line>:<path>`, from a
-    // TASK result: look the task up in the index (never trust text from the
-    // DOM for a write) and toggle it in its own file.
+    // ── Wikilinks ──
+    // The folder a link in the open note resolves against (`""` at the root).
+    let link_dir = use_memo(move || {
+        active()
+            .and_then(|p| p.rfind('/').map(|i| p[..i].to_string()))
+            .unwrap_or_default()
+    });
+
+    // Which `[[targets]]` already exist. Rebuilt when the file list or the open
+    // note changes — both move the answer — and the editor repaints its links
+    // when this identity changes, so a note created from a link immediately
+    // stops advertising itself as missing.
+    let resolve_link = use_memo(move || {
+        let paths: Vec<String> = files.read().iter().map(|f| f.path.clone()).collect();
+        let dir = link_dir();
+        Some(ui::LinkResolver::new(move |target: &str| {
+            crate::links::resolve(target, &paths, &dir).is_some()
+        }))
+    });
+
+    // Clicking a resolved link opens that note in this pane. Markdown links to
+    // the web arrive here too, but they are real anchors with an `href` — the
+    // browser has already handled them, and they never resolve to a vault path.
+    let on_navigate = move |target: String| {
+        let paths: Vec<String> = files.peek().iter().map(|f| f.path.clone()).collect();
+        if let Some(path) = crate::links::resolve(&target, &paths, &link_dir.peek()) {
+            open_in_pane(tabs, active, path);
+        }
+    };
+
+    // A click inside rendered output: a `task:<line>:<path>` from a TASK result,
+    // or `newnote:<target>` from an unresolved wikilink.
     let cfg_action = config.clone();
+    let cfg_newnote = config.clone();
     let on_block_action = move |action: String| {
+        if let Some(target) = action.strip_prefix("newnote:") {
+            // The link text decides the path (see `links::new_note_path`), and
+            // the note is seeded with its own title so it isn't blank.
+            let path = crate::links::new_note_path(target, &link_dir.peek());
+            if path.is_empty() || path == ".md" {
+                return;
+            }
+            let title = path
+                .rsplit('/')
+                .next()
+                .unwrap_or(&path)
+                .trim_end_matches(".md")
+                .to_string();
+            let cfg = cfg_newnote.clone();
+            spawn(async move {
+                let body = format!("# {title}\n\n");
+                match vault::dispatch::create_file(&cfg, &path, &body, &format!("Create {path}"))
+                    .await
+                {
+                    Ok(_) => {}
+                    // Already there (a stale file list, or a double click) —
+                    // opening it is still the right outcome.
+                    Err(ref e) if e.to_string().contains("File already exists") => {}
+                    Err(e) => {
+                        load_error.set(Some(e.to_string()));
+                        return;
+                    }
+                }
+                if let Ok(mut list) = vault::dispatch::list_files(&cfg).await {
+                    list.sort_by(|a, b| a.path.cmp(&b.path));
+                    files.set(list);
+                }
+                open_in_pane(tabs, active, path);
+            });
+            return;
+        }
+
         let Some(rest) = action.strip_prefix("task:") else {
             return;
         };
@@ -1728,7 +1909,9 @@ fn EditorPane(
                     variant: MarkdownAreaVariant::Ghost,
                     placeholder: "Empty file.",
                     render_block: render_block(),
+                    resolve_link: resolve_link(),
                     on_block_action,
+                    on_navigate,
                     onfocus: move |_| focused.set(pane_idx),
                 }
             } else {
@@ -2339,12 +2522,18 @@ fn CommandPalette(
 fn TasksView(
     config: GithubConfig,
     files: Signal<Vec<FileMeta>>,
+    templates: Signal<Vec<TemplateMeta>>,
     on_open: EventHandler<String>,
 ) -> Element {
     let mut all_tasks = use_signal(Vec::<Task>::new);
     let mut loading = use_signal(|| true);
     let mut scan_gen = use_signal(|| 0u32);
     let mut hide_done = use_signal(|| true);
+    // The move in flight, if any: the source note whose buttons are disabled.
+    let mut moving = use_signal(|| Option::<String>::None);
+    let mut move_error = use_signal(|| Option::<String>::None);
+    // Set to the tasks awaiting a destination while the "Move to…" picker is up.
+    let mut picking = use_signal(|| Option::<Vec<Task>>::None);
     // This view's scan refreshes the shared index, so publish it — every other
     // consumer (dataview blocks, most of all) gets the fresher data for free.
     let mut vault_idx = crate::vault_index::use_index();
@@ -2390,6 +2579,47 @@ fn TasksView(
         });
     });
 
+    // Run a move, then refold the index into the list so the rows disappear from
+    // the source group and reappear under the destination.
+    let cfg_move = config.clone();
+    let run_move = use_callback(move |(items, dest): (Vec<Task>, Option<String>)| {
+        let Some(source) = items.first().map(|t| t.path.clone()) else {
+            return;
+        };
+        let cfg = cfg_move.clone();
+        let tmpls = templates.peek().clone();
+        moving.set(Some(source));
+        move_error.set(None);
+        spawn(async move {
+            // `None` means today's periodic note, resolved (and seeded) through
+            // the daily-note template.
+            let target = match dest {
+                Some(p) => Some((p, String::new())),
+                None => todays_note(&cfg, &tmpls).await,
+            };
+            let Some((path, body)) = target else {
+                move_error.set(Some("Could not work out today's note.".to_string()));
+                moving.set(None);
+                return;
+            };
+            match move_tasks(&cfg, &items, &path, &body).await {
+                Ok(idx) => {
+                    let mut t = idx.tasks();
+                    t.sort_by(tasks::cmp);
+                    all_tasks.set(t);
+                    vault_idx.set(idx);
+                    // The destination may be brand new; keep the sidebar honest.
+                    if let Ok(mut list) = vault::dispatch::list_files(&cfg).await {
+                        list.sort_by(|a, b| a.path.cmp(&b.path));
+                        files.set(list);
+                    }
+                }
+                Err(e) => move_error.set(Some(e)),
+            }
+            moving.set(None);
+        });
+    });
+
     let today_str = today.read().as_deref().unwrap_or("").to_string();
     let hide = hide_done();
 
@@ -2430,6 +2660,28 @@ fn TasksView(
                     "↻"
                 }
             }
+            if let Some(err) = move_error() {
+                div { class: "tasks-move-error",
+                    span { "{err}" }
+                    button {
+                        class: "tasks-move-error-dismiss",
+                        onclick: move |_| move_error.set(None),
+                        "×"
+                    }
+                }
+            }
+            if let Some(items) = picking() {
+                MoveTargetPicker {
+                    files,
+                    count: items.len(),
+                    source: items.first().map(|t| t.path.clone()).unwrap_or_default(),
+                    on_cancel: move |_| picking.set(None),
+                    on_pick: move |dest: String| {
+                        picking.set(None);
+                        run_move.call((items.clone(), Some(dest)));
+                    },
+                }
+            }
             if first_load {
                 div { class: "sidebar-status", "Scanning vault…" }
             } else if is_empty {
@@ -2442,13 +2694,49 @@ fn TasksView(
                             let name = path.rsplit('/').next().unwrap_or(&path)
                                 .trim_end_matches(".md").to_string();
                             let dir = path.rfind('/').map(|i| path[..i].to_string()).unwrap_or_default();
+                            // Only open tasks move: a completed one is a record of
+                            // what happened in the note it happened in, and
+                            // dragging it forward would falsify that.
+                            let open_items: Vec<Task> =
+                                items.iter().filter(|t| !t.checked).cloned().collect();
+                            let has_open = !open_items.is_empty();
+                            let busy = moving() == Some(path.clone());
+                            let for_today = open_items.clone();
+                            let for_pick = open_items.clone();
                             rsx! {
                                 div { class: "tasks-group",
                                     div {
                                         class: "tasks-group-header",
-                                        onclick: move |_| on_open(p_open.clone()),
-                                        span { class: "tasks-group-name", "{name}" }
-                                        if !dir.is_empty() { span { class: "tasks-group-dir", "{dir}" } }
+                                        div {
+                                            class: "tasks-group-title",
+                                            onclick: move |_| on_open(p_open.clone()),
+                                            span { class: "tasks-group-name", "{name}" }
+                                            if !dir.is_empty() { span { class: "tasks-group-dir", "{dir}" } }
+                                        }
+                                        if has_open {
+                                            div { class: "tasks-group-actions",
+                                                button {
+                                                    class: "tasks-move-btn",
+                                                    disabled: busy,
+                                                    title: "Move the open tasks to today's note",
+                                                    onclick: move |e: Event<MouseData>| {
+                                                        e.stop_propagation();
+                                                        run_move.call((for_today.clone(), None));
+                                                    },
+                                                    if busy { "Moving…" } else { "Move to today" }
+                                                }
+                                                button {
+                                                    class: "tasks-move-btn",
+                                                    disabled: busy,
+                                                    title: "Move the open tasks to another note",
+                                                    onclick: move |e: Event<MouseData>| {
+                                                        e.stop_propagation();
+                                                        picking.set(Some(for_pick.clone()));
+                                                    },
+                                                    "Move to…"
+                                                }
+                                            }
+                                        }
                                     }
                                     for t in items {
                                         {
@@ -2486,6 +2774,84 @@ fn TasksView(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+/// Note picker for "Move to…": a filter box over the vault's markdown files.
+///
+/// Deliberately its own small component rather than a reuse of the quick
+/// switcher — that one lives at the vault root and opens notes, which is the
+/// opposite of what a destination picker should do when you click a row.
+#[component]
+fn MoveTargetPicker(
+    files: Signal<Vec<FileMeta>>,
+    count: usize,
+    /// The note the tasks are leaving; excluded from the list.
+    source: String,
+    on_pick: EventHandler<String>,
+    on_cancel: EventHandler<()>,
+) -> Element {
+    let mut query = use_signal(String::new);
+
+    let q = query().to_lowercase();
+    let matches: Vec<String> = files
+        .read()
+        .iter()
+        .map(|f| f.path.clone())
+        .filter(|p| p.ends_with(".md") && *p != source)
+        .filter(|p| q.is_empty() || fuzzy_match(&p.to_lowercase(), &q))
+        .take(50)
+        .collect();
+
+    rsx! {
+        div { class: "move-picker-backdrop", onclick: move |_| on_cancel(()),
+            div {
+                class: "move-picker",
+                onclick: move |e: Event<MouseData>| e.stop_propagation(),
+                div { class: "move-picker-header",
+                    "Move {count} task(s) to…"
+                }
+                input {
+                    class: "move-picker-input",
+                    r#type: "text",
+                    placeholder: "Filter notes…",
+                    autofocus: true,
+                    value: "{query}",
+                    oninput: move |e| query.set(e.value()),
+                    onkeydown: move |e: Event<KeyboardData>| {
+                        if e.key() == Key::Escape {
+                            on_cancel(());
+                        }
+                    },
+                }
+                div { class: "move-picker-list",
+                    if matches.is_empty() {
+                        div { class: "sidebar-status", "No matching notes." }
+                    } else {
+                        for path in matches {
+                            {
+                                let p = path.clone();
+                                let name = path.rsplit('/').next().unwrap_or(&path)
+                                    .trim_end_matches(".md").to_string();
+                                let dir = path.rfind('/').map(|i| path[..i].to_string())
+                                    .unwrap_or_default();
+                                rsx! {
+                                    div {
+                                        class: "move-picker-row",
+                                        onclick: move |_| on_pick(p.clone()),
+                                        span { class: "move-picker-name", "{name}" }
+                                        if !dir.is_empty() {
+                                            span { class: "move-picker-dir", "{dir}" }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                button { class: "move-picker-cancel", onclick: move |_| on_cancel(()), "Cancel" }
             }
         }
     }

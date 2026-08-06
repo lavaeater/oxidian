@@ -132,6 +132,59 @@
   border-bottom-style: solid;
 }
 
+/* A link whose note doesn't exist yet: muted, and it offers to create it.
+   `position: relative` anchors nothing today, but keeps the chip's own
+   stacking predictable when it sits inside a heading or list marker. */
+.md-wikilink--missing {
+  color: var(--wikilink-missing-color, #a1a1aa);
+  border-bottom-style: dotted;
+  position: relative;
+}
+.md-wikilink-create {
+  /* Not part of the document model — the editor reads text back out of the
+     DOM, so this must never become editable content. */
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: pointer;
+  white-space: nowrap;
+  margin-left: 0.4em;
+  padding: 0.05em 0.45em;
+  font-size: 0.78em;
+  line-height: 1.5;
+  vertical-align: baseline;
+  border: 1px solid var(--wikilink-color, #7b68ee);
+  border-radius: 0.5em;
+  color: var(--wikilink-color, #7b68ee);
+  background: color-mix(in srgb, var(--wikilink-color, #7b68ee) 10%, transparent);
+}
+.md-wikilink-create:hover {
+  background: color-mix(in srgb, var(--wikilink-color, #7b68ee) 22%, transparent);
+}
+
+/* On a pointer device the chip is hover-revealed, so prose stays clean. Touch
+   devices (the Android target) have no hover, so it is always visible — but
+   collapsed to a "+" so a note full of unwritten links stays readable. */
+@media (hover: hover) and (pointer: fine) {
+  .md-wikilink-create {
+    display: none;
+  }
+  .md-wikilink--missing:hover .md-wikilink-create {
+    display: inline;
+  }
+}
+@media not all and (hover: hover) {
+  .md-wikilink-create {
+    /* Replace the label with a glyph without touching the DOM: the text node
+       stays in place for the click handler, it just isn't what's painted. */
+    font-size: 0;
+    padding: 0.05em 0.4em;
+  }
+  .md-wikilink-create::before {
+    content: "+";
+    font-size: 0.95rem;
+  }
+}
+
 /* ── Images ── */
 .md-image {
   display: inline-block;
