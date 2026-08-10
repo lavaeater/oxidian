@@ -156,5 +156,5 @@ pub fn usage() -> (i64, i64) {
         .filter(std::fs::Metadata::is_file)
         .map(|m| m.len())
         .sum();
-    (total as i64, -1)
+    (i64::try_from(total).unwrap_or(i64::MAX), -1)
 }

@@ -46,6 +46,7 @@ pub async fn date_vars_json() -> String {
     )
 }
 
+#[allow(clippy::many_single_char_names)]
 fn parse_ymd(s: &str) -> Option<(i32, u8, u8)> {
     let b = s.as_bytes();
     if s.len() != 10 || b[4] != b'-' || b[7] != b'-' {
@@ -64,7 +65,6 @@ fn is_leap(y: i32) -> bool {
 fn days_in_month(y: i32, m: u8) -> u8 {
     match m {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
         2 => if is_leap(y) { 29 } else { 28 },
         _ => 30,
     }
@@ -100,13 +100,17 @@ fn ordinal(y: i32, m: u8, d: u8) -> i32 {
 }
 
 /// Weekday with 0 = Sunday, via Zeller's congruence (Gregorian).
+#[allow(clippy::many_single_char_names)]
 fn weekday_from_sunday(y: i32, m: u8, d: u8) -> u8 {
     let (yy, mm) = if m < 3 { (y - 1, i32::from(m) + 12) } else { (y, i32::from(m)) };
     let k = yy.rem_euclid(100);
     let j = yy.div_euclid(100);
     // h: 0 = Saturday … 6 = Friday
     let h = (i32::from(d) + (13 * (mm + 1)) / 5 + k + k / 4 + j / 4 + 5 * j).rem_euclid(7);
-    ((h + 6) % 7) as u8
+    // `rem_euclid(7)` above guarantees h is in 0..7, so (h + 6) % 7 is too.
+    #[allow(clippy::cast_sign_loss)]
+    let result = ((h + 6) % 7) as u8;
+    result
 }
 
 fn weeks_in_year(y: i32) -> i32 {

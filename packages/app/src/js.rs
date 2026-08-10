@@ -37,6 +37,7 @@ mod bindings {
 // localStorage. See `crate::native_store`.
 
 /// Reads a `localStorage` key, returning `""` when absent.
+#[allow(clippy::unused_async)] // native branch has no await; wasm32 branch does
 pub async fn ls_get(key: &str) -> String {
     #[cfg(target_arch = "wasm32")]
     {
@@ -83,6 +84,7 @@ pub fn ls_remove(key: impl Into<String>) {
 // fixed-size settings stay in `ls_*`. See `crate::vault_index` and `docs/dataview.md` §6.7.
 
 /// Reads a blob, returning `""` when absent (as `ls_get` does).
+#[allow(clippy::unused_async)] // native branch has no await; wasm32 branch does
 pub async fn blob_get(key: &str) -> String {
     #[cfg(target_arch = "wasm32")]
     {
@@ -96,6 +98,7 @@ pub async fn blob_get(key: &str) -> String {
 
 /// Writes a blob. Awaited rather than fire-and-forget so a caller that writes
 /// and immediately reads back (or navigates away) sees its own write.
+#[allow(clippy::unused_async)] // native branch has no await; wasm32 branch does
 pub async fn blob_set(key: &str, value: impl Into<String>) {
     let value = value.into();
     #[cfg(target_arch = "wasm32")]
@@ -108,6 +111,7 @@ pub async fn blob_set(key: &str, value: impl Into<String>) {
     }
 }
 
+#[allow(clippy::unused_async)] // native branch has no await; wasm32 branch does
 pub async fn blob_remove(key: &str) {
     #[cfg(target_arch = "wasm32")]
     {
@@ -121,6 +125,7 @@ pub async fn blob_remove(key: &str) {
 
 /// `(usage, quota, persisted)` in bytes. `-1` for a figure the platform won't
 /// report — quota is always `-1` on native, where there isn't one.
+#[allow(clippy::unused_async)] // native branch has no await; wasm32 branch does
 pub async fn storage_estimate() -> (i64, i64, bool) {
     #[cfg(target_arch = "wasm32")]
     {
@@ -196,7 +201,14 @@ pub fn download_file(filename: impl Into<String>, content: impl Into<String>) {
 /// `(start, end)` selection offsets in the active editor; `(0, 0)` when none.
 pub async fn get_selection() -> (usize, usize) {
     let v: [i64; 2] = bindings::get_selection().await.unwrap_or([-1, -1]);
-    if v[0] < 0 { (0, 0) } else { (v[0] as usize, v[1] as usize) }
+    if v[0] < 0 || v[1] < 0 {
+        (0, 0)
+    } else {
+        (
+            usize::try_from(v[0]).unwrap_or(0),
+            usize::try_from(v[1]).unwrap_or(0),
+        )
+    }
 }
 
 // ── Slash commands ────────────────────────────────────────────────────────────
@@ -220,6 +232,7 @@ pub fn apply_slash(snippet: impl Into<String>, slash_len: usize) {
 
 /// Builds a bookmarkable sign-in link carrying `cfg_json` in the URL fragment.
 /// Web only — returns `""` on native (no shareable URL).
+#[allow(clippy::unused_async)] // native branch has no await; wasm32 branch does
 pub async fn build_signin_link(cfg_json: impl Into<String>) -> String {
     let cfg_json = cfg_json.into();
     #[cfg(target_arch = "wasm32")]
@@ -235,6 +248,7 @@ pub async fn build_signin_link(cfg_json: impl Into<String>) -> String {
 
 /// Consumes a `#cfg=…` sign-in link if the current URL carries one: returns the
 /// decoded config JSON and strips the fragment. `""` when there is none. Web only.
+#[allow(clippy::unused_async)] // native branch has no await; wasm32 branch does
 pub async fn read_signin_link() -> String {
     #[cfg(target_arch = "wasm32")]
     {

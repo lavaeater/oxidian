@@ -127,6 +127,12 @@ fn fuzzy_score(path: &str, needle: &str) -> usize {
     score
 }
 
+fn is_md_path(path: &str) -> bool {
+    std::path::Path::new(path)
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+}
+
 fn extract_headings(content: &str) -> Vec<(u8, String)> {
     content
         .lines()
@@ -136,7 +142,10 @@ fn extract_headings(content: &str) -> Vec<(u8, String)> {
                 return None;
             }
             let text = line[level..].strip_prefix(' ')?;
-            Some((level as u8, text.trim().to_string()))
+            // Bounded 1..=6 by the check above.
+            #[allow(clippy::cast_possible_truncation)]
+            let level = level as u8;
+            Some((level, text.trim().to_string()))
         })
         .collect()
 }
@@ -325,7 +334,7 @@ fn open_in_pane(mut tabs: Signal<Vec<Tab>>, mut active: Signal<Option<String>>, 
     if !already {
         tabs.with_mut(|ts| {
             if let Some(preview) = ts.iter_mut().find(|t| !t.pinned) {
-                preview.path = path.clone();
+                preview.path.clone_from(&path);
             } else {
                 ts.push(Tab {
                     path: path.clone(),
@@ -1048,7 +1057,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                         // Resolve the input into a board *document* path. A bare
                         // folder name (e.g. "kanban") maps to "kanban/kanban.md".
                         let raw = board_root.read().trim().trim_matches('/').to_string();
-                        let board_path = if raw.ends_with(".md") { raw } else { format!("{raw}/kanban.md") };
+                        let board_path = if is_md_path(&raw) { raw } else { format!("{raw}/kanban.md") };
                         rsx! {
                             KanbanBoard {
                                 key: "{board_path}",
@@ -1231,9 +1240,13 @@ fn StorageFooter(on_rebuild: EventHandler<()>) -> Element {
     let pages = vault_idx.read().len();
     let detail = match estimate.read().as_ref() {
         Some((usage, quota, persisted)) => {
-            let used = if *usage < 0 { "—".to_string() } else { human_bytes(*usage as u64) };
+            let used = if *usage < 0 { "—".to_string() } else { human_bytes(usage.cast_unsigned()) };
             // No quota on native, and browsers that decline to report one.
-            let of = if *quota <= 0 { String::new() } else { format!(" of {}", human_bytes(*quota as u64)) };
+            let of = if *quota <= 0 {
+                String::new()
+            } else {
+                format!(" of {}", human_bytes(quota.cast_unsigned()))
+            };
             let evictable = if *persisted { "" } else { " · evictable" };
             format!("{used}{of} used{evictable}")
         }
@@ -1270,6 +1283,8 @@ fn StorageFooter(on_rebuild: EventHandler<()>) -> Element {
 /// Bytes as something a person can read. Binary units, one decimal above KB.
 fn human_bytes(n: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    // Display rounding only — a decimal digit or two here is inconsequential.
+    #[allow(clippy::cast_precision_loss)]
     let mut v = n as f64;
     let mut unit = 0;
     while v >= 1024.0 && unit < UNITS.len() - 1 {
@@ -1356,7 +1371,7 @@ async fn move_tasks(
     dest: &str,
     dest_body: &str,
 ) -> Result<Index, String> {
-    let mut by_file: std::collections::BTreeMap<String, Vec<Task>> = Default::default();
+    let mut by_file: std::collections::BTreeMap<String, Vec<Task>> = std::collections::BTreeMap::default();
     for t in tasks.iter().filter(|t| t.path != dest) {
         by_file.entry(t.path.clone()).or_default().push(t.clone());
     }
@@ -2007,8 +2022,8 @@ fn NewFileModal(
             return;
         }
         // Leading "/" means root-relative; otherwise place in current_dir.
-        let resolved = resolve_folder_path(&current_dir_effect, &raw);
-        let path = if resolved.ends_with(".md") {
+        let resolved = resolve_folder_path(current_dir_effect.as_ref(), &raw);
+        let path = if is_md_path(&resolved) {
             resolved
         } else {
             format!("{resolved}.md")
@@ -2041,8 +2056,8 @@ fn NewFileModal(
         if r.is_empty() {
             String::new()
         } else {
-            let resolved = resolve_folder_path(&current_dir, r);
-            if resolved.ends_with(".md") {
+            let resolved = resolve_folder_path(current_dir.as_ref(), r);
+            if is_md_path(&resolved) {
                 resolved
             } else {
                 format!("{resolved}.md")
@@ -2103,7 +2118,7 @@ fn NewFileModal(
 ///
 /// Intermediate folders are created implicitly (mkdir -p style) since git
 /// derives directories from the blob path.
-fn resolve_folder_path(parent: &Option<String>, raw: &str) -> String {
+fn resolve_folder_path(parent: Option<&String>, raw: &str) -> String {
     let raw = raw.trim();
     if let Some(stripped) = raw.strip_prefix('/') {
         stripped.trim_matches('/').to_string()
@@ -2137,7 +2152,7 @@ fn NewFolderModal(
             error.set(Some("Enter a folder name.".into()));
             return;
         }
-        let folder = resolve_folder_path(&parent_effect, &raw);
+        let folder = resolve_folder_path(parent_effect.as_ref(), &raw);
         if folder.is_empty() {
             error.set(Some("Enter a folder name.".into()));
             return;
@@ -2165,7 +2180,7 @@ fn NewFolderModal(
         if r.is_empty() {
             String::new()
         } else {
-            resolve_folder_path(&parent, r)
+            resolve_folder_path(parent.as_ref(), r)
         }
     };
 
@@ -2621,7 +2636,7 @@ fn TasksView(
 
     // Group by file (BTreeMap path order = folders together), sorted within.
     let mut groups: Vec<(String, Vec<Task>)> = {
-        let mut by_file: std::collections::BTreeMap<String, Vec<Task>> = Default::default();
+        let mut by_file: std::collections::BTreeMap<String, Vec<Task>> = std::collections::BTreeMap::default();
         for t in all_tasks.read().iter() {
             if hide && t.checked {
                 continue;
@@ -2796,7 +2811,7 @@ fn MoveTargetPicker(
         .read()
         .iter()
         .map(|f| f.path.clone())
-        .filter(|p| p.ends_with(".md") && *p != source)
+        .filter(|p| is_md_path(p) && *p != source)
         .filter(|p| q.is_empty() || fuzzy_match(&p.to_lowercase(), &q))
         .take(50)
         .collect();

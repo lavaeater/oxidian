@@ -114,7 +114,10 @@ fn import_columns(
         };
         let col = &rest[..slash];
         let filename = &rest[slash + 1..];
-        if filename.contains('/') || filename == ".gitkeep" || !filename.ends_with(".md") {
+        let is_md = std::path::Path::new(filename)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("md"));
+        if filename.contains('/') || filename == ".gitkeep" || !is_md {
             continue;
         }
         let title = filename.trim_end_matches(".md").to_string();
