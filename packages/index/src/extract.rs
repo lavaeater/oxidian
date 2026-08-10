@@ -133,7 +133,10 @@ fn heading(line: &str) -> Option<(u8, String)> {
         return None;
     }
     let text = line[level..].strip_prefix(' ')?;
-    Some((level as u8, text.trim().to_string()))
+    // Bounded 1..=6 by the check above.
+    #[allow(clippy::cast_possible_truncation)]
+    let level = level as u8;
+    Some((level, text.trim().to_string()))
 }
 
 /// Inline `#tags`. Follows Obsidian's rules closely enough to be unsurprising:

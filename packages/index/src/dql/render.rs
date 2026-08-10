@@ -8,6 +8,8 @@
 //! Links render as `<a data-navigate="…">` — the same attribute the editor's
 //! own `[[wikilinks]]` carry — so clicking one in a result navigates for free.
 
+use std::fmt::Write as _;
+
 use crate::tasks::Task;
 use crate::value::Value;
 
@@ -71,22 +73,18 @@ fn table_html(t: &ResultTable) -> String {
     if t.rows.is_empty() {
         return empty_html("notes");
     }
-    let head: String = t
-        .headers
-        .iter()
-        .map(|h| format!("<th>{}</th>", escape(h)))
-        .collect();
-    let body: String = t
-        .rows
-        .iter()
-        .map(|(path, cells)| {
-            let tds: String = cells
-                .iter()
-                .map(|c| format!("<td>{}</td>", value_html(c)))
-                .collect();
-            format!("<tr data-path=\"{}\">{tds}</tr>", escape(path))
-        })
-        .collect();
+    let head = t.headers.iter().fold(String::new(), |mut out, h| {
+        let _ = write!(out, "<th>{}</th>", escape(h));
+        out
+    });
+    let body = t.rows.iter().fold(String::new(), |mut out, (path, cells)| {
+        let tds = cells.iter().fold(String::new(), |mut out, c| {
+            let _ = write!(out, "<td>{}</td>", value_html(c));
+            out
+        });
+        let _ = write!(out, "<tr data-path=\"{}\">{tds}</tr>", escape(path));
+        out
+    });
     format!("<table class=\"dataview-table\"><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>")
 }
 
@@ -94,12 +92,10 @@ fn list_html(items: &[(String, Value)]) -> String {
     if items.is_empty() {
         return empty_html("notes");
     }
-    let lis: String = items
-        .iter()
-        .map(|(path, v)| {
-            format!("<li data-path=\"{}\">{}</li>", escape(path), value_html(v))
-        })
-        .collect();
+    let lis = items.iter().fold(String::new(), |mut out, (path, v)| {
+        let _ = write!(out, "<li data-path=\"{}\">{}</li>", escape(path), value_html(v));
+        out
+    });
     format!("<ul class=\"dataview-list\">{lis}</ul>")
 }
 
@@ -107,34 +103,33 @@ fn tasks_html(tasks: &[Task]) -> String {
     if tasks.is_empty() {
         return empty_html("tasks");
     }
-    let lis: String = tasks
-        .iter()
-        .map(|t| {
-            let checked = if t.checked { "true" } else { "false" };
-            let due = match &t.due {
-                Some(d) => format!(" <span class=\"dataview-due\">📅 {}</span>", escape(d)),
-                None => String::new(),
-            };
-            let prio = match t.priority.emoji() {
-                "" => String::new(),
-                e => format!(" <span class=\"dataview-prio\">{e}</span>"),
-            };
-            // data-path/data-line are the write-back coordinates: clicking the
-            // box toggles the source line in that file, as the Tasks panel does.
-            // `data-action` is what the host actually reacts to — the line comes
-            // first so the path, which may contain anything, can be the tail.
-            format!(
-                "<li class=\"dataview-task\" data-path=\"{0}\" data-line=\"{1}\">\
-                 <span class=\"md-task-checkbox\" data-checked=\"{checked}\" \
-                 data-action=\"task:{1}:{0}\">{2}</span>\
-                 <span class=\"dataview-task-text\">{3}</span>{prio}{due}</li>",
-                escape(&t.path),
-                t.line,
-                if t.checked { "[x]" } else { "[ ]" },
-                escape(&t.text),
-            )
-        })
-        .collect();
+    let lis = tasks.iter().fold(String::new(), |mut out, t| {
+        let checked = if t.checked { "true" } else { "false" };
+        let due = match &t.due {
+            Some(d) => format!(" <span class=\"dataview-due\">📅 {}</span>", escape(d)),
+            None => String::new(),
+        };
+        let prio = match t.priority.emoji() {
+            "" => String::new(),
+            e => format!(" <span class=\"dataview-prio\">{e}</span>"),
+        };
+        // data-path/data-line are the write-back coordinates: clicking the
+        // box toggles the source line in that file, as the Tasks panel does.
+        // `data-action` is what the host actually reacts to — the line comes
+        // first so the path, which may contain anything, can be the tail.
+        let _ = write!(
+            out,
+            "<li class=\"dataview-task\" data-path=\"{0}\" data-line=\"{1}\">\
+             <span class=\"md-task-checkbox\" data-checked=\"{checked}\" \
+             data-action=\"task:{1}:{0}\">{2}</span>\
+             <span class=\"dataview-task-text\">{3}</span>{prio}{due}</li>",
+            escape(&t.path),
+            t.line,
+            if t.checked { "[x]" } else { "[ ]" },
+            escape(&t.text),
+        );
+        out
+    });
     format!("<ul class=\"dataview-tasks\">{lis}</ul>")
 }
 

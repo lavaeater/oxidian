@@ -51,14 +51,18 @@ impl Date {
         let yoe = i64::from(y - era * 400);
         let doy = (153 * (i64::from(m) - 3) + 2) / 5 + i64::from(self.day) - 1;
         let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-        i64::from(era) * 146097 + doe - 719468
+        i64::from(era) * 146_097 + doe - 719_468
     }
 
+    // The cast targets (day 1..=31, month 1..=12, a plausible year) are all far
+    // inside range for this civil_from_days algorithm, for any `days` input a
+    // `Date` could plausibly produce.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     pub fn from_days(days: i64) -> Date {
-        let z = days + 719468;
-        let era = if z >= 0 { z } else { z - 146096 } / 146097;
-        let doe = z - era * 146097;
-        let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+        let z = days + 719_468;
+        let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+        let doe = z - era * 146_097;
+        let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
         let y = yoe + era * 400;
         let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
         let mp = (5 * doy + 2) / 153;
@@ -67,6 +71,7 @@ impl Date {
         Date { year: (if month <= 2 { y + 1 } else { y }) as i32, month, day }
     }
 
+    #[must_use]
     pub fn plus_days(self, days: i64) -> Date {
         Date::from_days(self.to_days() + days)
     }
@@ -179,7 +184,10 @@ impl Value {
             Value::Str(s) => s.clone(),
             Value::Num(n) => {
                 if n.fract() == 0.0 && n.abs() < 1e15 {
-                    format!("{}", *n as i64)
+                    // Guarded by the fract/abs check above, so this never truncates.
+                    #[allow(clippy::cast_possible_truncation)]
+                    let i = *n as i64;
+                    format!("{i}")
                 } else {
                     format!("{n}")
                 }
@@ -206,11 +214,12 @@ impl Value {
             (Value::Null, _) => Ordering::Greater,
             (_, Value::Null) => Ordering::Less,
             (Value::Num(a), Value::Num(b)) => a.partial_cmp(b).unwrap_or(Ordering::Equal),
-            (Value::Str(a), Value::Str(b)) => a.to_lowercase().cmp(&b.to_lowercase()),
+            (Value::Str(a), Value::Str(b)) | (Value::Link(a), Value::Link(b)) => {
+                a.to_lowercase().cmp(&b.to_lowercase())
+            }
             (Value::Date(a), Value::Date(b)) => a.cmp(b),
             (Value::Duration(a), Value::Duration(b)) => a.cmp(b),
             (Value::Bool(a), Value::Bool(b)) => a.cmp(b),
-            (Value::Link(a), Value::Link(b)) => a.to_lowercase().cmp(&b.to_lowercase()),
             (Value::List(a), Value::List(b)) => a.len().cmp(&b.len()),
             _ => self.type_name().cmp(other.type_name()),
         }
@@ -220,9 +229,9 @@ impl Value {
     /// `rating = 9` both work on a note that wrote `rating: 9`.
     pub fn loose_eq(&self, other: &Value) -> bool {
         match (self, other) {
-            (Value::Str(a), Value::Str(b)) => a.eq_ignore_ascii_case(b),
-            (Value::Link(a) | Value::Str(a), Value::Link(b)) |
-(Value::Link(a), Value::Str(b)) => a.eq_ignore_ascii_case(b),
+            (Value::Str(a) | Value::Link(a), Value::Str(b) | Value::Link(b)) => {
+                a.eq_ignore_ascii_case(b)
+            }
             (Value::Str(_), _) | (_, Value::Str(_)) => {
                 self.to_display().eq_ignore_ascii_case(&other.to_display())
             }

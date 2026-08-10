@@ -238,7 +238,7 @@ pub fn eval(expr: &Expr, page: &PageData, index: &Index, ctx: &Context) -> Value
                 }
                 _ => {}
             }
-            binary(*op, eval(l, page, index, ctx), eval(r, page, index, ctx))
+            binary(*op, &eval(l, page, index, ctx), &eval(r, page, index, ctx))
         }
         Expr::Call(name, args) => {
             let vals: Vec<Value> = args.iter().map(|a| eval(a, page, index, ctx)).collect();
@@ -273,6 +273,7 @@ fn tag_list(page: &PageData) -> Value {
 }
 
 /// `file.<name>` — the implicit fields every page has.
+#[allow(clippy::cast_precision_loss)]
 fn implicit(page: &PageData, name: &str, index: &Index) -> Value {
     match name.to_lowercase().as_str() {
         "name" => Value::Str(page.stem().to_string()),
@@ -280,7 +281,7 @@ fn implicit(page: &PageData, name: &str, index: &Index) -> Value {
         "folder" => Value::Str(page.folder().to_string()),
         "link" => Value::Link(page.stem().to_string()),
         "ext" => Value::Str("md".to_string()),
-        "size" => Value::Num(page.tasks.len() as f64),
+        "size" | "tasks" => Value::Num(page.tasks.len() as f64),
         "tags" | "etags" => tag_list(page),
         "outlinks" => Value::List(page.links.iter().map(|l| Value::Link(l.clone())).collect()),
         "inlinks" => Value::List(
@@ -290,7 +291,6 @@ fn implicit(page: &PageData, name: &str, index: &Index) -> Value {
                 .map(|p| Value::Link(p.rsplit('/').next().unwrap_or(p).trim_end_matches(".md").to_string()))
                 .collect(),
         ),
-        "tasks" => Value::Num(page.tasks.len() as f64),
         // `updated` is stamped into frontmatter on save — see docs §2.5. `day`
         // is the date in the filename, the daily-note convention.
         "mtime" | "updated" => page.field("updated").cloned().unwrap_or(Value::Null),
@@ -312,18 +312,18 @@ fn day_from_name(stem: &str) -> Value {
     Value::Null
 }
 
-fn binary(op: BinOp, l: Value, r: Value) -> Value {
+fn binary(op: BinOp, l: &Value, r: &Value) -> Value {
     use BinOp::{Eq, Ne, Lt, Le, Gt, Ge, Add, Sub, Mul, Div, Mod, And, Or};
     match op {
-        Eq => Value::Bool(l.loose_eq(&r)),
-        Ne => Value::Bool(!l.loose_eq(&r)),
+        Eq => Value::Bool(l.loose_eq(r)),
+        Ne => Value::Bool(!l.loose_eq(r)),
         Lt | Le | Gt | Ge => {
             // Null never satisfies an ordering comparison, so an undated note
             // is excluded by `due < date(today)` rather than silently included.
             if matches!(l, Value::Null) || matches!(r, Value::Null) {
                 return Value::Bool(false);
             }
-            let ord = l.compare(&r);
+            let ord = l.compare(r);
             Value::Bool(match op {
                 Lt => ord.is_lt(),
                 Le => ord.is_le(),
@@ -331,10 +331,11 @@ fn binary(op: BinOp, l: Value, r: Value) -> Value {
                 _ => ord.is_ge(),
             })
         }
-        Add => match (&l, &r) {
+        Add => match (l, r) {
             (Value::Num(a), Value::Num(b)) => Value::Num(a + b),
-            (Value::Date(d), Value::Duration(days)) => Value::Date(d.plus_days(*days)),
-            (Value::Duration(days), Value::Date(d)) => Value::Date(d.plus_days(*days)),
+            (Value::Date(d), Value::Duration(days)) | (Value::Duration(days), Value::Date(d)) => {
+                Value::Date(d.plus_days(*days))
+            }
             (Value::Duration(a), Value::Duration(b)) => Value::Duration(a + b),
             (Value::List(a), Value::List(b)) => {
                 Value::List(a.iter().chain(b.iter()).cloned().collect())
@@ -344,26 +345,28 @@ fn binary(op: BinOp, l: Value, r: Value) -> Value {
             // labels: `"Due: " + due`.
             _ => Value::Str(format!("{}{}", l.to_display(), r.to_display())),
         },
-        Sub => match (&l, &r) {
+        Sub => match (l, r) {
             (Value::Num(a), Value::Num(b)) => Value::Num(a - b),
             (Value::Date(a), Value::Date(b)) => Value::Duration(a.to_days() - b.to_days()),
             (Value::Date(d), Value::Duration(days)) => Value::Date(d.plus_days(-days)),
             (Value::Duration(a), Value::Duration(b)) => Value::Duration(a - b),
             _ => Value::Null,
         },
-        Mul => match (&l, &r) {
+        Mul => match (l, r) {
             (Value::Num(a), Value::Num(b)) => Value::Num(a * b),
             (Value::Duration(d), Value::Num(n)) | (Value::Num(n), Value::Duration(d)) => {
-                Value::Duration((*d as f64 * n) as i64)
+                #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+                let product = (*d as f64 * n) as i64;
+                Value::Duration(product)
             }
             _ => Value::Null,
         },
-        Div => match (&l, &r) {
+        Div => match (l, r) {
             (Value::Num(_), Value::Num(b)) if *b == 0.0 => Value::Null,
             (Value::Num(a), Value::Num(b)) => Value::Num(a / b),
             _ => Value::Null,
         },
-        Mod => match (&l, &r) {
+        Mod => match (l, r) {
             (Value::Num(_), Value::Num(b)) if *b == 0.0 => Value::Null,
             (Value::Num(a), Value::Num(b)) => Value::Num(a % b),
             _ => Value::Null,
@@ -374,6 +377,7 @@ fn binary(op: BinOp, l: Value, r: Value) -> Value {
 
 /// The built-in function library. Unknown functions and bad arities return
 /// `Null` rather than erroring — a typo in one column shouldn't blank the table.
+#[allow(clippy::too_many_lines, clippy::cast_precision_loss)]
 fn call(name: &str, args: &[Value], ctx: &Context) -> Value {
     let arg = |i: usize| args.get(i).cloned().unwrap_or(Value::Null);
     match name {
@@ -453,10 +457,13 @@ fn call(name: &str, args: &[Value], ctx: &Context) -> Value {
         },
         "round" => match arg(0) {
             Value::Num(n) => {
+                // Clamped to >= 0.0 above, so neither cast below can wrap or lose sign.
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                 let digits = match arg(1) {
                     Value::Num(d) => d.max(0.0) as u32,
                     _ => 0,
                 };
+                #[allow(clippy::cast_possible_wrap)]
                 let f = 10f64.powi(digits as i32);
                 Value::Num((n * f).round() / f)
             }
@@ -472,6 +479,7 @@ fn call(name: &str, args: &[Value], ctx: &Context) -> Value {
         // `dur(7)` / `dur(7 days)` — days are the only unit notes use in
         // practice, and the parser hands us `7` followed by a bare word.
         "dur" => match arg(0) {
+            #[allow(clippy::cast_possible_truncation)]
             Value::Num(n) => Value::Duration(n as i64),
             Value::Duration(d) => Value::Duration(d),
             v => v

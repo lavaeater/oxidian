@@ -45,6 +45,7 @@ enum Tok {
     Dot,
 }
 
+#[allow(clippy::many_single_char_names)]
 fn lex(src: &str) -> Result<Vec<Tok>, ParseError> {
     let b: Vec<char> = src.chars().collect();
     let mut out = Vec::new();
@@ -423,6 +424,7 @@ impl Parser {
 }
 
 /// Parse a `dataview` block body into a [`Query`].
+#[allow(clippy::too_many_lines)]
 pub fn parse(src: &str) -> Result<Query, ParseError> {
     let toks = lex(src)?;
     if toks.is_empty() {
@@ -511,6 +513,8 @@ pub fn parse(src: &str) -> Result<Query, ParseError> {
             "limit" => {
                 p.pos += 1;
                 match p.next() {
+                    // Guarded by `n >= 0.0` above, so this never wraps or loses sign.
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                     Some(Tok::Num(n)) if n >= 0.0 => q.limit = Some(n as usize),
                     _ => return err("LIMIT takes a non-negative number"),
                 }

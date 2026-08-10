@@ -194,7 +194,11 @@ impl Index {
 /// Markdown notes only — the listing also carries `.gitkeep` placeholders so
 /// empty folders survive in the file tree.
 fn notes(files: &[FileMeta]) -> impl Iterator<Item = &FileMeta> {
-    files.iter().filter(|f| f.path.ends_with(".md"))
+    files.iter().filter(|f| {
+        std::path::Path::new(&f.path)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+    })
 }
 
 #[cfg(test)]
