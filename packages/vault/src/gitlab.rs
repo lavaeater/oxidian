@@ -35,7 +35,7 @@ fn status_error(status: u16, path: &str) -> Option<VaultError> {
     }
 }
 
-async fn check(resp: reqwest::Response) -> Result<reqwest::Response, VaultError> {
+fn check(resp: reqwest::Response) -> Result<reqwest::Response, VaultError> {
     if let Some(err) = status_error(resp.status().as_u16(), resp.url().path()) {
         return Err(err);
     }
@@ -64,14 +64,20 @@ fn tree_url(cfg: &GithubConfig) -> String {
 /// doesn't return a size here, so it's 0).
 fn tree_to_files(entries: Vec<TreeEntry>) -> Vec<FileMeta> {
     entries.into_iter()
-        .filter(|e| e.kind == "blob" && (e.path.ends_with(".md") || e.path.ends_with(".gitkeep")))
+        .filter(|e| {
+            e.kind == "blob"
+                && (std::path::Path::new(&e.path)
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+                    || e.path.ends_with(".gitkeep"))
+        })
         .map(|e| FileMeta { path: e.path, sha: e.id, size: 0 })
         .collect()
 }
 
 pub async fn list_files(cfg: &GithubConfig) -> Result<Vec<FileMeta>, VaultError> {
     let resp = get(&tree_url(cfg), &cfg.token).send().await.map_err(|e| VaultError::Http(e.to_string()))?;
-    let entries: Vec<TreeEntry> = check(resp).await?.json().await.map_err(|e| VaultError::Http(e.to_string()))?;
+    let entries: Vec<TreeEntry> = check(resp)?.json().await.map_err(|e| VaultError::Http(e.to_string()))?;
     Ok(tree_to_files(entries))
 }
 
@@ -103,11 +109,14 @@ fn decode_content(b64: &str, sha: String) -> Result<FileContent, VaultError> {
 pub async fn read_file(cfg: &GithubConfig, path: &str) -> Result<FileContent, VaultError> {
     let url = format!("{}?ref={}", file_url(cfg, path), cfg.branch);
     let resp = get(&url, &cfg.token).send().await.map_err(|e| VaultError::Http(e.to_string()))?;
-    let body: FileResponse = check(resp).await?.json().await.map_err(|e| VaultError::Http(e.to_string()))?;
+    let body: FileResponse = check(resp)?.json().await.map_err(|e| VaultError::Http(e.to_string()))?;
     decode_content(&body.content, body.blob_id)
 }
 
 // ── write_file ────────────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct WriteResp {}
 
 pub async fn write_file(cfg: &GithubConfig, path: &str, content: &str, sha: &str, message: &str) -> Result<String, VaultError> {
     let url = file_url(cfg, path);
@@ -129,8 +138,7 @@ pub async fn write_file(cfg: &GithubConfig, path: &str, content: &str, sha: &str
         .await
         .map_err(|e| VaultError::Http(e.to_string()))?;
 
-    #[derive(Deserialize)] struct WriteResp {}
-    let _: WriteResp = check(resp).await?.json().await.map_err(|e| VaultError::Http(e.to_string()))?;
+    let _: WriteResp = check(resp)?.json().await.map_err(|e| VaultError::Http(e.to_string()))?;
     Ok(sha.to_string()) // GitLab doesn't return a new blob SHA in the write response
 }
 
@@ -155,7 +163,7 @@ pub async fn create_file(cfg: &GithubConfig, path: &str, content: &str, message:
         .await
         .map_err(|e| VaultError::Http(e.to_string()))?;
 
-    check(resp).await?;
+    check(resp)?;
     Ok(String::new())
 }
 
@@ -176,7 +184,7 @@ pub async fn delete_file(cfg: &GithubConfig, path: &str, sha: &str, message: &st
         .send()
         .await
         .map_err(|e| VaultError::Http(e.to_string()))?;
-    check(resp).await?;
+    check(resp)?;
     Ok(())
 }
 

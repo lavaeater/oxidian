@@ -29,7 +29,7 @@ fn status_error(status: u16, path: &str) -> Option<VaultError> {
     }
 }
 
-async fn check(resp: reqwest::Response) -> Result<reqwest::Response, VaultError> {
+fn check(resp: reqwest::Response) -> Result<reqwest::Response, VaultError> {
     if let Some(err) = status_error(resp.status().as_u16(), resp.url().path()) {
         return Err(err);
     }
@@ -78,7 +78,8 @@ fn join_path(prefix: &str, name: &str) -> String {
 /// via "New folder" / Kanban columns) still appear in the tree; drop trees and
 /// non-note blobs.
 fn keep_blob(path: &str) -> bool {
-    path.ends_with(".md") || path.ends_with(".gitkeep")
+    let ext = std::path::Path::new(path).extension();
+    ext.is_some_and(|e| e.eq_ignore_ascii_case("md")) || path.ends_with(".gitkeep")
 }
 
 fn tree_to_files(tree: TreeResponse) -> Vec<FileMeta> {
@@ -98,8 +99,7 @@ async fn fetch_tree(cfg: &GithubConfig, url: &str) -> Result<TreeResponse, Vault
         .send()
         .await
         .map_err(|e| VaultError::Http(e.to_string()))?;
-    check(resp)
-        .await?
+    check(resp)?
         .json()
         .await
         .map_err(|e| VaultError::Http(e.to_string()))
@@ -175,8 +175,7 @@ pub async fn read_file(cfg: &GithubConfig, path: &str) -> Result<FileContent, Va
         .send()
         .await
         .map_err(|e| VaultError::Http(e.to_string()))?;
-    let body: ContentsResponse = check(resp)
-        .await?
+    let body: ContentsResponse = check(resp)?
         .json()
         .await
         .map_err(|e| VaultError::Http(e.to_string()))?;
@@ -230,8 +229,7 @@ pub async fn write_file(
         return Err(VaultError::Conflict);
     }
 
-    let written: WriteResponse = check(resp)
-        .await?
+    let written: WriteResponse = check(resp)?
         .json()
         .await
         .map_err(|e| VaultError::Http(e.to_string()))?;
@@ -268,7 +266,9 @@ fn search_url(cfg: &GithubConfig, query: &str) -> String {
 fn search_to_results(body: SearchResponse) -> Vec<SearchResult> {
     body.items
         .into_iter()
-        .filter(|i| i.path.ends_with(".md"))
+        .filter(|i| {
+            std::path::Path::new(&i.path).extension().is_some_and(|e| e.eq_ignore_ascii_case("md"))
+        })
         .map(|i| SearchResult {
             path: i.path,
             sha: i.sha,
@@ -300,8 +300,7 @@ pub async fn search_code(cfg: &GithubConfig, query: &str) -> Result<Vec<SearchRe
         .await
         .map_err(|e| VaultError::Http(e.to_string()))?;
 
-    let body: SearchResponse = check(resp)
-        .await?
+    let body: SearchResponse = check(resp)?
         .json()
         .await
         .map_err(|e| VaultError::Http(e.to_string()))?;
@@ -350,8 +349,7 @@ pub async fn create_file(
         return Err(VaultError::Http("File already exists".into()));
     }
 
-    let written: WriteResponse = check(resp)
-        .await?
+    let written: WriteResponse = check(resp)?
         .json()
         .await
         .map_err(|e| VaultError::Http(e.to_string()))?;
@@ -378,7 +376,7 @@ pub async fn delete_file(
         .send()
         .await
         .map_err(|e| VaultError::Http(e.to_string()))?;
-    check(resp).await?;
+    check(resp)?;
     Ok(())
 }
 
@@ -464,7 +462,7 @@ pub async fn get_username(token: &str) -> Result<String, VaultError> {
         .send()
         .await
         .map_err(|e| VaultError::Http(e.to_string()))?;
-    let user: User = check(resp).await?.json().await.map_err(|e| VaultError::Http(e.to_string()))?;
+    let user: User = check(resp)?.json().await.map_err(|e| VaultError::Http(e.to_string()))?;
     Ok(user.login)
 }
 

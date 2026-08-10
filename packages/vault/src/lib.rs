@@ -117,9 +117,9 @@ pub mod dispatch {
         }
     }
     pub async fn read_many(cfg: &GithubConfig, paths: &[String]) -> Vec<(String, String)> {
+        // Both providers use the same sequential pattern.
         match cfg.provider {
-            Provider::GitHub  => github::read_many(cfg, paths).await,
-            Provider::GitLab  => github::read_many(cfg, paths).await, // uses same sequential pattern
+            Provider::GitHub | Provider::GitLab => github::read_many(cfg, paths).await,
         }
     }
 
