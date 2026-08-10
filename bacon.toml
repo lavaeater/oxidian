@@ -18,15 +18,16 @@ need_stdout = false
 command = ["cargo", "check", "--all-targets"]
 need_stdout = false
 
+# clippy::pedantic is enabled workspace-wide via [workspace.lints] in
+# Cargo.toml, so both jobs below already run pedantic — clippy is the fast
+# keystroke-loop check on the priority `web` target, clippy-pedantic is the
+# thorough whole-workspace, all-targets sweep.
 [jobs.clippy]
 command = ["cargo", "clippy", "--package", "web", "--features", "web"]
 need_stdout = false
 
 [jobs.clippy-pedantic]
-command = [
-    "cargo", "clippy", "--package", "web", "--features", "web",
-    "--", "-W", "clippy::pedantic",
-]
+command = ["cargo", "clippy", "--workspace", "--all-targets"]
 need_stdout = false
 
 [jobs.nextest]
