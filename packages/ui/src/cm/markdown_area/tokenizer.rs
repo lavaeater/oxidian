@@ -74,8 +74,7 @@ pub fn tokenize(source: &str) -> Vec<Token> {
     while pos < source.len() {
         let line_end = source[pos..]
             .find('\n')
-            .map(|i| pos + i)
-            .unwrap_or(source.len());
+            .map_or(source.len(), |i| pos + i);
         let line = &source[pos..line_end];
 
         if line.starts_with("```") {
@@ -148,9 +147,8 @@ fn is_horizontal_rule(line: &str) -> bool {
     if trimmed.len() < 3 {
         return false;
     }
-    let first = match trimmed.chars().next() {
-        Some(c @ ('-' | '*' | '_')) => c,
-        _ => return false,
+    let Some(first @ ('-' | '*' | '_')) = trimmed.chars().next() else {
+        return false;
     };
     trimmed.chars().all(|c| c == first || c == ' ')
         && trimmed.chars().filter(|&c| c == first).count() >= 3
@@ -188,7 +186,7 @@ fn detect_list_item(line: &str, pos: usize) -> Option<(bool, u8, usize)> {
     while i < bytes.len() && bytes[i] == b' ' {
         i += 1;
     }
-    let depth = (i / 2) as u8;
+    let depth = u8::try_from(i / 2).unwrap_or(u8::MAX);
 
     // Unordered: `- ` / `* ` / `+ `
     if i < bytes.len()
@@ -296,6 +294,7 @@ fn detect_task_item(line: &str, pos: usize, line_end: usize) -> Option<Token> {
     })
 }
 
+#[allow(clippy::too_many_lines)]
 pub fn tokenize_line(line: &str, line_offset: usize) -> Vec<Token> {
     let bytes = line.as_bytes();
     let len = bytes.len();

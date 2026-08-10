@@ -1,3 +1,5 @@
+use std::fmt::Write as _;
+
 use dioxus::prelude::*;
 use dioxus_use_js::use_js;
 
@@ -205,7 +207,7 @@ fn tokens_to_html(
     let mut out = String::with_capacity(source.len() * 3);
     let mut last_end = 0;
 
-    out.push_str(&format!("<div class=\"md-line{}\">", line_class(blocks, 0)));
+    let _ = write!(out, "<div class=\"md-line{}\">", line_class(blocks, 0));
 
     for token in tokens {
         if token.range.start > last_end {
@@ -215,10 +217,11 @@ fn tokens_to_html(
         // The rendered output lives inside the block's first line, after the
         // (hidden) opening fence, so it sits exactly where the block does.
         if let Some(b) = blocks.iter().find(|b| b.range.start == token.range.start) {
-            out.push_str(&format!(
+            let _ = write!(
+                out,
                 "<div class=\"md-render\" data-md-render data-edit-offset=\"{}\">{}</div>",
                 b.range.start, b.html
-            ));
+            );
         }
         last_end = token.range.end;
     }
@@ -265,6 +268,7 @@ fn push_inline_html(
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn push_token_html(
     source: &str,
     token: &Token,
@@ -324,7 +328,7 @@ fn push_token_html(
         TokenKind::Heading(level) => {
             let prefix_len = raw.len() - display.len();
             let class = format!("md-token md-heading md-h{level}");
-            out.push_str(&format!("<span class=\"{class}\">"));
+            let _ = write!(out, "<span class=\"{class}\">");
             marker(&raw[..prefix_len], out);
             push_inline_html(source, token.content_range.clone(), links, out);
             out.push_str("</span>");
@@ -340,15 +344,16 @@ fn push_token_html(
 
         TokenKind::ListItem { ordered, depth } => {
             let prefix_len = token.content_range.start - token.range.start;
-            let indent = format!("{}em", *depth as f32 * 1.5);
-            out.push_str(&format!(
+            let indent = format!("{}em", f32::from(*depth) * 1.5);
+            let _ = write!(
+                out,
                 "<span class=\"md-token md-list-item{}\" style=\"padding-left:{indent}\">",
                 if *ordered {
                     " md-list-ordered"
                 } else {
                     " md-list-unordered"
                 }
-            ));
+            );
             marker(&raw[..prefix_len], out);
             push_inline_html(source, token.content_range.clone(), links, out);
             out.push_str("</span>");
@@ -360,17 +365,18 @@ fn push_token_html(
             bracket_pos,
         } => {
             let prefix_len = bracket_pos - token.range.start;
-            let indent = format!("{}em", *depth as f32 * 1.5);
+            let indent = format!("{}em", f32::from(*depth) * 1.5);
             let bracket_text = if *checked { "[x]" } else { "[ ]" };
-            out.push_str(&format!(
+            let _ = write!(
+                out,
                 "<span class=\"md-token md-task-item\" style=\"padding-left:{indent}\">"
-            ));
+            );
             marker(&raw[..prefix_len], out);
-            out.push_str(&format!(
+            let _ = write!(
+                out,
                 "<span class=\"md-task-checkbox\" \
-                 data-pos=\"{}\" data-checked=\"{}\">{} </span>",
-                bracket_pos, checked, bracket_text,
-            ));
+                 data-pos=\"{bracket_pos}\" data-checked=\"{checked}\">{bracket_text} </span>",
+            );
             push_inline_html(source, token.content_range.clone(), links, out);
             out.push_str("</span>");
         }
@@ -384,9 +390,10 @@ fn push_token_html(
         TokenKind::Link { url_range } => {
             let url = &source[url_range.clone()];
             let url_escaped = escaped_attr(url);
-            out.push_str(&format!(
+            let _ = write!(
+                out,
                 "<a class=\"md-token md-link\" href=\"{url_escaped}\" data-navigate=\"{url_escaped}\">"
-            ));
+            );
             marker("[", out);
             push_escaped(display, out);
             out.push_str("<span class=\"md-marker\">](");
@@ -408,9 +415,10 @@ fn push_token_html(
             // link text never writes to the vault.
             let exists = links.is_none_or(|r| r.exists(target));
             if exists {
-                out.push_str(&format!(
+                let _ = write!(
+                    out,
                     "<span class=\"md-token md-wikilink md-wikilink--linked\" data-navigate=\"{target_escaped}\">"
-                ));
+                );
             } else {
                 out.push_str("<span class=\"md-token md-wikilink md-wikilink--missing\">");
             }
@@ -428,10 +436,11 @@ fn push_token_html(
             if !exists {
                 // `data-action`, the same channel the dataview blocks use: the
                 // editor doesn't know what creating a note means, the host does.
-                out.push_str(&format!(
+                let _ = write!(
+                    out,
                     "<span class=\"md-wikilink-create\" data-action=\"newnote:{target_escaped}\" \
                      title=\"Create note\" contenteditable=\"false\">Create note</span>"
-                ));
+                );
             }
             out.push_str("</span>");
         }
@@ -540,7 +549,7 @@ pub fn MarkdownArea(
     mut content: Signal<String>,
     #[props(default)] variant: MarkdownAreaVariant,
     #[props(default)] placeholder: String,
-    /// Called with the target note/URL when a WikiLink or Link is clicked.
+    /// Called with the target note/URL when a `WikiLink` or Link is clicked.
     on_navigate: Option<EventHandler<String>>,
     /// Called when something inside rendered output is clicked, with that
     /// element's `data-action` payload. The editor doesn't interpret it: the
@@ -628,9 +637,9 @@ pub fn MarkdownArea(
                 // cursor = -1 only when there is no caret in the editor; with
                 // line-deterministic offsets even empty/blank lines get a real
                 // offset, so leaving a block now re-renders on mobile too.
-                if cursor >= 0 {
+                if let Ok(cursor) = usize::try_from(cursor) {
                     let new_html =
-                        render_html(&text, Some(cursor as usize), render_block.read().as_ref(), resolve_link.read().as_ref());
+                        render_html(&text, Some(cursor), render_block.read().as_ref(), resolve_link.read().as_ref());
                     let _: Result<(), _> =
                         apply_html_and_restore_cursor(&editor_id, &new_html, cursor).await;
                 }
@@ -639,8 +648,7 @@ pub fn MarkdownArea(
                 // untouched while focused to avoid resetting the cursor.
                 let text = payload
                     .split_once('\n')
-                    .map(|(_, t)| t)
-                    .unwrap_or(&payload)
+                    .map_or(payload.as_str(), |(_, t)| t)
                     .to_string();
                 content.set(text);
             }
@@ -686,7 +694,7 @@ pub fn MarkdownArea(
                     let src = content.read().clone();
                     let html = render_html(&src, Some(offset), render_block.read().as_ref(), resolve_link.read().as_ref());
                     let _: Result<(), _> =
-                        apply_html_and_restore_cursor(&editor_id, &html, offset as i64).await;
+                        apply_html_and_restore_cursor(&editor_id, &html, offset).await;
                 }
                 return;
             }
