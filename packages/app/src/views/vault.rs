@@ -758,43 +758,57 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                     .unwrap_or_default();
                 vault::dispatch::move_file(&cfg, &src, &sha, &new_path).await
             };
-            match result {
-                Ok(()) => {
-                    if let Ok(mut list) = vault::dispatch::list_files(&cfg).await {
-                        list.sort_by(|a, b| a.path.cmp(&b.path));
-                        files.set(list);
+            if let Err(ref e) = result {
+                load_error.set(Some(format!("Move failed: {e}")));
+            }
+
+            // Always re-fetch, success or failure: `move_dir` moves files one at
+            // a time and stops at the first error (e.g. a name collision at the
+            // destination), so a failed move can still be a *partial* one —
+            // some files really did move server-side even though `result` is
+            // `Err`. Leaving the sidebar showing the pre-move snapshot in that
+            // case is exactly the "tree doesn't update" bug: it claims files
+            // are still where they no longer are.
+            let Ok(mut list) = vault::dispatch::list_files(&cfg).await else {
+                return;
+            };
+            list.sort_by(|a, b| a.path.cmp(&b.path));
+            let paths: std::collections::HashSet<String> =
+                list.iter().map(|f| f.path.clone()).collect();
+            let still_exists = |p: &str| paths.contains(p);
+            files.set(list);
+
+            // Rewrite any open tabs / active paths that pointed at the moved
+            // file or a file inside the moved folder, in both panes — but only
+            // for paths that actually landed at their new location (confirmed
+            // against the fresh listing above), so a sub-path a partial folder
+            // move never reached keeps pointing at its still-valid old path.
+            let rewrite = |p: &str| -> Option<String> {
+                let candidate = if kind == "dir" {
+                    if p == src {
+                        Some(new_path.clone())
+                    } else {
+                        p.strip_prefix(&format!("{src}/")).map(|rel| format!("{new_path}/{rel}"))
                     }
-                    // Rewrite any open tabs / active paths that pointed at the
-                    // moved file or a file inside the moved folder, in both panes.
-                    let rewrite = |p: &str| -> Option<String> {
-                        if kind == "dir" {
-                            if p == src {
-                                Some(new_path.clone())
-                            } else {
-                                p.strip_prefix(&format!("{src}/"))
-                                    .map(|rel| format!("{new_path}/{rel}"))
-                            }
-                        } else if p == src {
-                            Some(new_path.clone())
-                        } else {
-                            None
-                        }
-                    };
-                    for (mut tabs, mut active) in [(tabs_a, active_a), (tabs_b, active_b)] {
-                        tabs.with_mut(|ts| {
-                            for t in ts.iter_mut() {
-                                if let Some(n) = rewrite(&t.path) {
-                                    t.path = n;
-                                }
-                            }
-                        });
-                        let cur = active.peek().clone();
-                        if let Some(n) = cur.and_then(|c| rewrite(&c)) {
-                            active.set(Some(n));
+                } else if p == src {
+                    Some(new_path.clone())
+                } else {
+                    None
+                };
+                candidate.filter(|c| still_exists(c))
+            };
+            for (mut tabs, mut active) in [(tabs_a, active_a), (tabs_b, active_b)] {
+                tabs.with_mut(|ts| {
+                    for t in ts.iter_mut() {
+                        if let Some(n) = rewrite(&t.path) {
+                            t.path = n;
                         }
                     }
+                });
+                let cur = active.peek().clone();
+                if let Some(n) = cur.and_then(|c| rewrite(&c)) {
+                    active.set(Some(n));
                 }
-                Err(e) => load_error.set(Some(format!("Move failed: {e}"))),
             }
         });
     };
