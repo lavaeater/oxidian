@@ -44,3 +44,6 @@ log = { workspace = true }
 # match what wry/tao already pull in, so the JavaVM/context pointers are ABI-safe.
 jni = "0.21"
 ndk-context = "0.1"
+
+[lints]
+workspace = true

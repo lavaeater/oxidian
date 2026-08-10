@@ -13,3 +13,6 @@ log = { workspace = true }
 # production — this is purely a test driver.
 dioxus-ssr = "0.8.0-alpha.1"
 
+
+[lints]
+workspace = true

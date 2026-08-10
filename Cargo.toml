@@ -14,6 +14,11 @@ exclude = ["dioxus-use-js"]
 [workspace.package]
 version = "0.1.4"
 
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+
 [workspace.dependencies]
 dioxus = { version = "0.8.0-alpha.1" }
 lucide-dioxus = { version="3.11.0", features=["all-icons"] }

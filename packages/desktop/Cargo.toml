@@ -11,3 +11,6 @@ app = { workspace = true }
 [features]
 default = []
 desktop = ["dioxus/desktop"]
+
+[lints]
+workspace = true
