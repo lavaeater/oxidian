@@ -574,7 +574,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
 
     // Open (or create) today's daily note. Extracted from the sidebar button so
     // the palette can trigger it too.
-    let run_daily = use_callback(move |_: ()| {
+    let run_daily = use_callback(move |(): ()| {
         let cfg = cfg_daily.clone();
         let tmpl_path = cfg.daily_note_template.clone();
         let tmpl = templates
@@ -626,7 +626,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
     });
 
     // Export the focused note as standalone HTML (uses the focused-pane mirrors).
-    let run_export = use_callback(move |_: ()| {
+    let run_export = use_callback(move |(): ()| {
         if let Some(p) = active_path() {
             let title = p
                 .rsplit('/')
@@ -709,7 +709,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
             }
             let dest = dest_dir.trim_matches('/').to_string();
             let name = src.rsplit('/').next().unwrap_or(&src).to_string();
-            let src_parent = src.rfind('/').map(|i| &src[..i]).unwrap_or("");
+            let src_parent = src.rfind('/').map_or("", |i| &src[..i]);
 
             // No-op: already directly inside the destination folder.
             if src_parent == dest {
@@ -936,7 +936,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                                 active: active_path.read().clone(),
                                 backlinks: {
                                     let idx = index.read();
-                                    active_path.read().as_ref().map(|p| idx.backlinks(p).into_iter().map(|s| s.to_string()).collect::<Vec<_>>()).unwrap_or_default()
+                                    active_path.read().as_ref().map(|p| idx.backlinks(p).into_iter().map(std::string::ToString::to_string).collect::<Vec<_>>()).unwrap_or_default()
                                 },
                                 on_select: move |path: String| {
                                     open_focused(path);
@@ -1023,7 +1023,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                     }
                 }
 
-                StorageFooter { on_rebuild: move |_| index_gen += 1 }
+                StorageFooter { on_rebuild: move |()| index_gen += 1 }
             }
 
             // ── Drawer scrim (mobile only — `.sidebar-scrim` is display:none on
@@ -1082,11 +1082,11 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                         mirror_active: active_path,
                         mirror_content: content,
                         can_split: !split(),
-                        on_split: move |_| split.set(true),
+                        on_split: move |()| split.set(true),
                         on_close_pane: None,
                         on_send_other: move |p: String| { open_in_pane(tabs_b, active_b, p); focused.set(1); split.set(true); },
-                        on_back: move |_| sidebar_open.set(true),
-                        on_palette: move |_| show_palette.set(true),
+                        on_back: move |()| sidebar_open.set(true),
+                        on_palette: move |()| show_palette.set(true),
                     }
                     if split() {
                         EditorPane {
@@ -1104,11 +1104,11 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                             mirror_active: active_path,
                             mirror_content: content,
                             can_split: false,
-                            on_split: move |_| {},
-                            on_close_pane: Some(EventHandler::new(move |_| { split.set(false); focused.set(0); })),
+                            on_split: move |()| {},
+                            on_close_pane: Some(EventHandler::new(move |()| { split.set(false); focused.set(0); })),
                             on_send_other: move |p: String| { open_in_pane(tabs_a, active_a, p); focused.set(0); },
-                            on_back: move |_| sidebar_open.set(true),
-                            on_palette: move |_| show_palette.set(true),
+                            on_back: move |()| sidebar_open.set(true),
+                            on_palette: move |()| show_palette.set(true),
                         }
                     }
                 }
@@ -1162,7 +1162,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                         open_focused(path);
                         show_switcher.set(false);
                     },
-                    on_close: move |_| show_switcher.set(false),
+                    on_close: move |()| show_switcher.set(false),
                 }
             }
 
@@ -1174,7 +1174,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                         PaletteAction::Cmd(c) => run_cmd.call(c),
                         PaletteAction::Template(t) => run_template.call(t),
                     },
-                    on_close: move |_| show_palette.set(false),
+                    on_close: move |()| show_palette.set(false),
                 }
             }
 
@@ -1186,7 +1186,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                     config: cfg_newfile.clone(),
                     result: new_file_result,
                     current_dir: selected_dir.read().clone(),
-                    on_close: move |_| show_new_file.set(false),
+                    on_close: move |()| show_new_file.set(false),
                 }
             }
 
@@ -1194,7 +1194,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                 NewFolderModal {
                     config: cfg_newfile,
                     parent: selected_dir.read().clone(),
-                    on_created: move |_| {
+                    on_created: move |()| {
                         show_new_folder.set(false);
                         let cfg = config.clone();
                         spawn(async move {
@@ -1204,7 +1204,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                             }
                         });
                     },
-                    on_close: move |_| show_new_folder.set(false),
+                    on_close: move |()| show_new_folder.set(false),
                 }
             }
         }
@@ -1326,21 +1326,18 @@ async fn todays_note(cfg: &GithubConfig, templates: &[TemplateMeta]) -> Option<(
     let tmpl = templates
         .iter()
         .find(|t| t.source_path == cfg.daily_note_template);
-    match tmpl.and_then(|t| t.filepath.as_ref().map(|fp| (t, fp))) {
-        Some((t, fp)) => {
-            let path = template::substitute_vars(fp, &vars)
-                .trim_start_matches('/')
-                .to_string();
-            let body = template::strip_tabstops(&template::substitute_vars(&t.body, &vars));
-            Some((path, body))
+    if let Some((t, fp)) = tmpl.and_then(|t| t.filepath.as_ref().map(|fp| (t, fp))) {
+        let path = template::substitute_vars(fp, &vars)
+            .trim_start_matches('/')
+            .to_string();
+        let body = template::strip_tabstops(&template::substitute_vars(&t.body, &vars));
+        Some((path, body))
+    } else {
+        let date = crate::dates::today().await;
+        if date.is_empty() {
+            return None;
         }
-        None => {
-            let date = crate::dates::today().await;
-            if date.is_empty() {
-                return None;
-            }
-            Some((format!("{date}.md"), format!("# {date}\n\n")))
-        }
+        Some((format!("{date}.md"), format!("# {date}\n\n")))
     }
 }
 
@@ -1773,8 +1770,7 @@ fn EditorPane(
     let path_opt = active.read().clone();
     let is_bookmarked = path_opt
         .as_ref()
-        .map(|p| bookmarks.read().contains(p))
-        .unwrap_or(false);
+        .is_some_and(|p| bookmarks.read().contains(p));
     let words = word_count(&content.read());
     let status_class = save_status.read().css_class().to_string();
     let status_label = save_status.read().label();
@@ -1973,7 +1969,7 @@ fn EditorPane(
                                         }
                                     });
                                 },
-                                on_close: move |_| slash_query.set(None),
+                                on_close: move |()| slash_query.set(None),
                             }
                         }
                     }
@@ -2634,7 +2630,7 @@ fn TasksView(
         }
         by_file.into_iter().collect()
     };
-    for (_, items) in groups.iter_mut() {
+    for (_, items) in &mut groups {
         items.sort_by(tasks::cmp);
     }
     let total_open = all_tasks.read().iter().filter(|t| !t.checked).count();
@@ -2675,7 +2671,7 @@ fn TasksView(
                     files,
                     count: items.len(),
                     source: items.first().map(|t| t.path.clone()).unwrap_or_default(),
-                    on_cancel: move |_| picking.set(None),
+                    on_cancel: move |()| picking.set(None),
                     on_pick: move |dest: String| {
                         picking.set(None);
                         run_move.call((items.clone(), Some(dest)));
@@ -2744,7 +2740,7 @@ fn TasksView(
                                             let p_jump = t.path.clone();
                                             let overdue = !t.checked
                                                 && !today_str.is_empty()
-                                                && t.due.as_deref().map(|d| d < today_str.as_str()).unwrap_or(false);
+                                                && t.due.as_deref().is_some_and(|d| d < today_str.as_str());
                                             let due_class = if overdue { "task-due task-due--overdue" } else { "task-due" };
                                             let row_class = if t.checked { "task-row task-row--done" } else { "task-row" };
                                             rsx! {
@@ -3140,8 +3136,7 @@ fn FileTreeDir(
     let prefix_slash = format!("{prefix}/");
     let contains_active = |a: &Option<String>| {
         a.as_deref()
-            .map(|p| p.starts_with(&prefix_slash))
-            .unwrap_or(false)
+            .is_some_and(|p| p.starts_with(&prefix_slash))
     };
     let mut collapsed = use_signal(|| !contains_active(&active()));
     let mut drag_over = use_signal(|| false);
@@ -3150,8 +3145,7 @@ fn FileTreeDir(
     use_effect(move || {
         if active()
             .as_deref()
-            .map(|a| a.starts_with(&prefix_slash_effect))
-            .unwrap_or(false)
+            .is_some_and(|a| a.starts_with(&prefix_slash_effect))
         {
             collapsed.set(false);
         }
@@ -3420,14 +3414,14 @@ fn ColumnView(
         }
         if let Some(ref s) = selected_dir() {
             // If s is a direct child of root (no second slash), open it.
-            if !s.contains('/') {
-                open_child.set(Some(s.clone()));
-            } else {
+            if s.contains('/') {
                 // Ancestor is the first path segment.
                 let anc = s.split('/').next().unwrap_or("").to_string();
                 if !anc.is_empty() {
                     open_child.set(Some(anc));
                 }
+            } else {
+                open_child.set(Some(s.clone()));
             }
         }
     });

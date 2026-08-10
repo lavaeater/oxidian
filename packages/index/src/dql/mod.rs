@@ -13,7 +13,7 @@
 //! Deliberately compatible with obsidian-dataview for the query types we
 //! support, so existing vaults work unchanged and its documentation doubles as
 //! our spec (`docs/dataview.md` §10). `CALENDAR`, `GROUP BY`, `FLATTEN`, and
-//! DataviewJS are not implemented.
+//! `DataviewJS` are not implemented.
 //!
 //! Parse errors are values, never panics: the query is being typed live in the
 //! editor, so a half-written query has to render as a message rather than take
@@ -99,7 +99,7 @@ pub struct Sort {
 pub struct Query {
     pub kind: QueryKind,
     pub from: Option<Source>,
-    /// Successive `WHERE` clauses are ANDed, like Dataview.
+    /// Successive `WHERE` clauses are `ANDed`, like Dataview.
     pub filters: Vec<Expr>,
     pub sorts: Vec<Sort>,
     pub limit: Option<usize>,

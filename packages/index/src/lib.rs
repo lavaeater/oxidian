@@ -325,7 +325,7 @@ mod tests {
     fn backlinks_and_edges_resolve_through_note_stems() {
         let (idx, _) = seeded();
         let mut back = idx.backlinks("games/Deus Ex.md");
-        back.sort();
+        back.sort_unstable();
         assert_eq!(back, vec!["games/Thief.md", "notes/Alice.md"]);
 
         let mut edges = idx.edges();

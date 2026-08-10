@@ -124,7 +124,7 @@ fn lex(src: &str) -> Result<Vec<Tok>, ParseError> {
                 let start = i;
                 while i < b.len() && (b[i].is_ascii_digit() || b[i] == '.') {
                     // A '.' only continues the number if a digit follows.
-                    if b[i] == '.' && !b.get(i + 1).is_some_and(|d| d.is_ascii_digit()) {
+                    if b[i] == '.' && !b.get(i + 1).is_some_and(char::is_ascii_digit) {
                         break;
                     }
                     i += 1;

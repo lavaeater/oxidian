@@ -4,7 +4,7 @@
 
 use dioxus::prelude::*;
 
-/// Render a zero-prop component to a static HTML string by driving a VirtualDom
+/// Render a zero-prop component to a static HTML string by driving a `VirtualDom`
 /// one rebuild pass. This is the base harness the component tests reuse.
 fn render(app: fn() -> Element) -> String {
     let mut dom = VirtualDom::new(app);

@@ -17,7 +17,7 @@ pub enum VaultError {
     Conflict,
 }
 
-/// Metadata for a file in the vault (returned by list_files).
+/// Metadata for a file in the vault (returned by `list_files`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct FileMeta {
     /// Repo-relative path, e.g. "notes/idea.md"
@@ -42,7 +42,7 @@ impl FileMeta {
     }
 }
 
-/// File content returned by read_file.
+/// File content returned by `read_file`.
 #[derive(Debug, Clone, Default)]
 pub struct FileContent {
     pub content: String,
@@ -84,7 +84,7 @@ impl Provider {
 
 /// Dispatch table — calls the right backend based on the config's provider.
 pub mod dispatch {
-    use super::*;
+    use super::{GithubConfig, FileMeta, VaultError, Provider, github, gitlab, FileContent};
 
     pub async fn list_files(cfg: &GithubConfig) -> Result<Vec<FileMeta>, VaultError> {
         match cfg.provider {

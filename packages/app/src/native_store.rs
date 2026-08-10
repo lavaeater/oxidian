@@ -1,9 +1,9 @@
 //! Filesystem-backed key/value store for native (desktop/mobile) builds.
 //!
-//! On Android the WebView's `localStorage` does not reliably survive a cold app
+//! On Android the `WebView`'s `localStorage` does not reliably survive a cold app
 //! restart, so the GitHub token (and bookmarks, board, …) were being lost and
 //! the user had to re-authorise on every launch. This stores the same keys in a
-//! JSON file in the app's private directory instead, bypassing the WebView
+//! JSON file in the app's private directory instead, bypassing the `WebView`
 //! entirely. `js::ls_get`/`ls_set`/`ls_remove` route here on native and stay on
 //! real `localStorage` for web.
 //!
@@ -29,9 +29,7 @@ fn base_dir() -> PathBuf {
 
 #[cfg(not(target_os = "android"))]
 fn base_dir() -> PathBuf {
-    dirs::data_dir()
-        .map(|d| d.join("oxidian"))
-        .unwrap_or_else(std::env::temp_dir)
+    dirs::data_dir().map_or_else(std::env::temp_dir, |d| d.join("oxidian"))
 }
 
 /// The app's internal files directory via `Context.getFilesDir()`. Best-effort:
@@ -155,7 +153,7 @@ pub fn usage() -> (i64, i64) {
         .flatten()
         .flatten()
         .filter_map(|e| e.metadata().ok())
-        .filter(|m| m.is_file())
+        .filter(std::fs::Metadata::is_file)
         .map(|m| m.len())
         .sum();
     (total as i64, -1)

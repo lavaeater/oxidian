@@ -93,7 +93,7 @@ pub fn parse_tag_list(raw: &str) -> Vec<String> {
         .split([',', ' '])
         .map(|t| t.trim().trim_matches('"').trim_matches('\'').trim_start_matches('#'))
         .filter(|t| !t.is_empty())
-        .map(|t| t.to_string())
+        .map(std::string::ToString::to_string)
         .collect()
 }
 

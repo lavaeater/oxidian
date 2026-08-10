@@ -39,7 +39,7 @@ fn App() -> Element {
         } else if let Some(cfg) = config() {
             VaultBrowser {
                 config: cfg,
-                on_logout: move |_| config.set(None),
+                on_logout: move |()| config.set(None),
             }
         } else {
             Settings {

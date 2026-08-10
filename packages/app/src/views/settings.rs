@@ -18,10 +18,10 @@ pub fn Settings(
     let mut token    = use_signal(|| existing.as_ref().map(|c| c.token.clone()).unwrap_or_default());
     let mut owner    = use_signal(|| existing.as_ref().map(|c| c.owner.clone()).unwrap_or_default());
     let mut repo     = use_signal(|| existing.as_ref().map(|c| c.repo.clone()).unwrap_or_default());
-    let mut branch        = use_signal(|| existing.as_ref().map(|c| c.branch.clone()).unwrap_or_else(|| "main".to_string()));
+    let mut branch        = use_signal(|| existing.as_ref().map_or_else(|| "main".to_string(), |c| c.branch.clone()));
     let mut provider      = use_signal(|| existing.as_ref().map(|c| c.provider.clone()).unwrap_or_default());
-    let mut templates_dir       = use_signal(|| existing.as_ref().map(|c| c.templates_dir.clone()).unwrap_or_else(|| ".oxidian/templates".to_string()));
-    let mut daily_note_template = use_signal(|| existing.as_ref().map(|c| c.daily_note_template.clone()).unwrap_or_else(|| ".oxidian/templates/daily-note.md".to_string()));
+    let mut templates_dir       = use_signal(|| existing.as_ref().map_or_else(|| ".oxidian/templates".to_string(), |c| c.templates_dir.clone()));
+    let mut daily_note_template = use_signal(|| existing.as_ref().map_or_else(|| ".oxidian/templates/daily-note.md".to_string(), |c| c.daily_note_template.clone()));
     let mut error    = use_signal(|| None::<String>);
     let mut saving   = use_signal(|| false);
     let mut show_token  = use_signal(|| false);

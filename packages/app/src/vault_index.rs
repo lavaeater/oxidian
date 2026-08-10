@@ -9,7 +9,7 @@
 //! never cost data. See `docs/dataview.md` §6.
 //!
 //! The index is the one thing here that scales with the vault, so it lives in
-//! the *blob* store (`js::blob_*`): IndexedDB on web, its own file on native.
+//! the *blob* store (`js::blob_*`): `IndexedDB` on web, its own file on native.
 //! `localStorage` was the original home and is the wrong shape for this — a ~5 MB
 //! cap (about 3–5 k notes) and a synchronous write on the UI thread. An index
 //! left there by an older build is migrated on first load.

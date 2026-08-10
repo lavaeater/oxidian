@@ -478,7 +478,7 @@ fn KanbanColumn(
                                 class: "kanban-card",
                                 draggable: true,
                                 ondragstart: move |_| {
-                                    crate::js::set_drag_data(format!("{}\x1e{}", drag_col, drag_title));
+                                    crate::js::set_drag_data(format!("{drag_col}\x1e{drag_title}"));
                                 },
                                 onclick: move |_| on_open(title.clone()),
                                 "{card}"

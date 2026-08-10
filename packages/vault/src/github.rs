@@ -391,7 +391,7 @@ pub struct DeviceCodeResponse {
     pub device_code: String,
     pub user_code: String,
     pub verification_uri: String,
-    /// Pre-filled URL including the user_code as a query param — open this
+    /// Pre-filled URL including the `user_code` as a query param — open this
     /// directly so the user just has to click Authorize, no typing needed.
     #[serde(default)]
     pub verification_uri_complete: Option<String>,

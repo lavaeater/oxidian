@@ -48,10 +48,10 @@ impl Date {
             (self.year, self.month)
         };
         let era = if y >= 0 { y } else { y - 399 } / 400;
-        let yoe = (y - era * 400) as i64;
-        let doy = (153 * (m as i64 - 3) + 2) / 5 + self.day as i64 - 1;
+        let yoe = i64::from(y - era * 400);
+        let doy = (153 * (i64::from(m) - 3) + 2) / 5 + i64::from(self.day) - 1;
         let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-        era as i64 * 146097 + doe - 719468
+        i64::from(era) * 146097 + doe - 719468
     }
 
     pub fn from_days(days: i64) -> Date {
@@ -221,8 +221,8 @@ impl Value {
     pub fn loose_eq(&self, other: &Value) -> bool {
         match (self, other) {
             (Value::Str(a), Value::Str(b)) => a.eq_ignore_ascii_case(b),
-            (Value::Link(a), Value::Link(b)) | (Value::Link(a), Value::Str(b))
-            | (Value::Str(a), Value::Link(b)) => a.eq_ignore_ascii_case(b),
+            (Value::Link(a) | Value::Str(a), Value::Link(b)) |
+(Value::Link(a), Value::Str(b)) => a.eq_ignore_ascii_case(b),
             (Value::Str(_), _) | (_, Value::Str(_)) => {
                 self.to_display().eq_ignore_ascii_case(&other.to_display())
             }
@@ -305,7 +305,7 @@ mod tests {
     #[test]
     fn null_sorts_last_regardless_of_direction() {
         let mut v = vec![Value::Null, Value::Num(2.0), Value::Num(1.0)];
-        v.sort_by(|a, b| a.compare(b));
+        v.sort_by(super::Value::compare);
         assert_eq!(v, vec![Value::Num(1.0), Value::Num(2.0), Value::Null]);
     }
 

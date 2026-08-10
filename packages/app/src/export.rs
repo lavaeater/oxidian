@@ -137,7 +137,7 @@ fn render_tokens(source: &str, tokens: &[ui::tokenizer::Token]) -> String {
                     out.push_str("</code></pre>");
                     in_code_fence = false;
                 } else {
-                    let lang = lang_range.as_ref().map(|r| &source[r.clone()]).unwrap_or("");
+                    let lang = lang_range.as_ref().map_or("", |r| &source[r.clone()]);
                     let lang_attr = if lang.is_empty() { String::new() } else { format!(" class=\"language-{lang}\"") };
                     out.push_str(&format!("<pre><code{lang_attr}>"));
                     in_code_fence = true;

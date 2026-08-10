@@ -25,7 +25,7 @@ pub async fn sleep_ms(ms: u32) {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn sleep_ms(ms: u32) {
-    tokio::time::sleep(std::time::Duration::from_millis(ms as u64)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(u64::from(ms))).await;
 }
 
 /// Direct browser console.log — works even without a tracing subscriber.

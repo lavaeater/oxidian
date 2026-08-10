@@ -2,10 +2,10 @@
 //! desktop, and mobile.
 //!
 //! These used to come from `oxidian.js` (`today()` / `date_vars()`), but the
-//! value-returning JS bridge proved unreliable inside the Android WebView
+//! value-returning JS bridge proved unreliable inside the Android `WebView`
 //! (`date_vars` — which returns stringified JSON — came back empty, breaking
 //! "Today's note"). Everything is now derived here from a single `YYYY-MM-DD`
-//! base date, with the WebView's plain-string `today()` preferred for correct
+//! base date, with the `WebView`'s plain-string `today()` preferred for correct
 //! local time and a native clock as the fallback.
 
 use crate::js;
@@ -92,20 +92,20 @@ pub fn add_days(ymd: &str, days: u32) -> String {
 
 /// Day of year, 1-based.
 fn ordinal(y: i32, m: u8, d: u8) -> i32 {
-    let mut doy = d as i32;
+    let mut doy = i32::from(d);
     for mm in 1..m {
-        doy += days_in_month(y, mm) as i32;
+        doy += i32::from(days_in_month(y, mm));
     }
     doy
 }
 
 /// Weekday with 0 = Sunday, via Zeller's congruence (Gregorian).
 fn weekday_from_sunday(y: i32, m: u8, d: u8) -> u8 {
-    let (yy, mm) = if m < 3 { (y - 1, m as i32 + 12) } else { (y, m as i32) };
+    let (yy, mm) = if m < 3 { (y - 1, i32::from(m) + 12) } else { (y, i32::from(m)) };
     let k = yy.rem_euclid(100);
     let j = yy.div_euclid(100);
     // h: 0 = Saturday … 6 = Friday
-    let h = (d as i32 + (13 * (mm + 1)) / 5 + k + k / 4 + j / 4 + 5 * j).rem_euclid(7);
+    let h = (i32::from(d) + (13 * (mm + 1)) / 5 + k + k / 4 + j / 4 + 5 * j).rem_euclid(7);
     ((h + 6) % 7) as u8
 }
 
@@ -117,7 +117,7 @@ fn weeks_in_year(y: i32) -> i32 {
 /// ISO-8601 week number (1–53).
 fn iso_week(y: i32, m: u8, d: u8) -> i32 {
     let doy = ordinal(y, m, d);
-    let wd_sun = weekday_from_sunday(y, m, d) as i32; // 0 = Sunday
+    let wd_sun = i32::from(weekday_from_sunday(y, m, d)); // 0 = Sunday
     let iso_wd = if wd_sun == 0 { 7 } else { wd_sun };  // 1 = Mon … 7 = Sun
     let week = (doy - iso_wd + 10) / 7;
     if week < 1 {

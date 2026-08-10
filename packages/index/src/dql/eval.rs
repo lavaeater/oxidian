@@ -197,7 +197,7 @@ pub fn eval(expr: &Expr, page: &PageData, index: &Index, ctx: &Context) -> Value
             "tags" | "etags" => tag_list(page),
             // Bare `today` is a date, as in `due <= today`. It shadows a field
             // of the same name, which is what Dataview does too.
-            "today" | "now" => ctx.today.map(Value::Date).unwrap_or(Value::Null),
+            "today" | "now" => ctx.today.map_or(Value::Null, Value::Date),
             _ => page.field(name).cloned().unwrap_or(Value::Null),
         },
         Expr::Field(base, name) => {
@@ -209,8 +209,7 @@ pub fn eval(expr: &Expr, page: &PageData, index: &Index, ctx: &Context) -> Value
                     Value::Link(target) => index
                         .pages()
                         .find(|p| p.stem().eq_ignore_ascii_case(&target))
-                        .map(|p| implicit(p, name, index))
-                        .unwrap_or(Value::Null),
+                        .map_or(Value::Null, |p| implicit(p, name, index)),
                     _ => Value::Null,
                 },
             }
@@ -314,7 +313,7 @@ fn day_from_name(stem: &str) -> Value {
 }
 
 fn binary(op: BinOp, l: Value, r: Value) -> Value {
-    use BinOp::*;
+    use BinOp::{Eq, Ne, Lt, Le, Gt, Ge, Add, Sub, Mul, Div, Mod, And, Or};
     match op {
         Eq => Value::Bool(l.loose_eq(&r)),
         Ne => Value::Bool(!l.loose_eq(&r)),
@@ -402,7 +401,7 @@ fn call(name: &str, args: &[Value], ctx: &Context) -> Value {
         ),
         "number" => match arg(0) {
             Value::Num(n) => Value::Num(n),
-            v => v.to_display().trim().parse::<f64>().map(Value::Num).unwrap_or(Value::Null),
+            v => v.to_display().trim().parse::<f64>().map_or(Value::Null, Value::Num),
         },
         "string" => Value::Str(arg(0).to_display()),
         "join" => {
@@ -426,7 +425,7 @@ fn call(name: &str, args: &[Value], ctx: &Context) -> Value {
         },
         "sort" => match arg(0) {
             Value::List(mut l) => {
-                l.sort_by(|a, b| a.compare(b));
+                l.sort_by(super::super::value::Value::compare);
                 Value::List(l)
             }
             v => v,
@@ -466,9 +465,9 @@ fn call(name: &str, args: &[Value], ctx: &Context) -> Value {
         "date" => match arg(0) {
             Value::Date(d) => Value::Date(d),
             Value::Str(s) if s.eq_ignore_ascii_case("today") => {
-                ctx.today.map(Value::Date).unwrap_or(Value::Null)
+                ctx.today.map_or(Value::Null, Value::Date)
             }
-            v => Date::parse(&v.to_display()).map(Value::Date).unwrap_or(Value::Null),
+            v => Date::parse(&v.to_display()).map_or(Value::Null, Value::Date),
         },
         // `dur(7)` / `dur(7 days)` — days are the only unit notes use in
         // practice, and the parser hands us `7` followed by a bare word.
@@ -480,8 +479,7 @@ fn call(name: &str, args: &[Value], ctx: &Context) -> Value {
                 .split_whitespace()
                 .next()
                 .and_then(|n| n.parse::<i64>().ok())
-                .map(Value::Duration)
-                .unwrap_or(Value::Null),
+                .map_or(Value::Null, Value::Duration),
         },
         _ => Value::Null,
     }

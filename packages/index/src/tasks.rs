@@ -82,13 +82,11 @@ fn parse_line(path: &str, idx: usize, line: &str) -> Option<Task> {
         .or_else(|| trimmed.strip_prefix("+ "))?;
     let (checked, rest) = if let Some(r) = after_bullet.strip_prefix("[ ] ") {
         (false, r)
-    } else if let Some(r) = after_bullet
-        .strip_prefix("[x] ")
-        .or_else(|| after_bullet.strip_prefix("[X] "))
-    {
-        (true, r)
     } else {
-        return None;
+        let r = after_bullet
+        .strip_prefix("[x] ")
+        .or_else(|| after_bullet.strip_prefix("[X] "))?;
+        (true, r)
     };
 
     let (due, rest) = extract_dated(rest, "📅");
@@ -189,10 +187,9 @@ pub fn toggled_content(content: &str, task: &Task, today: &str) -> Option<String
 fn locate(lines: &[&str], task: &Task) -> Option<usize> {
     let matches = |line: &str| {
         parse_line(&task.path, 0, line)
-            .map(|t| t.text == task.text)
-            .unwrap_or(false)
+            .is_some_and(|t| t.text == task.text)
     };
-    if lines.get(task.line).map(|l| matches(l)).unwrap_or(false) {
+    if lines.get(task.line).is_some_and(|l| matches(l)) {
         return Some(task.line);
     }
     lines.iter().position(|l| matches(l))
@@ -268,11 +265,10 @@ pub fn extract_lines(content: &str, tasks: &[Task]) -> (String, Vec<String>) {
 fn locate_excluding(lines: &[&str], task: &Task, taken: &[usize]) -> Option<usize> {
     let matches = |line: &str| {
         parse_line(&task.path, 0, line)
-            .map(|t| t.text == task.text)
-            .unwrap_or(false)
+            .is_some_and(|t| t.text == task.text)
     };
     if !taken.contains(&task.line)
-        && lines.get(task.line).map(|l| matches(l)).unwrap_or(false)
+        && lines.get(task.line).is_some_and(|l| matches(l))
     {
         return Some(task.line);
     }

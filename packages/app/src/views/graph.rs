@@ -1,8 +1,8 @@
 use dioxus::prelude::*;
 
 /// Renders a force-directed graph on a canvas element.
-/// `nodes`: list of (id, label, is_active)
-/// `edges`: list of (source_id, target_id)
+/// `nodes`: list of (id, label, `is_active`)
+/// `edges`: list of (`source_id`, `target_id`)
 /// `on_select`: called with the node id when a node is clicked
 #[component]
 pub fn GraphView(
@@ -28,7 +28,7 @@ pub fn GraphView(
 
     let cid = canvas_id();
     use_effect(move || {
-        let js = format!(r#"
+        let js = format!(r"
 (function() {{
     const canvas = document.getElementById({cid:?});
     if (!canvas) return;
@@ -123,7 +123,7 @@ pub fn GraphView(
         }}
     }};
 }})();
-"#);
+");
         spawn(async move {
             // NOTE: this view intentionally stays on `document::eval` rather than
             // the `js::*` `use_js!` bindings. The canvas streams an unbounded

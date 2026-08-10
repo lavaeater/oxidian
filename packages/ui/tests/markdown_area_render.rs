@@ -1,6 +1,6 @@
 //! Component-level tests for `MarkdownArea`: render the real Dioxus component
 //! on the native target and assert on the emitted DOM. This validates the wiring
-//! (props → initial rendered_html → contenteditable div), complementing the pure
+//! (props → initial `rendered_html` → contenteditable div), complementing the pure
 //! `tokens_to_html` unit tests in the component module.
 //!
 //! Note: the editor's live behaviour (focus reveals raw markdown, typing, cursor
