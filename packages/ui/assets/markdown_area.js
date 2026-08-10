@@ -162,9 +162,10 @@ export function setup_keyboard(id) {
         // newline, so it never continues a list).
         let marker = null;   // marker to start the continued item with
         let markerLen = 0;   // length of this line's existing marker
+        let isTask = false;  // this line's marker is specifically a task checkbox
         if (!e.shiftKey) {
             const taskM = line.match(/^(\s*[-*+] )\[[ xX]\] /);
-            if (taskM) { markerLen = taskM[0].length; marker = taskM[1] + '[ ] '; }
+            if (taskM) { markerLen = taskM[0].length; marker = taskM[1] + '[ ] '; isTask = true; }
             else {
                 const olM = line.match(/^(\s*)(\d+)\. /);
                 if (olM) { markerLen = olM[0].length; marker = olM[1] + (parseInt(olM[2]) + 1) + '. '; }
@@ -180,11 +181,19 @@ export function setup_keyboard(id) {
             // Empty item → exit the list: drop the marker, no new line.
             newText = text.slice(0, lineStart) + text.slice(lineStart + markerLen);
             newCursor = lineStart;
+            el._armTaskMenu = false;
         } else if (marker) {
             // Continue the list: newline + next marker at the caret.
             const ins = '\n' + marker;
             newText = text.slice(0, cursor) + ins + text.slice(cursor);
             newCursor = cursor + ins.length;
+            // Continuing a *task* line that had content arms the task-metadata
+            // menu (`app`'s `task_menu_armed()` polls this) for the fresh blank
+            // task line just created. `updateTaskMenuArm` (called from
+            // `read_state`, below) disarms it the moment that line stops being
+            // an exact empty task item — typing into it, or Enter again to exit
+            // the list (the branch above, which disarms directly).
+            if (isTask) el._armTaskMenu = true;
         } else {
             // Plain newline (covers Shift+Enter and non-list lines).
             newText = text.slice(0, cursor) + '\n' + text.slice(cursor);
@@ -291,14 +300,33 @@ export function read_state(id) {
         el._pendingText = null;
         el._pendingCursor = null;
         el.dataset.lineChange = '';
+        updateTaskMenuArm(el, text, cursor);
         return 'linechange\n' + cursor + '\n' + text;
     }
     const [text, cursor] = lineTextAndCursor(el);
+    updateTaskMenuArm(el, text, cursor);
     if (el.dataset.lineChange) {
         el.dataset.lineChange = '';
         return 'linechange\n' + cursor + '\n' + text;
     }
     return cursor + "\n" + text;
+}
+
+// Keeps `el._armTaskMenu` accurate as the user keeps typing: it's set true
+// only right after Enter continues a task line (see `setup_keyboard`), and
+// stays true only while the caret still sits on that exact empty task item
+// ("- [ ] ", nothing after). `app`'s `task_menu_armed()` (in `oxidian.js`)
+// polls this flag directly off the DOM element to decide whether to show the
+// task-metadata menu.
+function updateTaskMenuArm(el, text, cursor) {
+    if (!el._armTaskMenu) return;
+    if (cursor < 0) { el._armTaskMenu = false; return; }
+    const lineStart = text.lastIndexOf('\n', cursor - 1) + 1;
+    let lineEnd = text.indexOf('\n', cursor);
+    if (lineEnd < 0) lineEnd = text.length;
+    const line = text.slice(lineStart, lineEnd);
+    const stillArmed = cursor === lineEnd && /^\s*[-*+] \[ \] $/.test(line);
+    if (!stillArmed) el._armTaskMenu = false;
 }
 
 // ── Keep the writing line comfortable ────────────────────────────────────────

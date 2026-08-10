@@ -299,6 +299,24 @@ export function apply_slash(snippet, slashLen) {
     el.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
+// ── Task metadata menu ────────────────────────────────────────────────────────
+// Armed by `markdown_area.js`'s Enter handler the moment it continues a
+// non-empty *task* line (`- [ ] ` → new blank task line); kept accurate by
+// `read_state` as the user keeps typing. This just polls that flag off the
+// currently-focused editor's DOM element — the "insert the picked emoji" side
+// reuses `apply_slash(snippet, 0)` (no token to delete, just insert at caret).
+export function task_menu_armed() {
+    const el = activeMdArea();
+    return !!(el && el._armTaskMenu);
+}
+
+// Explicit dismissal (e.g. clicking outside the menu) with no text change, so
+// `apply_slash`'s own re-render can't re-validate the flag for us.
+export function dismiss_task_menu() {
+    const el = activeMdArea();
+    if (el) el._armTaskMenu = false;
+}
+
 // ── Sign-in link (portable config) ────────────────────────────────────────────
 // A "sign-in link" carries the vault config in the URL *fragment* so it can be
 // bookmarked / stored in a password manager and restored in one click — handy

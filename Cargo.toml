@@ -23,6 +23,11 @@ missing_errors_doc = "allow"
 dioxus = { version = "0.8.0-alpha.1" }
 lucide-dioxus = { version="3.11.0", features=["all-icons"] }
 dioxus-use-js = { git ="https://github.com/lavaeater/dioxus-use-js.git", branch="dioxus-v0.8.0" }
+# Our fork's `0.8` branch, pinned to the same dioxus 0.8.0-alpha.1 as the rest
+# of the workspace. Only the calendar grid is used (see `ui::TaskDatePicker`);
+# `router` is disabled since nothing here needs it.
+dioxus-primitives = { git = "https://github.com/lavaeater/dioxus-components.git", branch = "0.8", default-features = false, features = ["web"] }
+time = { version = "0.3", default-features = false }
 log = "0.4"
 # workspace
 ui = { path = "packages/ui" }

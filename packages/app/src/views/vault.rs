@@ -14,8 +14,10 @@ use super::graph::GraphView;
 use super::kanban::KanbanBoard;
 use super::properties::PropertiesPanel;
 use super::slash::SlashMenu;
+use super::task_menu::TaskMenu;
 use super::toolbar::FormattingToolbar;
 use crate::console_log;
+use crate::dates;
 use crate::export;
 use crate::js;
 use crate::state;
@@ -1471,6 +1473,7 @@ fn EditorPane(
     let mut loaded_path: Signal<Option<String>> = use_signal(|| None);
     let mut loading_file = use_signal(|| false);
     let mut slash_query: Signal<Option<String>> = use_signal(|| None);
+    let mut task_menu_open: Signal<bool> = use_signal(|| false);
 
     // ── Dataview blocks ──
     // The editor renders ```dataview fences through this. It runs on every
@@ -1781,6 +1784,21 @@ fn EditorPane(
         });
     });
 
+    // Poll for the task-metadata menu — same focus-aware pattern as slash,
+    // just a bool instead of a query string (see `js::task_menu_armed`).
+    use_effect(move || {
+        spawn(async move {
+            loop {
+                sleep_ms(150).await;
+                if focused() != pane_idx || active().is_none() {
+                    task_menu_open.set(false);
+                    continue;
+                }
+                task_menu_open.set(js::task_menu_armed().await);
+            }
+        });
+    });
+
     // Pre-compute for rsx.
     let path_opt = active.read().clone();
     let is_bookmarked = path_opt
@@ -1950,20 +1968,10 @@ fn EditorPane(
                                 on_select: move |insert: String| {
                                     let query_len = slash_query().unwrap_or_default().len();
                                     slash_query.set(None);
-                                    // Task-metadata snippets carry date placeholders; fill them
-                                    // in with real dates (async) before inserting.
-                                    if insert.contains("{{today}}") || insert.contains("{{tomorrow}}") {
-                                        spawn(async move {
-                                            let today = crate::dates::today().await;
-                                            let tomorrow = crate::dates::add_days(&today, 1);
-                                            let snippet = insert
-                                                .replace("{{today}}", &today)
-                                                .replace("{{tomorrow}}", &tomorrow);
-                                            js::apply_slash(snippet, 1 + query_len);
-                                        });
-                                    } else {
-                                        js::apply_slash(insert, 1 + query_len);
-                                    }
+                                    spawn(async move {
+                                        let snippet = dates::fill_placeholders(&insert).await;
+                                        js::apply_slash(snippet, 1 + query_len);
+                                    });
                                 },
                                 on_template: move |meta: TemplateMeta| {
                                     let query_len = slash_query().unwrap_or_default().len();
@@ -1988,6 +1996,24 @@ fn EditorPane(
                             }
                         }
                     }
+                }
+            }
+
+            // ── Task metadata menu (focused pane only) ──
+            if is_focused && task_menu_open() {
+                TaskMenu {
+                    on_select: move |insert: String| {
+                        task_menu_open.set(false);
+                        js::dismiss_task_menu();
+                        spawn(async move {
+                            let snippet = dates::fill_placeholders(&insert).await;
+                            js::apply_slash(snippet, 0);
+                        });
+                    },
+                    on_close: move |()| {
+                        task_menu_open.set(false);
+                        js::dismiss_task_menu();
+                    },
                 }
             }
         }

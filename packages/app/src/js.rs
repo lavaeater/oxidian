@@ -24,6 +24,7 @@ mod bindings {
         download_file,
         get_selection,
         slash_query, apply_slash,
+        task_menu_armed, dismiss_task_menu,
         build_signin_link, read_signin_link, request_persistent_storage,
         get_drag_data, set_drag_data, clear_drag_data,
     });
@@ -225,6 +226,21 @@ pub fn apply_slash(snippet: impl Into<String>, slash_len: usize) {
     let snippet = snippet.into();
     spawn(async move {
         let _: Result<(), _> = bindings::apply_slash(snippet, slash_len).await;
+    });
+}
+
+// ── Task metadata menu ────────────────────────────────────────────────────────
+
+/// Whether the caret sits on a blank task line just created by continuing a
+/// non-empty task via Enter — the trigger for the task-metadata menu.
+pub async fn task_menu_armed() -> bool {
+    bindings::task_menu_armed().await.unwrap_or(false)
+}
+
+/// Dismisses the task-metadata menu without changing any text.
+pub fn dismiss_task_menu() {
+    spawn(async move {
+        let _: Result<(), _> = bindings::dismiss_task_menu().await;
     });
 }
 

@@ -751,6 +751,69 @@ kbd {
 .slash-name { font-size: 0.9rem; color: var(--text); min-width: 90px; }
 .slash-desc { font-size: 0.8rem; color: var(--text-muted); }
 
+/* ── Task metadata menu ── */
+/* Same fixed-centre placement as .slash-overlay/.slash-menu — see that comment. */
+.task-menu-overlay {
+  position: fixed; inset: 0; z-index: 200;
+  pointer-events: none;
+}
+.task-menu {
+  position: fixed;
+  bottom: 40%;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.45);
+  min-width: 220px;
+  pointer-events: all;
+}
+.task-menu-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 14px; cursor: pointer;
+  transition: background 80ms;
+}
+.task-menu-item:hover { background: var(--bg3); }
+.task-menu-emoji { font-size: 1rem; }
+.task-menu-name { font-size: 0.9rem; color: var(--text); }
+
+.task-menu-date-header { padding: 4px; border-bottom: 1px solid var(--border); }
+.task-menu-back {
+  background: none; border: none; cursor: pointer;
+  font-size: 0.85rem; color: var(--text-muted); padding: 6px 10px;
+}
+.task-menu-back:hover { color: var(--text); }
+
+/* dioxus-primitives calendar (see packages/ui/src/task_date_picker.rs) renders
+   plain, unclassed semantic HTML (table[role=grid], th/td, button[data-*]) —
+   style it by element/attribute, scoped under this wrapper. */
+.task-date-picker { padding: 8px 10px 10px; }
+.task-date-picker > div > div:first-child {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 8px;
+}
+.task-date-picker button {
+  background: none; border: none; color: var(--text); cursor: pointer;
+  font-size: 0.85rem; border-radius: 4px; padding: 4px 8px;
+}
+.task-date-picker button:hover { background: var(--bg3); }
+.task-date-picker table[role="grid"] { border-collapse: collapse; width: 100%; }
+.task-date-picker th {
+  font-size: 0.7rem; color: var(--text-muted); font-weight: 500; padding: 2px 4px;
+}
+.task-date-picker td { text-align: center; padding: 1px; }
+.task-date-picker td button {
+  width: 28px; height: 28px; padding: 0; font-size: 0.82rem;
+}
+.task-date-picker td button[data-month="last"],
+.task-date-picker td button[data-month="next"] { color: var(--text-muted); }
+.task-date-picker td button[data-today="true"] { border: 1px solid var(--border); }
+.task-date-picker td button[data-selected="true"] {
+  background: var(--accent, var(--bg3)); color: var(--bg1, #fff);
+}
+
 /* ── Backlinks panel ── */
 .backlinks-panel { padding: 4px 0; }
 

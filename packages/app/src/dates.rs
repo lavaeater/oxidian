@@ -29,6 +29,18 @@ pub async fn today() -> String {
     format!("{y:04}-{m:02}-{d:02}")
 }
 
+/// Substitutes `{{today}}` / `{{tomorrow}}` in a snippet with real dates.
+/// Shared by the slash menu and the task-metadata menu, whose built-in
+/// commands carry the same placeholders (see `views::slash` / `views::task_menu`).
+pub async fn fill_placeholders(text: &str) -> String {
+    if !text.contains("{{today}}") && !text.contains("{{tomorrow}}") {
+        return text.to_string();
+    }
+    let today = today().await;
+    let tomorrow = add_days(&today, 1);
+    text.replace("{{today}}", &today).replace("{{tomorrow}}", &tomorrow)
+}
+
 /// Date variables as a JSON string, matching the shape parsed by
 /// `TemplateVars::from_json` (`year`, `yearShort`, `month`, `monthName`,
 /// `date`, `dayName`, `week`). Never returns empty.
