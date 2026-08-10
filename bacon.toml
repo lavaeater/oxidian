@@ -18,8 +18,15 @@ need_stdout = false
 command = ["cargo", "check", "--all-targets"]
 need_stdout = false
 
-[jobs.clippy-client]
+[jobs.clippy]
 command = ["cargo", "clippy", "--package", "web", "--features", "web"]
+need_stdout = false
+
+[jobs.clippy-pedantic]
+command = [
+    "cargo", "clippy", "--package", "web", "--features", "web",
+    "--", "-W", "clippy::pedantic",
+]
 need_stdout = false
 
 [jobs.nextest]
@@ -56,7 +63,8 @@ command = [
 need_stdout = true
 
 [keybindings]
-c = "job:clippy-client"
+c = "job:clippy"
+p = "job:clippy-pedantic"
 t = "job:nextest"
 v = "job:nextest-cov"
 e = "job:e2e"
