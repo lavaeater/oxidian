@@ -146,7 +146,29 @@ export function setup_keyboard(id) {
     if (!el || el.dataset.kbSetup) return;
     el.dataset.kbSetup = '1';
 
+    // Space on a task line offers the task-metadata menu (due date, priority,
+    // done). Obsidian triggers on space too, and although it fires often, it
+    // fires *while you are still on the task you mean* — which is the whole
+    // point. Enter used to arm it, and that was backwards: Enter also moves the
+    // caret to the next line, so the menu appeared for a task you had already
+    // left.
+    //
+    // The space itself is never intercepted: it types normally, and the menu is
+    // purely additive. `updateTaskMenuArm` disarms the moment you type anything
+    // else, so ignoring it costs one keystroke.
     el.addEventListener('keydown', function (e) {
+        if (e.key === ' ' && !e.ctrlKey && !e.metaKey && !e.isComposing) {
+            const [text, cursor] = lineTextAndCursor(el);
+            if (cursor >= 0) {
+                const ls = text.lastIndexOf('\n', cursor - 1) + 1;
+                let le = text.indexOf('\n', cursor);
+                if (le < 0) le = text.length;
+                // Only at the end of a task line: mid-line, a space is just a
+                // space between words, and popping a menu there would be noise.
+                el._armTaskMenu = cursor === le && /^\s*[-*+] \[[ xX]\] /.test(text.slice(ls, le));
+            }
+            return;
+        }
         // ctrl/meta+Enter may be a shortcut elsewhere; IME Enter confirms a
         // composition rather than inserting a line.
         if (e.key !== 'Enter' || e.ctrlKey || e.metaKey || e.isComposing) return;
@@ -162,10 +184,9 @@ export function setup_keyboard(id) {
         // newline, so it never continues a list).
         let marker = null;   // marker to start the continued item with
         let markerLen = 0;   // length of this line's existing marker
-        let isTask = false;  // this line's marker is specifically a task checkbox
         if (!e.shiftKey) {
             const taskM = line.match(/^(\s*[-*+] )\[[ xX]\] /);
-            if (taskM) { markerLen = taskM[0].length; marker = taskM[1] + '[ ] '; isTask = true; }
+            if (taskM) { markerLen = taskM[0].length; marker = taskM[1] + '[ ] '; }
             else {
                 const olM = line.match(/^(\s*)(\d+)\. /);
                 if (olM) { markerLen = olM[0].length; marker = olM[1] + (parseInt(olM[2]) + 1) + '. '; }
@@ -181,19 +202,11 @@ export function setup_keyboard(id) {
             // Empty item → exit the list: drop the marker, no new line.
             newText = text.slice(0, lineStart) + text.slice(lineStart + markerLen);
             newCursor = lineStart;
-            el._armTaskMenu = false;
         } else if (marker) {
             // Continue the list: newline + next marker at the caret.
             const ins = '\n' + marker;
             newText = text.slice(0, cursor) + ins + text.slice(cursor);
             newCursor = cursor + ins.length;
-            // Continuing a *task* line that had content arms the task-metadata
-            // menu (`app`'s `task_menu_armed()` polls this) for the fresh blank
-            // task line just created. `updateTaskMenuArm` (called from
-            // `read_state`, below) disarms it the moment that line stops being
-            // an exact empty task item — typing into it, or Enter again to exit
-            // the list (the branch above, which disarms directly).
-            if (isTask) el._armTaskMenu = true;
         } else {
             // Plain newline (covers Shift+Enter and non-list lines).
             newText = text.slice(0, cursor) + '\n' + text.slice(cursor);
@@ -312,12 +325,12 @@ export function read_state(id) {
     return cursor + "\n" + text;
 }
 
-// Keeps `el._armTaskMenu` accurate as the user keeps typing: it's set true
-// only right after Enter continues a task line (see `setup_keyboard`), and
-// stays true only while the caret still sits on that exact empty task item
-// ("- [ ] ", nothing after). `app`'s `task_menu_armed()` (in `oxidian.js`)
-// polls this flag directly off the DOM element to decide whether to show the
-// task-metadata menu.
+// Keeps `el._armTaskMenu` accurate as the user keeps typing: it's set true by
+// space at the end of a task line (see `setup_keyboard`), and stays true only
+// while the caret is still sitting right after that space. Typing any character
+// disarms it — which is the "start typing and it goes away" behaviour — as does
+// moving off the line. `app`'s `task_menu_armed()` (in `oxidian.js`) polls this
+// flag directly off the DOM element to decide whether to show the menu.
 function updateTaskMenuArm(el, text, cursor) {
     if (!el._armTaskMenu) return;
     if (cursor < 0) { el._armTaskMenu = false; return; }
@@ -325,7 +338,9 @@ function updateTaskMenuArm(el, text, cursor) {
     let lineEnd = text.indexOf('\n', cursor);
     if (lineEnd < 0) lineEnd = text.length;
     const line = text.slice(lineStart, lineEnd);
-    const stillArmed = cursor === lineEnd && /^\s*[-*+] \[ \] $/.test(line);
+    const stillArmed = cursor === lineEnd
+        && /^\s*[-*+] \[[ xX]\] /.test(line)
+        && line.endsWith(' ');
     if (!stillArmed) el._armTaskMenu = false;
 }
 

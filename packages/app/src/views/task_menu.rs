@@ -1,12 +1,15 @@
-//! The Enter-triggered task-metadata menu (Obsidian-Tasks-style emoji entry).
+//! The space-triggered task-metadata menu (Obsidian-Tasks-style emoji entry).
 //!
-//! Triggered when the caret lands on a blank task line ("- [ ] ") that Enter
-//! just created by continuing a non-empty task — see `js::task_menu_armed()`
-//! and the arming logic in `ui`'s `markdown_area.js`. Offers exactly the
-//! metadata `index::tasks` actually parses: due date, priority, done-today.
-//! Pressing Enter again without picking anything just falls through to the
-//! editor's normal "empty item → exit the list" behaviour, since we never
-//! intercept that keystroke — the menu simply stops matching on the next poll.
+//! Shown while the caret sits at the end of a task line right after a space —
+//! see `js::task_menu_armed()` and the arming logic in `ui`'s
+//! `markdown_area.js`. Offers exactly the metadata `index::tasks` actually
+//! parses: due date, priority, done-today.
+//!
+//! Space rather than Enter, because Enter also moves the caret to the next
+//! line: the menu would offer to annotate a task you had already finished and
+//! left. Space fires more often, which is the price of it firing at the moment
+//! you can still act on it. Nothing is intercepted — keep typing and the menu
+//! disarms on the next poll, so ignoring it never costs more than a keystroke.
 
 use dioxus::prelude::*;
 use ui::TaskDatePicker;
