@@ -147,14 +147,120 @@ pub fn blob_remove(key: &str) {
 /// `(usage, quota)` in bytes. Native has no quota, so only the store's own
 /// footprint is reported and the quota is `-1` ("not applicable").
 pub fn usage() -> (i64, i64) {
-    let dir = base_dir();
-    let total: u64 = std::fs::read_dir(&dir)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter_map(|e| e.metadata().ok())
-        .filter(std::fs::Metadata::is_file)
-        .map(|m| m.len())
-        .sum();
+    fn dir_size(dir: &std::path::Path) -> u64 {
+        std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|e| {
+                let meta = e.metadata().ok()?;
+                Some(if meta.is_dir() { dir_size(&e.path()) } else { meta.len() })
+            })
+            .sum()
+    }
+    let total = dir_size(&base_dir());
     (i64::try_from(total).unwrap_or(i64::MAX), -1)
+}
+
+// ── Per-note index records ────────────────────────────────────────────────────
+// One file per note, mirroring IndexedDB's `pages` store on web. Saving a note
+// rewrites one small file instead of the whole index — which now carries every
+// note's text for search, so it is roughly vault-sized.
+
+fn records_dir() -> PathBuf {
+    let dir = base_dir().join("pages");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
+/// Note path → filename, reversibly.
+///
+/// Percent-encoding rather than "replace awkward characters with `_`": that
+/// would map `a/b.md` and `a_b.md` onto the same file, and one note would
+/// silently overwrite the other's record.
+fn encode_key(key: &str) -> String {
+    use std::fmt::Write;
+    let mut out = String::with_capacity(key.len());
+    for b in key.bytes() {
+        if b.is_ascii_alphanumeric() || b == b'-' || b == b'.' {
+            out.push(b as char);
+        } else {
+            let _ = write!(out, "%{b:02X}");
+        }
+    }
+    out
+}
+
+fn decode_key(name: &str) -> Option<String> {
+    let bytes = name.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            let hex = name.get(i + 1..i + 3)?;
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+pub fn records_all() -> Vec<(String, String)> {
+    let Ok(entries) = std::fs::read_dir(records_dir()) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().into_string().ok()?;
+            let key = decode_key(&name)?;
+            let value = std::fs::read_to_string(e.path()).ok()?;
+            Some((key, value))
+        })
+        .collect()
+}
+
+pub fn records_put(entries: &[(String, String)]) {
+    let dir = records_dir();
+    for (key, value) in entries {
+        if let Err(e) = std::fs::write(dir.join(encode_key(key)), value) {
+            console_log(&format!("[oxidian] record write failed: {e}"));
+        }
+    }
+}
+
+pub fn records_delete(keys: &[String]) {
+    let dir = records_dir();
+    for key in keys {
+        let _ = std::fs::remove_file(dir.join(encode_key(key)));
+    }
+}
+
+pub fn records_clear() {
+    let _ = std::fs::remove_dir_all(records_dir());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{decode_key, encode_key};
+
+    #[test]
+    fn record_keys_round_trip_and_never_collide() {
+        for key in ["a/b.md", "a_b.md", "Åsa's note.md", "x.md", "deep/a/b/c.md"] {
+            assert_eq!(decode_key(&encode_key(key)).as_deref(), Some(key), "{key}");
+        }
+        // The collision a naive sanitiser would produce.
+        assert_ne!(encode_key("a/b.md"), encode_key("a_b.md"));
+        // Encoded names stay filename-safe.
+        assert!(!encode_key("a/b.md").contains('/'));
+    }
+
+    #[test]
+    fn a_malformed_filename_is_skipped_rather_than_panicking() {
+        assert_eq!(decode_key("%ZZ"), None);
+        assert_eq!(decode_key("%"), None);
+    }
 }

@@ -27,7 +27,7 @@ Below is a detailed status for every user story.
 | US 9.1 | **Export as HTML** — standalone single-note export | ✅ Done |
 | US 2.1 / 2.2 | **Command Palette** (Ctrl/⌘-P) — fuzzy command search + reusable global keyboard-shortcut framework (`shortcuts.rs`) | ✅ Done |
 | US 10.1 / 10.2 | **Quick Switcher** — fuzzy file search modal (Ctrl/⌘-O) | ✅ Done |
-| US 11.1 | **Global search** — full-text search across all notes | ✅ Done |
+| US 11.1 | **Global search** — full-text search across all notes, served from the local index (`index::search`; see `docs/dataview.md` §12). Was GitHub code-search, which the browser blocks on CORS. | ✅ Done |
 | US 12.1 | **Slash commands** — `/` menu for tables, callouts, etc. | ✅ Done |
 | US 16.1 / 16.2 | **Word count** — live word count in editor status bar | ✅ Done |
 | US 17.1 | **Formatting toolbar** — floating Bold/Italic/Heading/List toolbar | ✅ Done |

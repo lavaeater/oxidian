@@ -592,9 +592,6 @@ kbd {
 }
 .search-input:focus { border-color: var(--accent); }
 .search-input::placeholder { color: var(--text-muted); }
-.search-spinner { color: var(--text-muted); font-size: 0.9rem; animation: spin 1s linear infinite; }
-@keyframes spin { to { transform: rotate(360deg); } }
-.search-error { padding: 10px; color: var(--danger); font-size: 0.82rem; }
 .search-empty { padding: 10px 14px; color: var(--text-muted); font-size: 0.85rem; }
 .search-results { overflow-y: auto; flex: 1; }
 .search-item {
@@ -604,7 +601,23 @@ kbd {
   transition: background 80ms;
 }
 .search-item:hover { background: var(--bg3); }
-.search-item-name { font-size: 0.88rem; color: var(--text); margin-bottom: 2px; }
+.search-item-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+.search-item-name { font-size: 0.88rem; color: var(--text); }
+/* Where the match was — a title hit and a body hit look very different to a
+   reader scanning results. */
+.search-item-kind {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  flex: 0 0 auto;
+}
 .search-item-fragment {
   font-size: 0.78rem;
   color: var(--text-muted);

@@ -24,6 +24,7 @@
 pub mod dql;
 pub mod extract;
 pub mod frontmatter;
+pub mod search;
 pub mod tasks;
 pub mod value;
 
@@ -39,7 +40,20 @@ pub use tasks::{Priority, Task};
 /// Bumped whenever the on-disk shape changes; a mismatch discards the cache
 /// rather than trying to migrate it. Safe, because the index is only ever a
 /// cache of the repo — throwing it away costs one slow refresh, never data.
-const FORMAT_VERSION: u32 = 1;
+// 2 adds `PageData::text` (the note body) so search can run locally. An index
+// written by an older build lacks it and is discarded rather than half-usable:
+// `from_json` returns an empty index on a version mismatch and the next refresh
+// rebuilds it.
+pub const FORMAT_VERSION: u32 = 2;
+
+/// What an [`Index::apply`] changed, so the caller can persist just that.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Changed {
+    /// Notes written or rewritten.
+    pub updated: Vec<String>,
+    /// Notes that left the vault and must be dropped from the store too.
+    pub removed: Vec<String>,
+}
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Index {
@@ -54,8 +68,12 @@ impl Index {
         Self { version: FORMAT_VERSION, pages: BTreeMap::new() }
     }
 
-    /// Restore from persisted JSON. An unreadable or outdated payload yields an
-    /// empty index, which just means the next refresh reads everything.
+    /// Restore from a whole-index JSON payload. An unreadable or outdated
+    /// payload yields an empty index, which just means the next refresh reads
+    /// everything.
+    ///
+    /// Only used to adopt an index written by a build that stored it as one
+    /// blob; the store is per-note now (`from_records`).
     pub fn from_json(raw: &str) -> Self {
         match serde_json::from_str::<Index>(raw) {
             Ok(idx) if idx.version == FORMAT_VERSION => idx,
@@ -63,8 +81,27 @@ impl Index {
         }
     }
 
-    pub fn to_json(&self) -> Option<String> {
-        serde_json::to_string(self).ok()
+    /// Rebuild from persisted per-note records, `(path, json)`.
+    ///
+    /// A record that won't parse is dropped rather than failing the load: the
+    /// index is a cache, so one bad record costs one re-read of one note, and
+    /// the alternative — discarding the whole vault's index — costs far more.
+    pub fn from_records<I>(records: I) -> Self
+    where
+        I: IntoIterator<Item = (String, String)>,
+    {
+        let mut idx = Self::new();
+        for (path, json) in records {
+            if let Ok(page) = serde_json::from_str::<PageData>(&json) {
+                idx.pages.insert(path, page);
+            }
+        }
+        idx
+    }
+
+    /// One note's persisted form.
+    pub fn page_json(&self, path: &str) -> Option<String> {
+        self.pages.get(path).and_then(|p| serde_json::to_string(p).ok())
     }
 
     pub fn len(&self) -> usize {
@@ -94,16 +131,29 @@ impl Index {
 
     /// Fold freshly-read `(path, content)` pairs in, then forget any note no
     /// longer present in `files`.
-    pub fn apply(&mut self, fresh: Vec<(String, String)>, files: &[FileMeta]) {
+    ///
+    /// Reports exactly what moved so the caller can persist that and nothing
+    /// else — the difference between a write proportional to the change and one
+    /// proportional to the vault.
+    pub fn apply(&mut self, fresh: Vec<(String, String)>, files: &[FileMeta]) -> Changed {
         let sha_by_path: BTreeMap<&str, &str> =
             notes(files).map(|f| (f.path.as_str(), f.sha.as_str())).collect();
+        let mut updated = Vec::with_capacity(fresh.len());
         for (path, content) in fresh {
             let sha = sha_by_path.get(path.as_str()).copied().unwrap_or_default();
             self.pages.insert(path.clone(), extract::extract(&path, sha, &content));
+            updated.push(path);
         }
         let present: HashSet<&str> = sha_by_path.keys().copied().collect();
+        let removed: Vec<String> = self
+            .pages
+            .keys()
+            .filter(|p| !present.contains(p.as_str()))
+            .cloned()
+            .collect();
         self.pages.retain(|p, _| present.contains(p.as_str()));
         self.version = FORMAT_VERSION;
+        Changed { updated, removed }
     }
 
     /// Insert or replace a single note from content the caller already holds,
@@ -289,9 +339,12 @@ mod tests {
     }
 
     #[test]
-    fn json_round_trips_and_rejects_a_foreign_payload() {
+    fn a_whole_index_payload_is_still_readable_for_migration() {
+        // The store is per-note now; this path exists only to adopt an index
+        // left behind by a build that wrote it as one blob.
         let (idx, files) = seeded();
-        let back = Index::from_json(&idx.to_json().unwrap());
+        let whole = serde_json::to_string(&idx).unwrap();
+        let back = Index::from_json(&whole);
         assert_eq!(back.len(), 3);
         assert!(back.stale(&files).is_empty());
 
@@ -299,6 +352,55 @@ mod tests {
         // rather than to wrong answers.
         assert!(Index::from_json("not json").is_empty());
         assert!(Index::from_json(r#"{"version":0,"pages":{}}"#).is_empty());
+    }
+
+    #[test]
+    fn records_round_trip_one_note_at_a_time() {
+        let (idx, files) = seeded();
+        let records: Vec<(String, String)> = idx
+            .pages()
+            .map(|p| (p.path.clone(), idx.page_json(&p.path).unwrap()))
+            .collect();
+
+        let back = Index::from_records(records);
+        assert_eq!(back.len(), 3);
+        // Restored well enough that nothing needs re-reading.
+        assert!(back.stale(&files).is_empty());
+        assert_eq!(back.tasks().len(), idx.tasks().len());
+    }
+
+    #[test]
+    fn one_unreadable_record_costs_only_that_note() {
+        // Dropping the whole vault's index over a single bad record would turn a
+        // one-note re-read into a full re-download.
+        let (idx, _) = seeded();
+        let good = idx.pages().next().unwrap();
+        let back = Index::from_records(vec![
+            (good.path.clone(), idx.page_json(&good.path).unwrap()),
+            ("broken.md".to_string(), "{{{".to_string()),
+        ]);
+        assert_eq!(back.len(), 1);
+        assert!(back.get(&good.path).is_some());
+        assert!(back.get("broken.md").is_none());
+    }
+
+    #[test]
+    fn apply_reports_exactly_what_it_changed() {
+        let (mut idx, files) = seeded();
+        let paths: Vec<String> = files.iter().map(|f| f.path.clone()).collect();
+
+        // Re-reading one note reports one update and nothing removed.
+        let changed = idx.apply(vec![(paths[0].clone(), "# New".into())], &files);
+        assert_eq!(changed.updated, vec![paths[0].clone()]);
+        assert!(changed.removed.is_empty());
+
+        // A note that left the listing is reported as removed, so the caller
+        // can delete its record rather than leaking it forever.
+        let fewer: Vec<FileMeta> = files.iter().filter(|f| f.path != paths[1]).cloned().collect();
+        let changed = idx.apply(vec![], &fewer);
+        assert!(changed.updated.is_empty());
+        assert_eq!(changed.removed, vec![paths[1].clone()]);
+        assert!(idx.get(&paths[1]).is_none());
     }
 
     #[test]

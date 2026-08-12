@@ -18,6 +18,7 @@ mod bindings {
     use_js!("assets/oxidian.js"::{
         ls_get, ls_set, ls_remove,
         blob_get, blob_set, blob_remove, storage_estimate,
+        records_all, records_put, records_delete, records_clear,
         today, date_vars,
         confirm_dialog, copy_to_clipboard,
         focus_selector, scroll_active_into_view, start_sidebar_resize,
@@ -121,6 +122,68 @@ pub async fn blob_remove(key: &str) {
     #[cfg(not(target_arch = "wasm32"))]
     {
         crate::native_store::blob_remove(key);
+    }
+}
+
+// ── Per-note index records ────────────────────────────────────────────────────
+
+// The index is stored one record per note (IndexedDB's `pages` store on web, a
+// file each on native) so saving a note costs one small write rather than a
+// rewrite of the whole index. Every call is a single batched transaction —
+// seeding a vault is thousands of records.
+
+/// Every record, as `(path, json)`.
+#[allow(clippy::unused_async)] // native branch has no await; wasm32 branch does
+pub async fn records_all() -> Vec<(String, String)> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        bindings::records_all().await.unwrap_or_default()
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        crate::native_store::records_all()
+    }
+}
+
+#[allow(clippy::unused_async)] // native branch has no await; wasm32 branch does
+pub async fn records_put(entries: Vec<(String, String)>) {
+    if entries.is_empty() {
+        return;
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _: Result<bool, _> = bindings::records_put(entries).await;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        crate::native_store::records_put(&entries);
+    }
+}
+
+#[allow(clippy::unused_async)] // native branch has no await; wasm32 branch does
+pub async fn records_delete(keys: Vec<String>) {
+    if keys.is_empty() {
+        return;
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _: Result<bool, _> = bindings::records_delete(keys).await;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        crate::native_store::records_delete(&keys);
+    }
+}
+
+#[allow(clippy::unused_async)] // native branch has no await; wasm32 branch does
+pub async fn records_clear() {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _: Result<bool, _> = bindings::records_clear().await;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        crate::native_store::records_clear();
     }
 }
 

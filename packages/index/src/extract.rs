@@ -28,6 +28,16 @@ pub struct PageData {
     /// `(level, text)` for every ATX heading.
     pub headings: Vec<(u8, String)>,
     pub tasks: Vec<Task>,
+    /// The note's body, verbatim and minus frontmatter — what full-text search
+    /// runs over.
+    ///
+    /// Keeping it costs storage but *no requests*: a refresh already downloads
+    /// every changed note in full to extract the rest of this struct. That is
+    /// what makes search local, instant, and offline — and it is the only way
+    /// to have search at all in the browser, where GitHub's code-search API is
+    /// unreachable across origins.
+    #[serde(default)]
+    pub text: String,
 }
 
 impl PageData {
@@ -116,6 +126,7 @@ pub fn extract(path: &str, sha: &str, content: &str) -> PageData {
         path: path.to_string(),
         sha: sha.to_string(),
         fields,
+        text: body.to_string(),
         tags,
         links,
         headings,

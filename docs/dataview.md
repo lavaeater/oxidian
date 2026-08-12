@@ -403,3 +403,84 @@ Recommended shape when phase 7 lands:
 - Keep it a *cache*: losing the key is never data loss, because the repo is the truth. That is what makes the whole scheme low-risk — a key that can be thrown away and regenerated is a very different engineering problem from one that must never be lost.
 
 Corollary worth stating plainly: **the token is the crown jewel, not the notes.** It grants write access to the whole repo, and it is stored in plaintext today (`native_store.rs`). If encryption effort is limited, spend it there first.
+
+## 12. Search, which the index turned out to also solve
+
+Search was a separate feature built on GitHub's code-search API. It could not
+work in the browser: `api.github.com/search/code` sends no
+`Access-Control-Allow-Origin` header, so the request is blocked before it is
+sent, and the web build is the priority target. It was also rate-limited to 30
+requests a minute, needed a round trip per keystroke, had no GitLab equivalent,
+and returned nothing offline.
+
+The index already holds everything search needs except the prose, and the
+refresh that builds it **already downloads every changed note in full** — so
+keeping the body (`PageData::text`) costs storage but not a single extra
+request. `index::search` is a pure pass over that:
+
+- All whitespace-separated terms must match (AND), each a case-insensitive
+  substring. Substring, not whole-word, so results narrow while you type.
+- Terms may match across title, headings, tags, or body.
+- Ranked by where the *first* term hit — title, then heading, then tag, then
+  body — then by how many body lines matched, then by path so ties are stable.
+- Frontmatter is not body text, or every note with a `tags:` key would match
+  "tags".
+
+No debounce, no spinner, no error state: it is a synchronous pass over data
+already in memory, so there is nothing to wait for and nothing to fail. The one
+honest caveat is that search covers what the index holds — a note it hasn't
+picked up yet won't appear. The storage footer's note count is the user's read
+on that, and Rebuild is the fix.
+
+**Cost.** The index now scales with the size of the vault's prose rather than
+its metadata: roughly vault-sized, so a 5 000-note vault lands in the low tens
+of MB. That is why it is stored per note rather than as one blob — see §13.
+
+`FORMAT_VERSION` went to 2 for this. An index written by an older build has no
+text and is discarded rather than left half-usable; the next refresh rebuilds it.
+
+
+## 13. Per-note records
+
+Storing the index as a single JSON blob made every save O(vault): read the whole
+blob, parse it, change one note, re-serialise, write it back. Tolerable when the
+index held only metadata; not once it carries every note's text for search.
+
+So the store is one record per note — IndexedDB's `pages` object store on web, a
+file each under `pages/` on native — and the live index is a `Signal` that the
+whole app shares rather than something reloaded per operation. A save now reads
+nothing and writes one record.
+
+`Index::apply` reports what it changed (`Changed { updated, removed }`) so a
+refresh persists exactly the notes that moved and deletes the records of notes
+that left the vault, instead of rewriting everything.
+
+Details worth keeping:
+
+- **Every store call is one batched transaction.** Seeding a vault is thousands
+  of records; a transaction per record is pathologically slow.
+- **Native filenames are percent-encoded, not sanitised.** Mapping awkward
+  characters to `_` would put `a/b.md` and `a_b.md` in the same file, and one
+  note would silently overwrite the other's record.
+- **A record that won't parse is dropped, not fatal.** One bad record costs one
+  note re-read; discarding the whole index costs a full re-download.
+- **An absent version stamp is not a version mismatch.** It means a build that
+  predates the stamp, whose blob we want to *adopt* — splitting it into records
+  costs zero note reads, where starting cold re-downloads the vault.
+
+### The bridge bug this uncovered
+
+`use_js!` emits an `await` only for JS functions declared `async`. A plain
+`function` that returns a Promise hands the *Promise* across the bridge, where
+it fails to deserialise and the Rust side quietly gets a default value.
+
+Every IndexedDB helper added in phase 1 was written that way. Writes appeared to
+work (the JS still ran), but **every read returned empty**, so the stored index
+was never actually loaded and each boot silently rebuilt it from the network.
+Nothing failed; it was just slow, and the phase-1 tests missed it because they
+inspected IndexedDB directly and a refresh repopulates it either way.
+
+The regression test is the one that pins the actual promise: **a reload must
+perform zero note reads.** Any future read that silently returns nothing fails
+there. `oxidian.js` carries a warning at the IndexedDB section, and the rule is
+simply: a promise-returning export must be `async`.

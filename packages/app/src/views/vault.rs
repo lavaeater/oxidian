@@ -8,7 +8,7 @@ use index::Index;
 use index::tasks::{self, Task};
 use dioxus::prelude::*;
 use ui::{MarkdownArea, MarkdownAreaVariant};
-use vault::{FileMeta, GithubConfig, SearchResult};
+use vault::{FileMeta, GithubConfig};
 
 use super::graph::GraphView;
 use super::kanban::KanbanBoard;
@@ -498,7 +498,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
         spawn(async move {
             vault_idx.set(crate::vault_index::load().await);
             if !listing.is_empty() {
-                vault_idx.set(crate::vault_index::refresh(&cfg, &listing).await);
+                crate::vault_index::refresh(vault_idx, &cfg, &listing).await;
             }
         });
     });
@@ -948,7 +948,6 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                         },
                         Panel::Search => rsx! {
                             SearchPanel {
-                                config: cfg_search,
                                 on_select: move |path: String| {
                                     open_focused(path);
                                     show_switcher.set(false);
@@ -1324,7 +1323,12 @@ fn human_bytes(n: u64) -> String {
 /// Returns the updated index, or `None` if the task could not be found or the
 /// write failed — in which case the optimistic flip was wrong and the next
 /// repaint corrects it.
-async fn write_task_toggle(cfg: &GithubConfig, task: &Task, today: &str) -> Option<Index> {
+async fn write_task_toggle(
+    idx: Signal<Index>,
+    cfg: &GithubConfig,
+    task: &Task,
+    today: &str,
+) -> Option<()> {
     let fc = vault::dispatch::read_file(cfg, &task.path).await.ok()?;
     let new_content = tasks::toggled_content(&fc.content, task, today)?;
     let name = task.path.rsplit('/').next().unwrap_or(&task.path);
@@ -1337,7 +1341,8 @@ async fn write_task_toggle(cfg: &GithubConfig, task: &Task, today: &str) -> Opti
     )
     .await
     .ok()?;
-    Some(crate::vault_index::update_page(&task.path, &new_sha, &new_content).await)
+    crate::vault_index::update_page(idx, &task.path, &new_sha, &new_content).await;
+    Some(())
 }
 
 /// Today's periodic note: the path it lives at, and the body to seed it with if
@@ -1380,13 +1385,15 @@ async fn todays_note(cfg: &GithubConfig, templates: &[TemplateMeta]) -> Option<(
 /// other order would drop it on the floor. Tasks already living in `dest` are
 /// skipped rather than moved onto themselves.
 ///
-/// Returns the refreshed index, or an error message fit to show the user.
+/// Updates the live index as it goes; returns an error message fit to show the
+/// user, or nothing on success.
 async fn move_tasks(
+    idx: Signal<Index>,
     cfg: &GithubConfig,
     tasks: &[Task],
     dest: &str,
     dest_body: &str,
-) -> Result<Index, String> {
+) -> Result<(), String> {
     let mut by_file: std::collections::BTreeMap<String, Vec<Task>> = std::collections::BTreeMap::default();
     for t in tasks.iter().filter(|t| t.path != dest) {
         by_file.entry(t.path.clone()).or_default().push(t.clone());
@@ -1430,14 +1437,14 @@ async fn move_tasks(
             .await
             .map_err(|e| format!("Could not create {dest}: {e}"))?,
     };
-    let mut idx = crate::vault_index::update_page(dest, &dest_new_sha, &dest_content).await;
+    crate::vault_index::update_page(idx, dest, &dest_new_sha, &dest_content).await;
 
     // Then the sources.
     for (path, content, sha) in &rewrites {
         let msg = format!("Move task(s) out of {}", path.rsplit('/').next().unwrap_or(path));
         match vault::dispatch::write_file(cfg, path, content, sha, &msg).await {
             Ok(new_sha) => {
-                idx = crate::vault_index::update_page(path, &new_sha, content).await;
+                crate::vault_index::update_page(idx, path, &new_sha, content).await;
             }
             Err(e) => {
                 return Err(format!(
@@ -1447,7 +1454,7 @@ async fn move_tasks(
             }
         }
     }
-    Ok(idx)
+    Ok(())
 }
 
 // ── Editor pane ─────────────────────────────────────────────────────────────
@@ -1494,7 +1501,7 @@ fn EditorPane(
     // paint of the note, so it must stay synchronous: it reads the in-memory
     // index and never touches the network. `today` is resolved once, up front,
     // because `dates::today` is async and the renderer cannot await.
-    let mut vault_idx = crate::vault_index::use_index();
+    let vault_idx = crate::vault_index::use_index();
     let mut today: Signal<Option<index::Date>> = use_signal(|| None);
     use_effect(move || {
         spawn(async move {
@@ -1593,9 +1600,7 @@ fn EditorPane(
         let cfg = cfg_action.clone();
         let today_str = today.peek().map_or_else(String::new, |d| d.to_string());
         spawn(async move {
-            if let Some(idx) = write_task_toggle(&cfg, &task, &today_str).await {
-                vault_idx.set(idx);
-            }
+            write_task_toggle(vault_idx, &cfg, &task, &today_str).await;
         });
     };
 
@@ -1683,7 +1688,7 @@ fn EditorPane(
                 )
                 .await
                 {
-                    vault_idx.set(crate::vault_index::update_page(old_p, &new_sha, &to_write).await);
+                    crate::vault_index::update_page(vault_idx, old_p, &new_sha, &to_write).await;
                     file_sha.set(new_sha);
                 }
             }
@@ -1752,7 +1757,7 @@ fn EditorPane(
             {
                 Ok(new_sha) => {
                     index.with_mut(|idx| idx.reindex_file(&path, &to_write));
-                    vault_idx.set(crate::vault_index::update_page(&path, &new_sha, &to_write).await);
+                    crate::vault_index::update_page(vault_idx, &path, &new_sha, &to_write).await;
                     file_sha.set(new_sha);
                     // Adopt the stamped text only if the user hasn't typed since
                     // the snapshot was taken — otherwise we would overwrite the
@@ -2269,77 +2274,65 @@ fn NewFolderModal(
     }
 }
 
-// ── IcoSearch panel ──────────────────────────────────────────────────────────────
+// ── Search panel ─────────────────────────────────────────────────────────────
 
+/// Full-text search, served entirely from the local index.
+///
+/// This used to call GitHub's code-search API, which the browser blocks: that
+/// endpoint sends no CORS headers, so every search failed with a network error
+/// on the web build — the priority target. Searching the index instead is
+/// instant, works offline, works on GitLab, and costs no requests, because the
+/// refresh that built the index already downloaded every note.
+///
+/// The trade-off is honest and worth stating: results cover what the index
+/// holds, so a note the index hasn't picked up yet won't appear. The footer's
+/// note count is the user's read on that, and Rebuild is the fix.
 #[component]
-fn SearchPanel(config: GithubConfig, on_select: EventHandler<String>) -> Element {
+fn SearchPanel(on_select: EventHandler<String>) -> Element {
+    let vault_idx = crate::vault_index::use_index();
     let mut query = use_signal(String::new);
-    let mut results: Signal<Vec<SearchResult>> = use_signal(Vec::new);
-    let mut searching = use_signal(|| false);
-    let mut search_error: Signal<Option<String>> = use_signal(|| None);
 
     use_effect(move || {
         js::focus_selector(".search-input");
     });
 
-    use_effect(move || {
-        let q = query();
-        let cfg = config.clone();
-        if q.trim().is_empty() {
-            results.set(vec![]);
-            return;
-        }
-        searching.set(true);
-        search_error.set(None);
-        spawn(async move {
-            sleep_ms(500).await;
-            if query() != q {
-                return;
-            }
-            match vault::github::search_code(&cfg, &q).await {
-                Ok(r) => results.set(r),
-                Err(e) => search_error.set(Some(e.to_string())),
-            }
-            searching.set(false);
-        });
-    });
-
-    let items: Vec<(String, String, String)> = results
-        .read()
-        .iter()
-        .map(|r| {
-            (
-                r.path.clone(),
-                r.path.rsplit('/').next().unwrap_or(&r.path).to_string(),
-                r.fragment.clone(),
-            )
-        })
-        .collect();
+    // No debounce and no spinner: this is a synchronous pass over data already
+    // in memory, so there is nothing to wait for.
+    let hits = use_memo(move || index::search::search(&vault_idx.read(), &query.read()));
+    let indexed = vault_idx.read().len();
 
     rsx! {
         div { class: "search-panel",
             div { class: "search-input-wrap",
                 input {
                     class: "search-input",
-                    placeholder: "IcoSearch notes…",
+                    placeholder: "Search notes…",
                     value: "{query}",
                     oninput: move |e| query.set(e.value()),
                 }
-                if searching() { span { class: "search-spinner", "⟳" } }
             }
-            if let Some(err) = search_error() {
-                div { class: "search-error", "{err}" }
-            } else if items.is_empty() && !query.read().is_empty() && !searching() {
+            if query.read().trim().is_empty() {
+                div { class: "sidebar-status", "Searching {indexed} indexed notes." }
+            } else if hits.read().is_empty() {
                 div { class: "search-empty", "No results." }
             } else {
                 div { class: "search-results",
-                    for (path, name, fragment) in items {
-                        div {
-                            class: "search-item",
-                            onclick: move |_| on_select(path.clone()),
-                            div { class: "search-item-name", "{name}" }
-                            if !fragment.is_empty() {
-                                div { class: "search-item-fragment", "{fragment}" }
+                    for hit in hits.read().iter().cloned() {
+                        {
+                            let path = hit.path.clone();
+                            rsx! {
+                                div {
+                                    key: "{hit.path}",
+                                    class: "search-item",
+                                    onclick: move |_| on_select(path.clone()),
+                                    div { class: "search-item-head",
+                                        span { class: "search-item-name", "{hit.title}" }
+                                        span { class: "search-item-kind", "{hit.kind.label()}" }
+                                    }
+                                    if !hit.fragment.is_empty() {
+                                        div { class: "search-item-fragment", "{hit.fragment}" }
+                                    }
+                                }
                             }
                         }
                     }
@@ -2587,7 +2580,7 @@ fn TasksView(
     let mut picking = use_signal(|| Option::<Vec<Task>>::None);
     // This view's scan refreshes the shared index, so publish it — every other
     // consumer (dataview blocks, most of all) gets the fresher data for free.
-    let mut vault_idx = crate::vault_index::use_index();
+    let vault_idx = crate::vault_index::use_index();
 
     // Today's date, for overdue styling (YYYY-MM-DD compares lexicographically).
     let today = use_resource(move || async move { crate::dates::today().await });
@@ -2600,9 +2593,8 @@ fn TasksView(
         let cfg = cfg_scan.clone();
         loading.set(true);
         spawn(async move {
-            let idx = crate::vault_index::refresh(&cfg, &snapshot).await;
-            let mut t = idx.tasks();
-            vault_idx.set(idx);
+            crate::vault_index::refresh(vault_idx, &cfg, &snapshot).await;
+            let mut t = vault_idx.peek().tasks();
             t.sort_by(tasks::cmp);
             all_tasks.set(t);
             loading.set(false);
@@ -2624,9 +2616,7 @@ fn TasksView(
         let cfg = cfg_toggle.clone();
         let today_now = today.read().as_deref().unwrap_or("").to_string();
         spawn(async move {
-            if let Some(idx) = write_task_toggle(&cfg, &task, &today_now).await {
-                vault_idx.set(idx);
-            }
+            write_task_toggle(vault_idx, &cfg, &task, &today_now).await;
         });
     });
 
@@ -2653,12 +2643,11 @@ fn TasksView(
                 moving.set(None);
                 return;
             };
-            match move_tasks(&cfg, &items, &path, &body).await {
-                Ok(idx) => {
-                    let mut t = idx.tasks();
+            match move_tasks(vault_idx, &cfg, &items, &path, &body).await {
+                Ok(()) => {
+                    let mut t = vault_idx.peek().tasks();
                     t.sort_by(tasks::cmp);
                     all_tasks.set(t);
-                    vault_idx.set(idx);
                     // The destination may be brand new; keep the sidebar honest.
                     if let Ok(mut list) = vault::dispatch::list_files(&cfg).await {
                         list.sort_by(|a, b| a.path.cmp(&b.path));

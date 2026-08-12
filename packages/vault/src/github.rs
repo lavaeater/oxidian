@@ -1,7 +1,7 @@
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::Deserialize;
 
-use crate::{FileContent, FileMeta, GithubConfig, SearchResult, VaultError};
+use crate::{FileContent, FileMeta, GithubConfig, VaultError};
 
 const API: &str = "https://api.github.com";
 
@@ -237,77 +237,6 @@ pub async fn write_file(
     Ok(written.content.sha)
 }
 
-// ── search_code ───────────────────────────────────────────────────────────────
-
-#[derive(Deserialize)]
-struct SearchResponse {
-    items: Vec<SearchItem>,
-}
-
-#[derive(Deserialize)]
-struct SearchItem {
-    path: String,
-    sha: String,
-    #[serde(default)]
-    text_matches: Vec<TextMatch>,
-}
-
-#[derive(Deserialize)]
-struct TextMatch {
-    fragment: String,
-}
-
-fn search_url(cfg: &GithubConfig, query: &str) -> String {
-    let q = format!("{} repo:{}/{}", query.trim(), cfg.owner, cfg.repo);
-    format!("{API}/search/code?q={}&per_page=30", urlencoded(&q))
-}
-
-/// Keep only markdown hits and lift the first text-match fragment per item.
-fn search_to_results(body: SearchResponse) -> Vec<SearchResult> {
-    body.items
-        .into_iter()
-        .filter(|i| {
-            std::path::Path::new(&i.path).extension().is_some_and(|e| e.eq_ignore_ascii_case("md"))
-        })
-        .map(|i| SearchResult {
-            path: i.path,
-            sha: i.sha,
-            fragment: i
-                .text_matches
-                .into_iter()
-                .next()
-                .map(|m| m.fragment)
-                .unwrap_or_default(),
-        })
-        .collect()
-}
-
-/// Full-text search across the repo using GitHub's Code Search API.
-/// Returns up to 30 results with matching text fragments.
-pub async fn search_code(cfg: &GithubConfig, query: &str) -> Result<Vec<SearchResult>, VaultError> {
-    if query.trim().is_empty() {
-        return Ok(vec![]);
-    }
-    let url = search_url(cfg, query);
-
-    let resp = reqwest::Client::new()
-        .get(&url)
-        .header("Authorization", format!("Bearer {}", cfg.token))
-        .header("User-Agent", "Oxidian/0.1")
-        // text-match media type returns matching fragments
-        .header("Accept", "application/vnd.github.text-match+json")
-        .send()
-        .await
-        .map_err(|e| VaultError::Http(e.to_string()))?;
-
-    let body: SearchResponse = check(resp)?
-        .json()
-        .await
-        .map_err(|e| VaultError::Http(e.to_string()))?;
-
-    Ok(search_to_results(body))
-}
-
 // ── read_many ─────────────────────────────────────────────────────────────────
 
 /// Fetch content of multiple files sequentially.
@@ -466,16 +395,6 @@ pub async fn get_username(token: &str) -> Result<String, VaultError> {
     Ok(user.login)
 }
 
-fn urlencoded(s: &str) -> String {
-    s.chars()
-        .flat_map(|c| match c {
-            ' ' => "+".chars().collect::<Vec<_>>(),
-            c if c.is_alphanumeric() || "-_.~".contains(c) => vec![c],
-            c => format!("%{:02X}", c as u32).chars().collect(),
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -502,16 +421,6 @@ mod tests {
         assert_eq!(
             contents_url(&cfg(), "sub/idea.md"),
             "https://api.github.com/repos/me/notes/contents/sub/idea.md"
-        );
-    }
-
-    #[test]
-    fn search_url_encodes_query_and_scopes_to_repo() {
-        let url = search_url(&cfg(), "hello world");
-        // Spaces -> '+', repo scope appended.
-        assert_eq!(
-            url,
-            "https://api.github.com/search/code?q=hello+world+repo%3Ame%2Fnotes&per_page=30"
         );
     }
 
@@ -579,23 +488,6 @@ mod tests {
     }
 
     #[test]
-    fn search_results_keep_md_and_lift_first_fragment() {
-        let json = r#"{"items":[
-            {"path":"note.md","sha":"a","text_matches":[{"fragment":"frag one"},{"fragment":"frag two"}]},
-            {"path":"code.rs","sha":"b","text_matches":[{"fragment":"x"}]},
-            {"path":"bare.md","sha":"c"}
-        ]}"#;
-        let body: SearchResponse = serde_json::from_str(json).unwrap();
-        let results = search_to_results(body);
-        assert_eq!(results.len(), 2);
-        assert_eq!(results[0].path, "note.md");
-        assert_eq!(results[0].fragment, "frag one");
-        // No text_matches -> empty fragment (serde default).
-        assert_eq!(results[1].path, "bare.md");
-        assert_eq!(results[1].fragment, "");
-    }
-
-    #[test]
     fn classify_poll_prefers_token() {
         assert_eq!(
             classify_poll(Some("gho_x".into()), Some("slow_down"), Some(5)),
@@ -612,12 +504,6 @@ mod tests {
         // Unknown/absent error while still waiting.
         assert_eq!(classify_poll(None, Some("authorization_pending"), None), PollOutcome::Pending);
         assert_eq!(classify_poll(None, None, None), PollOutcome::Pending);
-    }
-
-    #[test]
-    fn urlencoded_matches_github_query_rules() {
-        assert_eq!(urlencoded("a b/c"), "a+b%2Fc");
-        assert_eq!(urlencoded("keep-_.~"), "keep-_.~");
     }
 
     #[test]
