@@ -426,6 +426,29 @@ request. `index::search` is a pure pass over that:
 - Frontmatter is not body text, or every note with a `tags:` key would match
   "tags".
 
+**Filters (US 11.2).** A token of the form `field:value` constrains *which*
+notes can match rather than adding a term: `path:` (substring of the full path),
+`file:` (substring of the filename), `tag:` (prefix of a tag). Filters and terms
+are all ANDed, so `coffee path:notes tag:drink` reads the way it looks.
+
+Three decisions worth recording:
+
+- **`tag:` is a prefix match, not a substring**, so `tag:project` finds the
+  subtag `project/oxidian` but not the unrelated `side-project` — while a
+  half-typed `tag:proj` still narrows as you go. A leading `#` is optional.
+- **A query of filters alone is legitimate.** "Every daily note" is a real
+  question with no search term in it, so `tag:daily` lists everything that
+  passes instead of returning nothing.
+- **An unknown prefix stays ordinary text.** `https://example.com` is a token
+  with a colon in it; treating it as a filter would make every note mentioning
+  a URL unfindable. By the same logic a half-typed `tag:` is dropped rather than
+  matched as the empty string — it would otherwise match every note at the
+  moment you type the colon.
+
+Prefixes nobody can see don't get used, so the empty state lists them as
+buttons that type the prefix and hand focus back to the input — a real saving
+on a phone keyboard.
+
 No debounce, no spinner, no error state: it is a synchronous pass over data
 already in memory, so there is nothing to wait for and nothing to fail. The one
 honest caveat is that search covers what the index holds — a note it hasn't

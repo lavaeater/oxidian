@@ -2313,6 +2313,22 @@ fn SearchPanel(on_select: EventHandler<String>) -> Element {
             }
             if query.read().trim().is_empty() {
                 div { class: "sidebar-status", "Searching {indexed} indexed notes." }
+                // Nobody guesses a prefix that isn't shown to them. Clicking one
+                // types it, which matters most on a phone keyboard.
+                div { class: "search-hint",
+                    "Narrow with"
+                    for prefix in ["path:", "file:", "tag:"] {
+                        button {
+                            key: "{prefix}",
+                            class: "search-hint-chip",
+                            onclick: move |_| {
+                                query.set(prefix.to_string());
+                                js::focus_selector(".search-input");
+                            },
+                            "{prefix}"
+                        }
+                    }
+                }
             } else if hits.read().is_empty() {
                 div { class: "search-empty", "No results." }
             } else {

@@ -80,3 +80,50 @@ test("no results says so, and an empty query says what it would search", async (
   await page.locator(".search-input").fill("");
   await expect(page.locator(".search-panel")).toContainText("3 indexed notes");
 });
+
+test("a path: filter narrows results to a folder", async ({ page }) => {
+  await mockGitHub(page, VAULT);
+  await openSearch(page);
+
+  // "coffee" alone matches both the note and the journal entry; the filter
+  // drops the one outside notes/.
+  await page.locator(".search-input").fill("coffee");
+  await expect(page.locator(".search-item")).toHaveCount(2);
+
+  await page.locator(".search-input").fill("coffee path:notes");
+  const items = page.locator(".search-item");
+  await expect(items).toHaveCount(1);
+  await expect(items.first()).toContainText("Coffee");
+});
+
+test("a tag: filter alone lists every note carrying the tag", async ({ page }) => {
+  await mockGitHub(page, VAULT);
+  await openSearch(page);
+
+  await page.locator(".search-input").fill("tag:drink");
+  const items = page.locator(".search-item");
+  await expect(items).toHaveCount(1);
+  await expect(items.first()).toContainText("Coffee");
+  await expect(items.first()).toContainText("#drink");
+});
+
+test("the empty state offers the filter prefixes, and clicking one types it", async ({ page }) => {
+  await mockGitHub(page, VAULT);
+  await openSearch(page);
+
+  const hint = page.locator(".search-hint");
+  await expect(hint).toBeVisible();
+
+  await hint.getByRole("button", { name: "tag:" }).click();
+  const input = page.locator(".search-input");
+  await expect(input).toHaveValue("tag:");
+  // Focus goes back to the input, or the chip would cost a tap on mobile
+  // rather than saving one.
+  await expect(input).toBeFocused();
+  // A half-typed filter must not blank the panel or match everything.
+  await expect(page.locator(".search-item")).toHaveCount(0);
+
+  // Finishing the filter from there works, so the chip is a real head start.
+  await input.fill("tag:drink");
+  await expect(page.locator(".search-item")).toHaveCount(1);
+});

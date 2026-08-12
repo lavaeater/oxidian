@@ -28,6 +28,7 @@ Below is a detailed status for every user story.
 | US 2.1 / 2.2 | **Command Palette** (Ctrl/⌘-P) — fuzzy command search + reusable global keyboard-shortcut framework (`shortcuts.rs`) | ✅ Done |
 | US 10.1 / 10.2 | **Quick Switcher** — fuzzy file search modal (Ctrl/⌘-O) | ✅ Done |
 | US 11.1 | **Global search** — full-text search across all notes, served from the local index (`index::search`; see `docs/dataview.md` §12). Was GitHub code-search, which the browser blocks on CORS. | ✅ Done |
+| US 11.2 | **Search filters** — `path:`, `file:`, `tag:` prefixes, ANDed with the free-text terms; filters alone are a valid query (`tag:daily`) | ✅ Done |
 | US 12.1 | **Slash commands** — `/` menu for tables, callouts, etc. | ✅ Done |
 | US 16.1 / 16.2 | **Word count** — live word count in editor status bar | ✅ Done |
 | US 17.1 | **Formatting toolbar** — floating Bold/Italic/Heading/List toolbar | ✅ Done |
@@ -58,7 +59,6 @@ Listed roughly by priority / dependency order. Filtered to the web + Android foc
 |----|---------|--------|
 | US 15.1 / 15.2 | **Templates** — folder setting + insert via slash/palette (*engine + daily-note done; general insertion remaining*) | Small–Medium |
 | US 14.1 / 14.2 | **Tags pane** — collects all `#tags`, click to search | Medium |
-| US 11.2 | Search filters (`path:`, `tag:`, `file:` prefixes) | Small |
 | US 3.2 / 3.3 | Weekly/Monthly notes; natural-language date parsing (`@today`, `@next friday`) | Medium |
 
 ### Medium priority — knowledge graph completeness
@@ -129,8 +129,7 @@ Ordered for the web + Android focus (no desktop/local-git dependencies):
 1. **Templates — general insertion** (US 15) — *in progress*: reuse the existing engine; expose "Insert template" via the Command Palette (and slash menu).
 2. **Tags pane** (US 14) — completes M2.
 3. **Hover preview** (US 7) — small effort, completes M5.
-4. **Search filters** (US 11.2) — small, makes search much more useful.
-5. **Weekly/Monthly notes + natural-language dates** (US 3.2/3.3) — completes M3.
+4. **Weekly/Monthly notes + natural-language dates** (US 3.2/3.3) — completes M3.
 
 *(Done: Command Palette + global keyboard-shortcut framework — US 2.)*
 

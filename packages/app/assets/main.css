@@ -593,6 +593,28 @@ kbd {
 .search-input:focus { border-color: var(--accent); }
 .search-input::placeholder { color: var(--text-muted); }
 .search-empty { padding: 10px 14px; color: var(--text-muted); font-size: 0.85rem; }
+/* Filter prefixes are invisible until someone knows they exist, so name them
+   in the empty state — as buttons, because typing `tag:` on a phone is work. */
+.search-hint {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 0 14px 10px;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+.search-hint-chip {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 6px;
+  color: var(--text-muted);
+  font-family: ui-monospace, monospace;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+.search-hint-chip:hover { border-color: var(--accent); color: var(--text); }
 .search-results { overflow-y: auto; flex: 1; }
 .search-item {
   padding: 7px 14px;
