@@ -16,7 +16,7 @@ fn encoded_path(path: &str) -> String {
 }
 
 fn get(url: &str, token: &str) -> reqwest::RequestBuilder {
-    reqwest::Client::new()
+    crate::http::client()
         .get(url)
         .header("PRIVATE-TOKEN", token)
         .header("User-Agent", "Oxidian/0.1")
@@ -129,7 +129,7 @@ pub async fn write_file(cfg: &GithubConfig, path: &str, content: &str, sha: &str
         "last_commit_id": sha,
     });
 
-    let resp = reqwest::Client::new()
+    let resp = crate::http::client()
         .put(&url)
         .header("PRIVATE-TOKEN", &cfg.token)
         .header("User-Agent", "Oxidian/0.1")
@@ -154,7 +154,7 @@ pub async fn create_file(cfg: &GithubConfig, path: &str, content: &str, message:
         "encoding": "base64",
     });
 
-    let resp = reqwest::Client::new()
+    let resp = crate::http::client()
         .post(&url)
         .header("PRIVATE-TOKEN", &cfg.token)
         .header("User-Agent", "Oxidian/0.1")
@@ -176,7 +176,7 @@ pub async fn delete_file(cfg: &GithubConfig, path: &str, sha: &str, message: &st
         "commit_message": message,
         "last_commit_id": sha,
     });
-    let resp = reqwest::Client::new()
+    let resp = crate::http::client()
         .delete(&url)
         .header("PRIVATE-TOKEN", &cfg.token)
         .header("User-Agent", "Oxidian/0.1")

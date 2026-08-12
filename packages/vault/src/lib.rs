@@ -1,5 +1,6 @@
 pub mod github;
 pub mod gitlab;
+mod http;
 
 pub use github::{DeviceCodeResponse, PollOutcome, request_device_code, poll_device_token, get_username};
 

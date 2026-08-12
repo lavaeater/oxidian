@@ -6,7 +6,7 @@ use crate::{FileContent, FileMeta, GithubConfig, VaultError};
 const API: &str = "https://api.github.com";
 
 fn request(method: reqwest::Method, url: &str, token: &str) -> reqwest::RequestBuilder {
-    reqwest::Client::new()
+    crate::http::client()
         .request(method, url)
         .header("Authorization", format!("Bearer {token}"))
         .header("User-Agent", "Oxidian/0.1")
@@ -350,7 +350,7 @@ fn classify_poll(access_token: Option<String>, error: Option<&str>, interval: Op
 }
 
 pub async fn request_device_code() -> Result<DeviceCodeResponse, VaultError> {
-    let resp = reqwest::Client::new()
+    let resp = crate::http::client()
         .post("https://github.com/login/device/code")
         .header("Accept", "application/json")
         .form(&[("client_id", GITHUB_CLIENT_ID), ("scope", "repo")])
@@ -369,7 +369,7 @@ pub async fn poll_device_token(device_code: &str) -> Result<PollOutcome, VaultEr
         error: Option<String>,
         interval: Option<u32>,
     }
-    let resp = reqwest::Client::new()
+    let resp = crate::http::client()
         .post("https://github.com/login/oauth/access_token")
         .header("Accept", "application/json")
         .form(&[
