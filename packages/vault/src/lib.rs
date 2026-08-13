@@ -162,6 +162,13 @@ pub struct GithubConfig {
     pub templates_dir: String,
     #[serde(default = "default_daily_note_template")]
     pub daily_note_template: String,
+    /// Templates for the weekly and monthly logs. Empty means "not configured",
+    /// which is the honest default: unlike the daily note there is no sensible
+    /// fallback path for a week, and guessing one would scatter notes.
+    #[serde(default)]
+    pub weekly_note_template: String,
+    #[serde(default)]
+    pub monthly_note_template: String,
 }
 
 fn default_branch() -> String { "main".to_string() }
