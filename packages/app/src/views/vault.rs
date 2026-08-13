@@ -1461,27 +1461,154 @@ async fn write_task_toggle(
 /// configured template it falls back to `YYYY-MM-DD.md` at the vault root, which
 /// is what that button does too.
 async fn todays_note(cfg: &GithubConfig, templates: &[TemplateMeta]) -> Option<(String, String)> {
-    let date_json = crate::dates::date_vars_json().await;
-    let vars = template::TemplateVars::from_json(&date_json, "", "");
+    periodic_note(cfg, templates, dates::Period::Day, "").await
+}
+
+/// The log note for `period` on `date` (`""` = today): where it lives, and the
+/// body to seed it with if it isn't there yet. Resolves without writing
+/// anything, which is what the migration review needs — it has to *read* the
+/// closing period's log before deciding whether there is anything to do.
+async fn periodic_note(
+    cfg: &GithubConfig,
+    templates: &[TemplateMeta],
+    period: dates::Period,
+    date: &str,
+) -> Option<(String, String)> {
+    let date = if date.is_empty() {
+        crate::dates::today().await
+    } else {
+        date.to_string()
+    };
+    let vars = template::TemplateVars::from_json(&crate::dates::date_vars_json_for(&date), "", "");
     if vars.year.is_empty() || vars.month.is_empty() || vars.date.is_empty() {
         return None;
     }
-    let tmpl = templates
-        .iter()
-        .find(|t| t.source_path == cfg.daily_note_template);
+    let tmpl_path = match period {
+        dates::Period::Day => &cfg.daily_note_template,
+        dates::Period::Week => &cfg.weekly_note_template,
+        dates::Period::Month => &cfg.monthly_note_template,
+    };
+    let tmpl = if tmpl_path.is_empty() {
+        None
+    } else {
+        templates.iter().find(|t| &t.source_path == tmpl_path)
+    };
     if let Some((t, fp)) = tmpl.and_then(|t| t.filepath.as_ref().map(|fp| (t, fp))) {
         let path = template::substitute_vars(fp, &vars)
             .trim_start_matches('/')
             .to_string();
         let body = template::strip_tabstops(&template::substitute_vars(&t.body, &vars));
         Some((path, body))
-    } else {
-        let date = crate::dates::today().await;
+    } else if period == dates::Period::Day {
+        // Same root-level fallback the "Today's note" button uses. Only the
+        // daily note has one; a week has no obvious home.
         if date.is_empty() {
             return None;
         }
         Some((format!("{date}.md"), format!("# {date}\n\n")))
+    } else {
+        None
     }
+}
+
+/// Resolve a period's open entries: re-mark each one where it stands, and — for
+/// the ones being carried forward — write a fresh open copy into `dest`.
+///
+/// This is *not* [`move_tasks`]. Migration never deletes the original line; it
+/// re-marks it, so the closing log keeps an honest record of what was on it and
+/// what became of each entry (`docs/bujo-roadmap.md` §5).
+///
+/// `carried` are the entries going forward (with an optional due date each, for
+/// scheduling); `resolved` are the ones being marked done or dropped in place.
+/// The destination is written **first**, for the same reason as `move_tasks`: a
+/// failure between the writes shows the entry in both logs, which is visible and
+/// fixable, rather than losing it.
+async fn migrate_tasks(
+    idx: Signal<Index>,
+    cfg: &GithubConfig,
+    carried: &[(Task, Option<String>)],
+    resolved: &[(Task, Status)],
+    dest: &str,
+    dest_body: &str,
+    today: &str,
+) -> Result<(), String> {
+    if carried.is_empty() && resolved.is_empty() {
+        return Err("Nothing to review.".to_string());
+    }
+
+    // Destination first, and only if something is actually going forward.
+    if !carried.is_empty() {
+        let lines: Vec<String> = carried
+            .iter()
+            .map(|(t, due)| tasks::carried_line(t, due.as_deref()))
+            .collect();
+        let dest_name = dest.rsplit('/').next().unwrap_or(dest);
+        let msg = format!("Migrate {} entr(y/ies) to {dest_name}", lines.len());
+        let (content, sha) = match vault::dispatch::read_file(cfg, dest).await {
+            Ok(fc) => (tasks::append_lines(&fc.content, &lines), Some(fc.sha)),
+            Err(_) => (tasks::append_lines(dest_body, &lines), None),
+        };
+        let new_sha = match sha {
+            Some(sha) => vault::dispatch::write_file(cfg, dest, &content, &sha, &msg)
+                .await
+                .map_err(|e| format!("Could not write {dest}: {e}"))?,
+            None => vault::dispatch::create_file(cfg, dest, &content, &msg)
+                .await
+                .map_err(|e| format!("Could not create {dest}: {e}"))?,
+        };
+        crate::vault_index::update_page(idx, dest, &new_sha, &content).await;
+    }
+
+    // Then re-mark the sources, one rewrite per file per status.
+    let mut by_file: std::collections::BTreeMap<String, Vec<(Task, Status)>> =
+        std::collections::BTreeMap::default();
+    for (t, due) in carried {
+        // Carrying forward with a date is scheduling; without one it's a plain
+        // migration. The marker records which, so the log reads back honestly.
+        let status = if due.is_some() { Status::Scheduled } else { Status::Migrated };
+        by_file.entry(t.path.clone()).or_default().push((t.clone(), status));
+    }
+    for (t, status) in resolved {
+        by_file.entry(t.path.clone()).or_default().push((t.clone(), *status));
+    }
+
+    for (path, items) in &by_file {
+        let fc = vault::dispatch::read_file(cfg, path)
+            .await
+            .map_err(|e| format!("Could not read {path}: {e}"))?;
+        let mut content = fc.content;
+        for status in [
+            Status::Migrated,
+            Status::Scheduled,
+            Status::Done,
+            Status::Dropped,
+        ] {
+            let batch: Vec<Task> = items
+                .iter()
+                .filter(|(_, s)| *s == status)
+                .map(|(t, _)| t.clone())
+                .collect();
+            if !batch.is_empty() {
+                content = tasks::set_status_many(&content, &batch, status, today);
+            }
+        }
+        let msg = format!(
+            "Review {}",
+            path.rsplit('/').next().unwrap_or(path)
+        );
+        match vault::dispatch::write_file(cfg, path, &content, &fc.sha, &msg).await {
+            Ok(new_sha) => {
+                crate::vault_index::update_page(idx, path, &new_sha, &content).await;
+            }
+            Err(e) => {
+                return Err(format!(
+                    "Carried forward, but could not update {path} ({e}) — \
+                     those entries are now open in both logs."
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Moves `tasks` out of the notes holding them and appends them to `dest`,
@@ -2952,6 +3079,143 @@ fn TasksView(
                                 }
                             }
                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// What the reviewer decided about one entry. `Carry` is a plain migration;
+/// `Schedule` carries it with a date, which is the same act aimed further out.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Decision {
+    Undecided,
+    Carry,
+    Schedule,
+    Done,
+    Drop,
+}
+
+/// The migration review: every open entry from the closing period, one row
+/// each, four ways out.
+///
+/// The friction is the feature. The method's claim is that touching each
+/// unfinished thing and deciding about it — rather than letting it roll over
+/// silently — is what keeps a list honest, so there is no "carry everything"
+/// default and nothing happens until Apply.
+#[component]
+fn MigrationReview(
+    /// The log being closed, e.g. `2026-W32`.
+    from_label: String,
+    /// The log entries are carried into, e.g. `2026-W33`.
+    to_label: String,
+    entries: Vec<Task>,
+    busy: bool,
+    on_apply: EventHandler<Vec<(Task, Decision, Option<String>)>>,
+    on_cancel: EventHandler<()>,
+) -> Element {
+    let mut decisions = use_signal(|| vec![Decision::Undecided; entries.len()]);
+    // One shared date for everything scheduled in this pass: in practice you
+    // push a batch of things to the same "not now, then".
+    let mut schedule_date = use_signal(String::new);
+
+    let decided = decisions.read().iter().filter(|d| **d != Decision::Undecided).count();
+    let scheduling = decisions.read().iter().any(|d| *d == Decision::Schedule);
+    let date_missing = scheduling && schedule_date.read().trim().is_empty();
+    let entries_for_apply = entries.clone();
+
+    rsx! {
+        div { class: "move-picker-backdrop", onclick: move |_| on_cancel(()),
+            div {
+                class: "review-modal",
+                onclick: move |e: Event<MouseData>| e.stop_propagation(),
+                div { class: "move-picker-header",
+                    "Review {from_label} → {to_label}"
+                }
+                if entries.is_empty() {
+                    div { class: "review-empty",
+                        "Nothing left open in {from_label}. That is the good outcome."
+                    }
+                } else {
+                    div { class: "review-list",
+                        for (i, t) in entries.iter().enumerate() {
+                            {
+                                let current = decisions.read()[i];
+                                let text = t.text.clone();
+                                let due = t.due.clone();
+                                rsx! {
+                                    div {
+                                        key: "{t.path}:{t.line}",
+                                        class: if current == Decision::Undecided { "review-row" } else { "review-row review-row--decided" },
+                                        div { class: "review-entry",
+                                            span { class: "review-text", "{text}" }
+                                            if let Some(d) = due {
+                                                span { class: "review-due", "📅 {d}" }
+                                            }
+                                        }
+                                        div { class: "review-actions",
+                                            for (decision, label, title) in [
+                                                (Decision::Done, "✗", "Done"),
+                                                (Decision::Carry, "›", "Migrate"),
+                                                (Decision::Schedule, "‹", "Schedule"),
+                                                (Decision::Drop, "–", "Drop"),
+                                            ] {
+                                                button {
+                                                    key: "{title}",
+                                                    class: if current == decision { "review-btn review-btn--on" } else { "review-btn" },
+                                                    title: "{title}",
+                                                    onclick: move |_| {
+                                                        decisions.with_mut(|d| {
+                                                            // Clicking the chosen one again undoes it,
+                                                            // so a misclick isn't a commitment.
+                                                            d[i] = if d[i] == decision { Decision::Undecided } else { decision };
+                                                        });
+                                                    },
+                                                    "{label}"
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if scheduling {
+                        label { class: "review-date",
+                            "Scheduled for"
+                            input {
+                                r#type: "date",
+                                value: "{schedule_date}",
+                                oninput: move |e| schedule_date.set(e.value()),
+                            }
+                        }
+                    }
+                    div { class: "review-footer",
+                        span { class: "review-count", "{decided} of {entries.len()} decided" }
+                        button { class: "review-cancel", onclick: move |_| on_cancel(()), "Cancel" }
+                        button {
+                            class: "review-apply",
+                            disabled: busy || decided == 0 || date_missing,
+                            onclick: move |_| {
+                                let date = schedule_date.read().trim().to_string();
+                                let ds = decisions.read().clone();
+                                let picked: Vec<(Task, Decision, Option<String>)> = entries_for_apply
+                                    .iter()
+                                    .zip(ds)
+                                    .filter(|(_, d)| *d != Decision::Undecided)
+                                    .map(|(t, d)| {
+                                        let due = if d == Decision::Schedule { Some(date.clone()) } else { None };
+                                        (t.clone(), d, due)
+                                    })
+                                    .collect();
+                                on_apply(picked);
+                            },
+                            if busy { "Applying…" } else { "Apply" }
+                        }
+                    }
+                    if date_missing {
+                        div { class: "review-hint", "Pick a date for the scheduled entries." }
                     }
                 }
             }

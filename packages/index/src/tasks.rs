@@ -295,14 +295,7 @@ pub fn set_status_content(
 ) -> Option<String> {
     let lines: Vec<&str> = content.lines().collect();
     let idx = locate(&lines, task)?;
-    let mut new_line = set_marker(lines[idx], status)?;
-    if status == Status::Done {
-        if !new_line.contains("✅") && !today.is_empty() {
-            new_line = format!("{} ✅ {today}", new_line.trim_end());
-        }
-    } else {
-        new_line = strip_done(&new_line);
-    }
+    let new_line = restamped(lines[idx], status, today)?;
 
     let mut out = String::new();
     for (i, l) in lines.iter().enumerate() {
@@ -362,6 +355,21 @@ fn marker_at(line: &str) -> Option<(usize, Status)> {
 /// The status a line's checkbox currently encodes.
 fn marker_status(line: &str) -> Option<Status> {
     marker_at(line).map(|(_, s)| s)
+}
+
+/// A line re-marked to `status`, with the `✅ <today>` stamp attached or removed
+/// to match. `None` when the line has no checkbox to re-mark.
+fn restamped(line: &str, status: Status, today: &str) -> Option<String> {
+    let new_line = set_marker(line, status)?;
+    if status == Status::Done {
+        if new_line.contains("✅") || today.is_empty() {
+            Some(new_line)
+        } else {
+            Some(format!("{} ✅ {today}", new_line.trim_end()))
+        }
+    } else {
+        Some(strip_done(&new_line))
+    }
 }
 
 /// Rewrite a line's `[<marker>]` to `status`, leaving everything else — indent,
@@ -454,6 +462,60 @@ pub fn append_lines(content: &str, lines: &[String]) -> String {
     out.push_str(&lines.join("\n"));
     out.push('\n');
     out
+}
+
+/// Re-mark several of one file's entries in a single rewrite.
+///
+/// The migration review resolves a whole period at once, and writing per entry
+/// would mean one request — and one SHA round trip — per line. Entries that
+/// can't be found are skipped rather than invented, as everywhere else here.
+///
+/// Two entries with identical text map to two different lines, never the same
+/// line twice.
+pub fn set_status_many(content: &str, tasks: &[Task], status: Status, today: &str) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+    let mut taken: Vec<usize> = Vec::new();
+    for task in tasks {
+        if let Some(idx) = locate_excluding(&lines, task, &taken) {
+            taken.push(idx);
+        }
+    }
+
+    let mut out = String::new();
+    for (i, l) in lines.iter().enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        if taken.contains(&i) {
+            out.push_str(&restamped(l, status, today).unwrap_or_else(|| (*l).to_string()));
+        } else {
+            out.push_str(l);
+        }
+    }
+    if content.ends_with('\n') && !out.is_empty() {
+        out.push('\n');
+    }
+    out
+}
+
+/// The line to write into the *destination* when an entry is carried forward.
+///
+/// Migration re-marks the original and writes a fresh copy onward — it never
+/// moves the line — so the carried copy has to come back to `Open` and shed the
+/// completion stamp. `due` sets (or replaces) the `📅` date, which is what
+/// scheduling an entry into the Future Log means.
+///
+/// Everything else rides along untouched: indent, priority, tags, text.
+pub fn carried_line(task: &Task, due: Option<&str>) -> String {
+    let line = set_marker(&task.raw, Status::Open).unwrap_or_else(|| task.raw.clone());
+    let line = strip_done(&line);
+    match due {
+        Some(d) => {
+            let (_, without) = extract_dated(&line, "📅");
+            format!("{} 📅 {d}", without.trim_end())
+        }
+        None => line,
+    }
 }
 
 /// Sort order for the view: open tasks first, then by due date (earliest first,
@@ -587,6 +649,83 @@ mod tests {
         let src = "- [x] a ✅ 2026-08-13";
         let t = &parse_file("a.md", src)[0];
         assert_eq!(toggled_content(src, t, "2026-08-13").unwrap(), "- [ ] a");
+    }
+
+    // ── Migration (docs/bujo-roadmap.md §5) ─────────────────────────────────
+
+    #[test]
+    fn migration_re_marks_the_original_instead_of_removing_it() {
+        // The whole difference between migrating and moving: the source log
+        // still shows what was on it, and that it moved on.
+        let src = "# Monday\n\n- [ ] call the plumber\n- [ ] pay rent\n- [x] done\n";
+        let open: Vec<Task> = parse_file("a.md", src).into_iter().filter(Task::is_open).collect();
+        let out = set_status_many(src, &open, Status::Migrated, "2026-08-13");
+        assert_eq!(
+            out,
+            "# Monday\n\n- [>] call the plumber\n- [>] pay rent\n- [x] done\n"
+        );
+    }
+
+    #[test]
+    fn a_carried_line_arrives_open_and_unstamped() {
+        let src = "  - [x] ship it ⏫ #work ✅ 2026-08-01";
+        let t = &parse_file("a.md", src)[0];
+        // Indent, priority and tags ride along; the state does not.
+        assert_eq!(carried_line(t, None), "  - [ ] ship it ⏫ #work");
+    }
+
+    #[test]
+    fn scheduling_sets_the_due_date_replacing_any_existing_one() {
+        let t = &parse_file("a.md", "- [ ] book flights 📅 2026-08-01")[0];
+        assert_eq!(
+            carried_line(t, Some("2026-12-24")),
+            "- [ ] book flights 📅 2026-12-24"
+        );
+        let undated = &parse_file("a.md", "- [ ] book flights")[0];
+        assert_eq!(
+            carried_line(undated, Some("2026-12-24")),
+            "- [ ] book flights 📅 2026-12-24"
+        );
+    }
+
+    #[test]
+    fn a_full_migration_round_trip_leaves_both_logs_correct() {
+        let monday = "# Monday\n\n- [ ] call the plumber 📅 2026-08-12\n- [x] pay rent ✅ 2026-08-12\n";
+        let open: Vec<Task> = parse_file("mon.md", monday).into_iter().filter(Task::is_open).collect();
+
+        let carried: Vec<String> = open.iter().map(|t| carried_line(t, None)).collect();
+        let tuesday = append_lines("# Tuesday\n", &carried);
+        let monday_after = set_status_many(monday, &open, Status::Migrated, "2026-08-13");
+
+        // Forward: open again, in the new log, with its due date intact.
+        assert_eq!(tuesday, "# Tuesday\n\n- [ ] call the plumber 📅 2026-08-12\n");
+        // Behind: the record of what happened, including that it moved.
+        assert_eq!(
+            monday_after,
+            "# Monday\n\n- [>] call the plumber 📅 2026-08-12\n- [x] pay rent ✅ 2026-08-12\n"
+        );
+        // Nothing is open in the old log any more, so a second review of Monday
+        // sweeps up nothing and can't duplicate the entry.
+        assert!(parse_file("mon.md", &monday_after).iter().all(|t| !t.is_open()));
+    }
+
+    #[test]
+    fn two_entries_with_the_same_text_map_to_two_different_lines() {
+        let src = "- [ ] follow up\n- [ ] follow up\n";
+        let tasks = parse_file("a.md", src);
+        assert_eq!(tasks.len(), 2);
+        let out = set_status_many(src, &tasks, Status::Dropped, "");
+        assert_eq!(out, "- [-] follow up\n- [-] follow up\n");
+    }
+
+    #[test]
+    fn dropping_an_entry_never_stamps_it_as_completed() {
+        // A dropped task is abandoned, not finished — a ✅ date would be a lie,
+        // and phase 6's statistics read exactly this distinction.
+        let src = "- [x] gave up on this ✅ 2026-08-01";
+        let t = &parse_file("a.md", src)[0];
+        let out = set_status_many(src, std::slice::from_ref(t), Status::Dropped, "2026-08-13");
+        assert_eq!(out, "- [-] gave up on this");
     }
 
     #[test]
