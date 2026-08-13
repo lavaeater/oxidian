@@ -60,7 +60,7 @@ Listed roughly by priority / dependency order. Filtered to the web + Android foc
 | US | Feature | Effort |
 |----|---------|--------|
 | US 15.1 / 15.2 | **Templates** — folder setting + insert via slash/palette (*engine + daily-note done; general insertion remaining*) | Small–Medium |
-| US 14.1 / 14.2 | **Tags pane** — collects all `#tags`, click to search | Medium |
+| US 14.1 / 14.2 | **Tags pane** — collects all `#tags`, click to search. Downgraded from Medium: the index already collects tags (`tag_counts` / `pages_with_tag`, nested tags kept whole) and search already understands `tag:`, so only the panel is left | Small |
 | US 3.2 / 3.3 | Weekly/Monthly notes; natural-language date parsing (`@today`, `@next friday`) | Medium |
 
 ### Medium priority — knowledge graph completeness
@@ -130,7 +130,7 @@ M8  Publish & export            ✅ Single-note HTML export
 Ordered for the web + Android focus (no desktop/local-git dependencies):
 
 1. **Templates — general insertion** (US 15) — *in progress*: reuse the existing engine; expose "Insert template" via the Command Palette (and slash menu).
-2. **Tags pane** (US 14) — completes M2.
+2. **Tags pane** (US 14) — completes M2, and is now the cheapest item on the board: the index and the `tag:` search filter are both already there, so this is a panel and a click handler.
 3. **Hover preview** (US 7) — small effort, completes M5.
 4. **Weekly/Monthly notes + natural-language dates** (US 3.2/3.3) — completes M3.
 

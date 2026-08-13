@@ -101,6 +101,14 @@ Since the Git/GitHub synchronization is the underlying infrastructure, this spec
 * **US 14.1:** As a user, I want a dedicated pane that lists all `#tags` used across my vault, displaying nested tags (e.g., `#work/projectA`) in a collapsible tree structure.
 * **US 14.2:** As a user, I want to click a tag in the Tags pane to instantly populate the global search with that tag.
 
+> **Implementation note — this epic is now cheap.** Both halves are already built, just
+> not wired to a pane. `packages/index` collects every tag while indexing and exposes
+> `Index::tag_counts` and `Index::pages_with_tag` (tested); nested tags fall out of it,
+> since a tag is stored as written and `work/projectA` sorts under `work`. And search
+> understands `tag:` (US 11.2), so US 14.2 is "put `tag:work` in the search box" rather
+> than a new query path. What is left is the panel itself — a tree, a count per row, and
+> a click handler — which is why `roadmap.md` now estimates this epic as *Small*.
+
 ### **Epic 15: Templates**
 
 *Reusability for common note structures.*
