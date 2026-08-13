@@ -628,6 +628,103 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
     let has_periodic_logs =
         !config.weekly_note_template.is_empty() || !config.monthly_note_template.is_empty();
 
+    // ── Migration review ──────────────────────────────────────────────────────
+    // `None` = closed. Open holds the closing period's open entries plus the
+    // labels and paths the writes need, resolved once when the review opens so
+    // the modal itself stays a pure function of what it was given.
+    let mut review = use_signal(|| None::<ReviewState>);
+    let mut review_busy = use_signal(|| false);
+    let cfg_review = config.clone();
+    let cfg_review_apply = config.clone();
+
+    // Open the review for the period *before* the one being browsed: closing a
+    // log is something you do to the one that just ended.
+    let open_review = use_callback(move |(): ()| {
+        let cfg = cfg_review.clone();
+        let period = log_period();
+        spawn(async move {
+            let base = {
+                let d = log_date.read().clone();
+                if d.is_empty() { crate::dates::today().await } else { d }
+            };
+            let from_date = dates::shift_period(period, &base, -1);
+            let tmpls = templates.read().clone();
+            let Some((from_path, _)) = periodic_note(&cfg, &tmpls, period, &from_date).await else {
+                load_error.set(Some(format!(
+                    "No {} log template configured — set one in Settings.",
+                    period.label().to_lowercase()
+                )));
+                return;
+            };
+            let Some((to_path, to_body)) = periodic_note(&cfg, &tmpls, period, &base).await else {
+                return;
+            };
+            // Read the closing log from the vault, not the index: the index may
+            // be a refresh behind, and this is about to write to that file.
+            let entries: Vec<Task> = match vault::dispatch::read_file(&cfg, &from_path).await {
+                Ok(fc) => tasks::parse_file(&from_path, &fc.content)
+                    .into_iter()
+                    .filter(Task::is_open)
+                    .collect(),
+                // A log that was never written has nothing open in it, which is
+                // a legitimate (and common) answer, not an error.
+                Err(_) => Vec::new(),
+            };
+            review.set(Some(ReviewState {
+                from_label: dates::period_key(period, &from_date),
+                to_label: dates::period_key(period, &base),
+                to_path,
+                to_body,
+                entries,
+            }));
+        });
+    });
+
+    // Carry out the decisions: one destination write, then one rewrite per
+    // source file. See `migrate_tasks` for why that order.
+    let apply_review = use_callback(move |picked: Vec<(Task, Decision, Option<String>)>| {
+        let cfg = cfg_review_apply.clone();
+        let Some(state) = review.read().clone() else { return };
+        spawn(async move {
+            review_busy.set(true);
+            let carried: Vec<(Task, Option<String>)> = picked
+                .iter()
+                .filter(|(_, d, _)| matches!(d, Decision::Carry | Decision::Schedule))
+                .map(|(t, _, due)| (t.clone(), due.clone()))
+                .collect();
+            let resolved: Vec<(Task, Status)> = picked
+                .iter()
+                .filter_map(|(t, d, _)| match d {
+                    Decision::Done => Some((t.clone(), Status::Done)),
+                    Decision::Drop => Some((t.clone(), Status::Dropped)),
+                    _ => None,
+                })
+                .collect();
+            let today_now = crate::dates::today().await;
+            let result = migrate_tasks(
+                vault_idx,
+                &cfg,
+                &carried,
+                &resolved,
+                &state.to_path,
+                &state.to_body,
+                &today_now,
+            )
+            .await;
+            review_busy.set(false);
+            match result {
+                Ok(()) => {
+                    review.set(None);
+                    if let Ok(mut list) = vault::dispatch::list_files(&cfg).await {
+                        list.sort_by(|a, b| a.path.cmp(&b.path));
+                        files.set(list);
+                    }
+                }
+                Err(e) => load_error.set(Some(e)),
+            }
+        });
+    });
+
     // ── Command actions ───────────────────────────────────────────────────────
     // Shared, Copy callbacks so the same logic runs from a toolbar button, the
     // command palette, and a keyboard shortcut.
@@ -956,6 +1053,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                         button {
                             class: "period-step",
                             title: "Previous",
+                            "aria-label": "Previous period",
                             onclick: move |_| {
                                 let d = dates::shift_period(log_period(), &log_date(), -1);
                                 log_date.set(d.clone());
@@ -976,8 +1074,15 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                             }
                         }
                         button {
+                            class: "period-review",
+                            title: "Review the previous period and migrate what's left",
+                            onclick: move |_| open_review.call(()),
+                            "Review"
+                        }
+                        button {
                             class: "period-step",
                             title: "Next",
+                            "aria-label": "Next period",
                             onclick: move |_| {
                                 let d = dates::shift_period(log_period(), &log_date(), 1);
                                 log_date.set(d.clone());
@@ -1306,6 +1411,18 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                         PaletteAction::Template(t) => run_template.call(t),
                     },
                     on_close: move |()| show_palette.set(false),
+                }
+            }
+
+            // ── Migration review ─────────────────────────────────────────────
+            if let Some(state) = review() {
+                MigrationReview {
+                    from_label: state.from_label.clone(),
+                    to_label: state.to_label.clone(),
+                    entries: state.entries.clone(),
+                    busy: review_busy(),
+                    on_apply: move |picked| apply_review.call(picked),
+                    on_cancel: move |()| review.set(None),
                 }
             }
 
@@ -3086,6 +3203,16 @@ fn TasksView(
     }
 }
 
+/// Everything the migration review needs, resolved once when it opens.
+#[derive(Clone, PartialEq)]
+struct ReviewState {
+    from_label: String,
+    to_label: String,
+    to_path: String,
+    to_body: String,
+    entries: Vec<Task>,
+}
+
 /// What the reviewer decided about one entry. `Carry` is a plain migration;
 /// `Schedule` carries it with a date, which is the same act aimed further out.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -3121,7 +3248,7 @@ fn MigrationReview(
     let mut schedule_date = use_signal(String::new);
 
     let decided = decisions.read().iter().filter(|d| **d != Decision::Undecided).count();
-    let scheduling = decisions.read().iter().any(|d| *d == Decision::Schedule);
+    let scheduling = decisions.read().contains(&Decision::Schedule);
     let date_missing = scheduling && schedule_date.read().trim().is_empty();
     let entries_for_apply = entries.clone();
 
@@ -3165,6 +3292,9 @@ fn MigrationReview(
                                                     key: "{title}",
                                                     class: if current == decision { "review-btn review-btn--on" } else { "review-btn" },
                                                     title: "{title}",
+                                                    // The face of the button is a glyph, so without
+                                                    // this its accessible name would be "›".
+                                                    "aria-label": "{title}",
                                                     onclick: move |_| {
                                                         decisions.with_mut(|d| {
                                                             // Clicking the chosen one again undoes it,
