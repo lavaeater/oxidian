@@ -318,7 +318,7 @@ not a #tag and not [[a link]] and not a # heading\n\
         assert_eq!(p.tasks.len(), 2);
         assert_eq!(p.tasks[0].text, "replay on #hardcore");
         assert_eq!(p.tasks[0].due.as_deref(), Some("2026-09-01"));
-        assert!(p.tasks[1].checked);
+        assert!(p.tasks[1].is_done());
         // Line index must address the raw file, including the frontmatter, so
         // that `tasks::toggled_content` can write the toggle back.
         let raw_line = NOTE.lines().nth(p.tasks[0].line).unwrap();

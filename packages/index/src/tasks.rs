@@ -50,12 +50,114 @@ impl Priority {
     }
 }
 
+/// What an entry is, and where it stands — the Bullet Journal *signifier*.
+///
+/// Stored as the character between the checkbox brackets, so a journal stays
+/// ordinary Markdown that Obsidian and a text editor can both read. The
+/// characters follow the Obsidian-Tasks conventions rather than inventing our
+/// own, so vaults stay portable. See `docs/bujo-roadmap.md` §3.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+pub enum Status {
+    /// `- [ ]` — awaiting a decision.
+    #[default]
+    Open,
+    /// `- [x]` — completed.
+    Done,
+    /// `- [>]` — moved forward into the next log.
+    Migrated,
+    /// `- [<]` — deferred to a specific future date.
+    Scheduled,
+    /// `- [-]` — consciously abandoned. Deliberately still visible.
+    Dropped,
+    /// `- [o]` — an event: something that happened, not something to do.
+    Event,
+}
+
+impl Status {
+    /// The character between the brackets.
+    pub fn marker(self) -> char {
+        match self {
+            Status::Open => ' ',
+            Status::Done => 'x',
+            Status::Migrated => '>',
+            Status::Scheduled => '<',
+            Status::Dropped => '-',
+            Status::Event => 'o',
+        }
+    }
+
+    /// Parse a marker character. Returns `None` for anything unrecognised —
+    /// `- [q] thing` has to stay a plain list item, or every stray bracket
+    /// becomes an entry with a mystery state.
+    pub fn from_marker(c: char) -> Option<Self> {
+        match c {
+            ' ' => Some(Status::Open),
+            'x' | 'X' => Some(Status::Done),
+            '>' => Some(Status::Migrated),
+            '<' => Some(Status::Scheduled),
+            '-' => Some(Status::Dropped),
+            'o' | 'O' => Some(Status::Event),
+            _ => None,
+        }
+    }
+
+    /// The glyph a bullet journalist would draw.
+    pub fn glyph(self) -> &'static str {
+        match self {
+            Status::Open => "•",
+            Status::Done => "✗",
+            Status::Migrated => "›",
+            Status::Scheduled => "‹",
+            Status::Dropped => "–",
+            Status::Event => "○",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Status::Open => "open",
+            Status::Done => "done",
+            Status::Migrated => "migrated",
+            Status::Scheduled => "scheduled",
+            Status::Dropped => "dropped",
+            Status::Event => "event",
+        }
+    }
+
+    /// Still awaiting a decision — the set the migration review sweeps up.
+    ///
+    /// An event is *not* open: it records something that happened, so there is
+    /// nothing to carry forward.
+    pub fn is_open(self) -> bool {
+        self == Status::Open
+    }
+
+    /// Resolved in some way — but note that "resolved" is not "done". Keeping
+    /// migrated and dropped distinct from done is the whole point of the
+    /// review: `docs/bujo-roadmap.md` §5.
+    pub fn is_closed(self) -> bool {
+        !self.is_open()
+    }
+
+    /// View order: what still needs doing first, what was abandoned last.
+    pub fn rank(self) -> u8 {
+        match self {
+            Status::Open => 0,
+            Status::Scheduled => 1,
+            Status::Migrated => 2,
+            Status::Event => 3,
+            Status::Done => 4,
+            Status::Dropped => 5,
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 pub struct Task {
     pub path: String,
     /// 0-based line index in the source file.
     pub line: usize,
-    pub checked: bool,
+    pub status: Status,
     /// Display text with the metadata emoji stripped out.
     pub text: String,
     /// The original source line, used to locate it again for write-back.
@@ -63,6 +165,18 @@ pub struct Task {
     pub due: Option<String>,  // YYYY-MM-DD
     pub done: Option<String>, // YYYY-MM-DD
     pub priority: Priority,
+}
+
+impl Task {
+    /// Completed. Not the same as "no longer open" — see [`Status::is_closed`].
+    pub fn is_done(&self) -> bool {
+        self.status == Status::Done
+    }
+
+    /// Still awaiting a decision.
+    pub fn is_open(&self) -> bool {
+        self.status.is_open()
+    }
 }
 
 /// Parse all checkbox tasks out of one file's content.
@@ -80,14 +194,18 @@ fn parse_line(path: &str, idx: usize, line: &str) -> Option<Task> {
         .strip_prefix("- ")
         .or_else(|| trimmed.strip_prefix("* "))
         .or_else(|| trimmed.strip_prefix("+ "))?;
-    let (checked, rest) = if let Some(r) = after_bullet.strip_prefix("[ ] ") {
-        (false, r)
-    } else {
-        let r = after_bullet
-        .strip_prefix("[x] ")
-        .or_else(|| after_bullet.strip_prefix("[X] "))?;
-        (true, r)
-    };
+    // `[<marker>] ` — one character between brackets, then a space. An
+    // unrecognised marker is not a task at all (see `Status::from_marker`).
+    let mut chars = after_bullet.chars();
+    if chars.next() != Some('[') {
+        return None;
+    }
+    let status = Status::from_marker(chars.next()?)?;
+    if chars.next() != Some(']') || chars.next() != Some(' ') {
+        return None;
+    }
+    // Every accepted marker is ASCII, so the prefix is exactly 4 bytes.
+    let rest = &after_bullet[4..];
 
     let (due, rest) = extract_dated(rest, "📅");
     let (done, rest) = extract_dated(&rest, "✅");
@@ -97,7 +215,7 @@ fn parse_line(path: &str, idx: usize, line: &str) -> Option<Task> {
     Some(Task {
         path: path.to_string(),
         line: idx,
-        checked,
+        status,
         text,
         raw: line.to_string(),
         due,
@@ -155,9 +273,30 @@ pub fn toggled_content(content: &str, task: &Task, today: &str) -> Option<String
     let idx = locate(&lines, task)?;
     // The new state is derived from the file's *current* line, not the (possibly
     // stale) scanned task, so rapid re-toggles stay consistent.
-    let now_checked = lines[idx].contains("[ ]");
-    let mut new_line = flip_checkbox(lines[idx])?;
-    if now_checked {
+    let current = marker_status(lines[idx])?;
+    // Clicking a checkbox means "done", whatever it was — except when it is
+    // already done, which means "not after all".
+    let target = if current == Status::Done { Status::Open } else { Status::Done };
+    set_status_content(content, task, target, today)
+}
+
+/// Returns `content` with the given task's marker set to `status`, stamping or
+/// removing the `✅ <today>` done-date to match, or `None` if the line can't be
+/// located.
+///
+/// This is the one write path for changing an entry's state: the toggle above
+/// and the migration review (`docs/bujo-roadmap.md` §5) both go through it, so
+/// the done-stamp can only ever be attached to a genuinely-done entry.
+pub fn set_status_content(
+    content: &str,
+    task: &Task,
+    status: Status,
+    today: &str,
+) -> Option<String> {
+    let lines: Vec<&str> = content.lines().collect();
+    let idx = locate(&lines, task)?;
+    let mut new_line = set_marker(lines[idx], status)?;
+    if status == Status::Done {
         if !new_line.contains("✅") && !today.is_empty() {
             new_line = format!("{} ✅ {today}", new_line.trim_end());
         }
@@ -209,14 +348,32 @@ fn strip_done(line: &str) -> String {
     line.to_string()
 }
 
-fn flip_checkbox(line: &str) -> Option<String> {
-    if let Some(pos) = line.find("[ ]") {
-        return Some(format!("{}[x]{}", &line[..pos], &line[pos + 3..]));
+/// The byte position of a line's `[<marker>]`, and the status it encodes.
+fn marker_at(line: &str) -> Option<(usize, Status)> {
+    let bytes = line.as_bytes();
+    let pos = line.find('[')?;
+    if bytes.get(pos + 2) != Some(&b']') {
+        return None;
     }
-    if let Some(pos) = line.find("[x]").or_else(|| line.find("[X]")) {
-        return Some(format!("{}[ ]{}", &line[..pos], &line[pos + 3..]));
-    }
-    None
+    let status = Status::from_marker(*bytes.get(pos + 1)? as char)?;
+    Some((pos, status))
+}
+
+/// The status a line's checkbox currently encodes.
+fn marker_status(line: &str) -> Option<Status> {
+    marker_at(line).map(|(_, s)| s)
+}
+
+/// Rewrite a line's `[<marker>]` to `status`, leaving everything else — indent,
+/// text, due date, priority, tags — exactly as it was.
+fn set_marker(line: &str, status: Status) -> Option<String> {
+    let (pos, _) = marker_at(line)?;
+    Some(format!(
+        "{}[{}]{}",
+        &line[..pos],
+        status.marker(),
+        &line[pos + 3..]
+    ))
 }
 
 /// Removes `tasks` from `content`, returning the remaining text and the raw
@@ -302,8 +459,9 @@ pub fn append_lines(content: &str, lines: &[String]) -> String {
 /// Sort order for the view: open tasks first, then by due date (earliest first,
 /// undated last), then priority, then text.
 pub fn cmp(a: &Task, b: &Task) -> std::cmp::Ordering {
-    a.checked
-        .cmp(&b.checked)
+    a.status
+        .rank()
+        .cmp(&b.status.rank())
         .then_with(|| match (&a.due, &b.due) {
             (Some(x), Some(y)) => x.cmp(y),
             (Some(_), None) => std::cmp::Ordering::Less,
@@ -321,7 +479,7 @@ mod tests {
     #[test]
     fn parses_metadata() {
         let t = &parse_file("notes/a.md", "- [ ] Pay rent 📅 2026-06-15 ⏫")[0];
-        assert!(!t.checked);
+        assert!(!t.is_done());
         assert_eq!(t.text, "Pay rent");
         assert_eq!(t.due.as_deref(), Some("2026-06-15"));
         assert_eq!(t.priority, Priority::High);
@@ -330,7 +488,7 @@ mod tests {
     #[test]
     fn parses_done_and_checked() {
         let t = &parse_file("a.md", "* [x] Ship it ✅ 2026-06-10")[0];
-        assert!(t.checked);
+        assert!(t.is_done());
         assert_eq!(t.text, "Ship it");
         assert_eq!(t.done.as_deref(), Some("2026-06-10"));
     }
@@ -338,6 +496,106 @@ mod tests {
     #[test]
     fn ignores_non_tasks() {
         assert!(parse_file("a.md", "- just a bullet\n# heading\nplain").is_empty());
+    }
+
+    // ── Bullet Journal signifiers (docs/bujo-roadmap.md §3) ──────────────────
+
+    #[test]
+    fn parses_every_signifier() {
+        let src = "\
+- [ ] open
+- [x] done
+- [>] migrated
+- [<] scheduled
+- [-] dropped
+- [o] event";
+        let got: Vec<Status> = parse_file("a.md", src).iter().map(|t| t.status).collect();
+        assert_eq!(
+            got,
+            [
+                Status::Open,
+                Status::Done,
+                Status::Migrated,
+                Status::Scheduled,
+                Status::Dropped,
+                Status::Event
+            ]
+        );
+    }
+
+    #[test]
+    fn an_unknown_marker_is_not_a_task_at_all() {
+        // Otherwise every stray bracket becomes an entry in a mystery state.
+        assert!(parse_file("a.md", "- [q] what even is this").is_empty());
+        assert!(parse_file("a.md", "- [] no marker").is_empty());
+        assert!(parse_file("a.md", "- [ ]no space after").is_empty());
+    }
+
+    #[test]
+    fn uppercase_markers_are_accepted() {
+        // Obsidian writes `[x]`, but plenty of tools and humans write `[X]`.
+        assert_eq!(parse_file("a.md", "- [X] done")[0].status, Status::Done);
+        assert_eq!(parse_file("a.md", "- [O] event")[0].status, Status::Event);
+    }
+
+    #[test]
+    fn only_open_entries_are_open() {
+        // The migration review sweeps up exactly these, so the distinction is
+        // load-bearing: a migrated task is resolved, not outstanding.
+        let src = "- [ ] a\n- [x] b\n- [>] c\n- [<] d\n- [-] e\n- [o] f";
+        let tasks = parse_file("a.md", src);
+        assert_eq!(tasks.iter().filter(|t| t.is_open()).count(), 1);
+        assert_eq!(tasks.iter().filter(|t| t.is_done()).count(), 1);
+        // ...and "resolved" is not "done" — that gap is the point of the review.
+        assert!(tasks[2].status.is_closed() && !tasks[2].is_done());
+    }
+
+    #[test]
+    fn setting_a_status_rewrites_only_the_marker() {
+        let src = "  - [ ] indented 📅 2026-06-15 ⏫ #tag";
+        let t = &parse_file("a.md", src)[0];
+        let out = set_status_content(src, t, Status::Migrated, "2026-08-13").unwrap();
+        assert_eq!(out, "  - [>] indented 📅 2026-06-15 ⏫ #tag");
+    }
+
+    #[test]
+    fn only_a_done_entry_carries_a_done_date() {
+        let src = "- [ ] thing";
+        let t = &parse_file("a.md", src)[0];
+
+        let done = set_status_content(src, t, Status::Done, "2026-08-13").unwrap();
+        assert_eq!(done, "- [x] thing ✅ 2026-08-13");
+
+        // Moving on from done takes the stamp with it — a migrated entry that
+        // still claimed a completion date would be a lie.
+        let done_task = &parse_file("a.md", &done)[0];
+        let migrated = set_status_content(&done, done_task, Status::Migrated, "2026-08-14").unwrap();
+        assert_eq!(migrated, "- [>] thing");
+    }
+
+    #[test]
+    fn toggling_any_unfinished_state_completes_it() {
+        for (src, expected) in [
+            ("- [ ] a", "- [x] a ✅ 2026-08-13"),
+            ("- [>] a", "- [x] a ✅ 2026-08-13"),
+            ("- [-] a", "- [x] a ✅ 2026-08-13"),
+        ] {
+            let t = &parse_file("a.md", src)[0];
+            assert_eq!(toggled_content(src, t, "2026-08-13").unwrap(), expected, "{src}");
+        }
+        // ...and toggling a done one reopens it.
+        let src = "- [x] a ✅ 2026-08-13";
+        let t = &parse_file("a.md", src)[0];
+        assert_eq!(toggled_content(src, t, "2026-08-13").unwrap(), "- [ ] a");
+    }
+
+    #[test]
+    fn open_entries_sort_ahead_of_resolved_ones() {
+        let src = "- [x] done\n- [-] dropped\n- [ ] open\n- [>] migrated";
+        let mut tasks = parse_file("a.md", src);
+        tasks.sort_by(cmp);
+        let order: Vec<&str> = tasks.iter().map(|t| t.text.as_str()).collect();
+        assert_eq!(order, ["open", "migrated", "done", "dropped"]);
     }
 
     #[test]
@@ -431,7 +689,7 @@ mod tests {
     #[test]
     fn extract_then_append_round_trips_a_move() {
         let src = "# Source\n\n- [ ] move me 📅 2026-06-15\n- [x] done\n";
-        let open: Vec<Task> = parse_file("a.md", src).into_iter().filter(|t| !t.checked).collect();
+        let open: Vec<Task> = parse_file("a.md", src).into_iter().filter(Task::is_open).collect();
         let (rest, moved) = extract_lines(src, &open);
         assert_eq!(rest, "# Source\n\n- [x] done\n");
         assert_eq!(

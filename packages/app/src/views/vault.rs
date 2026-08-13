@@ -5,7 +5,7 @@ use crate::icons::{
     IcoSettings, IcoTrash2, IcoX,
 };
 use index::Index;
-use index::tasks::{self, Task};
+use index::tasks::{self, Status, Task};
 use dioxus::prelude::*;
 use ui::{MarkdownArea, MarkdownAreaVariant};
 use vault::{FileMeta, GithubConfig};
@@ -2626,7 +2626,9 @@ fn TasksView(
                 .iter_mut()
                 .find(|t| t.path == task.path && t.line == task.line)
             {
-                t.checked = !t.checked;
+                // Mirrors `tasks::toggled_content`: a click means "done",
+                // unless it already was, which means "not after all".
+                t.status = if t.is_done() { Status::Open } else { Status::Done };
             }
         });
         let cfg = cfg_toggle.clone();
@@ -2683,7 +2685,7 @@ fn TasksView(
     let mut groups: Vec<(String, Vec<Task>)> = {
         let mut by_file: std::collections::BTreeMap<String, Vec<Task>> = std::collections::BTreeMap::default();
         for t in all_tasks.read().iter() {
-            if hide && t.checked {
+            if hide && t.is_done() {
                 continue;
             }
             by_file.entry(t.path.clone()).or_default().push(t.clone());
@@ -2693,7 +2695,9 @@ fn TasksView(
     for (_, items) in &mut groups {
         items.sort_by(tasks::cmp);
     }
-    let total_open = all_tasks.read().iter().filter(|t| !t.checked).count();
+    // Open means "still awaiting a decision" — a migrated, dropped, or done
+    // entry is resolved, and an event was never a thing to do.
+    let total_open = all_tasks.read().iter().filter(|t| t.is_open()).count();
     let is_empty = groups.is_empty();
     let first_load = loading() && all_tasks.read().is_empty();
 
@@ -2750,11 +2754,12 @@ fn TasksView(
                             let name = path.rsplit('/').next().unwrap_or(&path)
                                 .trim_end_matches(".md").to_string();
                             let dir = path.rfind('/').map(|i| path[..i].to_string()).unwrap_or_default();
-                            // Only open tasks move: a completed one is a record of
-                            // what happened in the note it happened in, and
-                            // dragging it forward would falsify that.
+                            // Only open tasks move: a resolved one — done,
+                            // already migrated, dropped, or an event — is a
+                            // record of what happened in the note it happened
+                            // in, and dragging it forward would falsify that.
                             let open_items: Vec<Task> =
-                                items.iter().filter(|t| !t.checked).cloned().collect();
+                                items.iter().filter(|t| t.is_open()).cloned().collect();
                             let has_open = !open_items.is_empty();
                             let busy = moving() == Some(path.clone());
                             let for_today = open_items.clone();
@@ -2798,17 +2803,29 @@ fn TasksView(
                                         {
                                             let t_toggle = t.clone();
                                             let p_jump = t.path.clone();
-                                            let overdue = !t.checked
+                                            let overdue = t.is_open()
                                                 && !today_str.is_empty()
                                                 && t.due.as_deref().is_some_and(|d| d < today_str.as_str());
                                             let due_class = if overdue { "task-due task-due--overdue" } else { "task-due" };
-                                            let row_class = if t.checked { "task-row task-row--done" } else { "task-row" };
+                                            // Done is struck through; migrated and dropped are
+                                            // dimmed but legible — seeing your own churn is the
+                                            // point of keeping them (bujo-roadmap.md §5).
+                                            let row_class = match t.status {
+                                                Status::Open => "task-row",
+                                                Status::Done => "task-row task-row--done",
+                                                _ => "task-row task-row--closed",
+                                            };
                                             rsx! {
                                                 div { class: "{row_class}",
                                                     button {
                                                         class: "task-check",
+                                                        title: "{t.status.label()}",
                                                         onclick: move |_| toggle.call(t_toggle.clone()),
-                                                        if t.checked { "☑" } else { "☐" }
+                                                        match t.status {
+                                                            Status::Open => "☐",
+                                                            Status::Done => "☑",
+                                                            other => other.glyph(),
+                                                        }
                                                     }
                                                     span {
                                                         class: "task-text",

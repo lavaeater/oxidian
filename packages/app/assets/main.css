@@ -1320,6 +1320,9 @@ kbd {
 .task-row:hover { background: var(--bg3); }
 .task-row--done { color: var(--text-muted); }
 .task-row--done .task-text { text-decoration: line-through; }
+/* Migrated, scheduled, dropped, events: resolved, so dimmed — but not struck
+   through. You are meant to be able to read your own churn back. */
+.task-row--closed { color: var(--text-muted); }
 
 .task-check {
   background: none;

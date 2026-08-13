@@ -679,8 +679,8 @@ mod tests {
         let QueryResult::Tasks(tasks) = run("task from \"games\"") else { panic!() };
         assert_eq!(tasks.len(), 3);
         // Open tasks first (tasks::cmp), so the completed one is last.
-        assert!(!tasks[0].checked);
-        assert!(tasks[2].checked);
+        assert!(!tasks[0].is_done());
+        assert!(tasks[2].is_done());
     }
 
     #[test]
