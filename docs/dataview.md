@@ -1,6 +1,16 @@
 # Oxidian — Dataview (US 18.1 / 18.2)
 
-**Status:** phases 0–5 implemented — a `dataview` block renders in the editor, folds back to source when you click it, and `TASK` results are clickable. The index lives in IndexedDB (web) / its own file (native). Phase 6 (inline expressions) is next; see §9 for the phase table.
+**Status:** phases 0–5 implemented — a `dataview` block renders in the editor, folds back to source when you click it, and `TASK` results are clickable. The index lives in IndexedDB (web) / its own file (native), one record per note, and also serves full-text search (§12–13). See §9 for the phase table.
+
+**What is left**, in the order it would most likely be picked up again:
+
+| Left | Where | Notes |
+|---|---|---|
+| Inline `` `= expr` `` queries | phase 6, §9 | The evaluator already exists; this is a second call site plus inline rendering. |
+| `GROUP BY`, `FLATTEN`, `CALENDAR` | deferred in phase 3, §9 | Each currently parses to an explicit "not supported yet" message, so they fail legibly rather than as a syntax error. |
+| Bulk archive seed (full offline vault) | phase 7, §7 | **Half-done already:** search needed every note's body, so the index stores it — the mirror exists, the *seed* does not. Blocked on the two unknowns in §7: CORS on `codeload.github.com`, and where to decompress gzip in wasm. |
+| `dataviewjs` | phase 8, §9 | Needs a plugin host. Maybe, maybe never. |
+
 **Branch:** `data-view`.
 **Code:** `packages/index` (`extract`, `value`, `frontmatter`, `tasks`, `Index`, `dql/{parse,eval,render}`), `packages/app/src/vault_index.rs`.
 
@@ -363,9 +373,9 @@ Each phase is independently useful and shippable.
 | **3** ✅ | DQL lexer, parser, and evaluator (`dql/`), pure and unit-tested. `TABLE [WITHOUT ID]` / `LIST` / `TASK`, `FROM` (folder, tag, link, `outgoing()`, `and`/`or`/`-`), `WHERE`, `SORT`, `LIMIT`, ~20 built-in functions. Errors are values. **Deferred:** `GROUP BY`, `FLATTEN`, `CALENDAR` — each parses to a clear "not supported yet" message rather than a confusing syntax error. | 2 |
 | **4** ✅ | Rendering. `dql::render` turns a result into escaped HTML (table / list / task list, error block, empty state) and `dql::run` is the one call the UI makes. In the editor, `MarkdownArea` takes a `BlockRenderer` callback (the `ui` crate can't depend on `index`, so `app` supplies it) and shows a claimed fence as output, swapping back to source when the caret enters it — or when you click the output. **The first shippable dataview.** See §8.1 for how folding keeps the document model intact. | 3 |
 | **5** ✅ | `TASK` queries with click-to-toggle write-back. Rendered checkboxes carry a `data-action`; the editor forwards it to the host via `on_block_action`, which resolves the task **from the index** (never from DOM text) and writes through the same `write_task_toggle` the Tasks panel uses. | 4 |
-| **6** | Inline `` `= expr` `` queries. | 3 |
-| **7** | Full content mirror + archive seeding (§7); offline vault; full-text search stops using the search API. | 1 |
-| **8** | *(Maybe, maybe never)* `dataviewjs` via the plugin host API — opt-in per vault only. | plugin architecture |
+| **6** ⬜ | Inline `` `= expr` `` queries. The evaluator from phase 3 does the work; what's new is recognising the inline form and rendering a value rather than a block. | 3 |
+| **7** 🟨 | Full content mirror + archive seeding (§7); offline vault. **Partly done:** search needed every note's body, so `PageData::text` already holds it and search no longer touches the host's search API (§12) — the mirror is there. The **seed** is not: first run still reads notes one at a time instead of pulling one tarball, and §7's two unknowns (CORS on `codeload.github.com`, gzip decompression in wasm) are still unanswered. | 1 |
+| **8** ⬜ | *(Maybe, maybe never)* `dataviewjs` via the plugin host API — opt-in per vault only. | plugin architecture |
 
 Phases 0–2 are the ones that pay for themselves regardless of whether dataview ever ships: they make the Tasks view, graph, backlinks, and the tags pane share one coherent, incrementally-refreshed index instead of three partial ones.
 

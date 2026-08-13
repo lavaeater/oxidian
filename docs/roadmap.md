@@ -4,9 +4,9 @@ This document sequences the work from `git-integration.md` and `user-stories.md`
 
 ---
 
-## Current status (June 2026)
+## Current status (August 2026)
 
-The app is live and working on **web** and **Android**. The core read/write loop, editor, graph, Kanban, and multi-provider support are done.
+The app is live and working on **web** and **Android**. The core read/write loop, editor, graph, Kanban, and multi-provider support are done. The `data-view` branch added the shared vault index and, on top of it, inline Dataview blocks and local full-text search.
 
 **Platform priority is now web + mobile (Android).** The author always has either a computer or an Android phone, and web also covers iPad. `packages/desktop` still builds and shares all the same code, but is no longer a focus — so the desktop-only **local git backend (M4)** and **iOS** are deprioritized. See `CLAUDE.md`.
 
@@ -33,6 +33,8 @@ Below is a detailed status for every user story.
 | US 16.1 / 16.2 | **Word count** — live word count in editor status bar | ✅ Done |
 | US 17.1 | **Formatting toolbar** — floating Bold/Italic/Heading/List toolbar | ✅ Done |
 | US 19.1 / 19.2 | **Kanban** — headings as columns, drag to reorder | ✅ Done |
+| US 18.1 / 18.2 | **Dataview** — `dataview` fences render inline: `TABLE` / `LIST` / `TASK`, `FROM` / `WHERE` / `SORT` / `LIMIT`, ~20 built-in functions. A block folds back to its source when the caret enters it or you click the output, and `TASK` results toggle through to the note. Phases 0–5 of [`dataview.md`](dataview.md); 6–8 remain, see below | ✅ Done |
+| — | **Shared vault index** (`packages/index`) — one incrementally-refreshed model of the vault (frontmatter, inline `key:: value` fields, tags, headings, links, tasks, body text) behind Tasks, backlinks, graph, search and Dataview, stored one record per note in IndexedDB (web) / a file each (native), with a storage footer and Rebuild | ✅ Done |
 | — | **Tasks view** — vault-wide checkbox aggregation grouped by file, Obsidian-Tasks metadata (📅 due / priority / ✅ done), toggle + jump (`tasks.rs`, `Panel::Tasks`) | ✅ Done |
 | — | **GitLab support** — second provider alongside GitHub | ✅ Done |
 | — | **GitHub OAuth device flow** — no-PAT sign-in (incl. mobile copy-code + token persistence) | ✅ Done |
@@ -74,7 +76,7 @@ Listed roughly by priority / dependency order. Filtered to the web + Android foc
 |----|---------|--------|
 | US 5.1 | **Extract to note** — selection → new note + `[[link]]` | Medium |
 | US 5.2 | **Merge notes** — append + delete source + update links | Medium |
-| US 18.1 / 18.2 | **Dataview** — SQL-like query blocks rendered inline — designed in [`dataview.md`](dataview.md), phased 0→8; phase 0 (shared vault index) **in progress** on branch `data-view` | Large |
+| US 18.1 / 18.2 | **Dataview — remaining phases** — inline `` `= expr` `` queries (phase 6); bulk archive seed for a full offline vault (phase 7, partly overtaken — see below); `dataviewjs` (phase 8, maybe never). Plus the DQL clauses deliberately deferred in phase 3: `GROUP BY`, `FLATTEN`, `CALENDAR`, each of which parses to a "not supported yet" message rather than a syntax error | Medium |
 
 ### Publishing & export
 
@@ -113,7 +115,8 @@ M4  Local git (desktop)         ⬜ Deprioritized (desktop not a focus)
 M5  Knowledge graph             ✅ Force-directed graph, WikiLink index, Backlinks
                                  ⬜ Hover preview, local graph (remaining)
 M6  Note refactoring            ⬜ Not started (Extract, Merge)
-                                 🚧 Dataview — see docs/dataview.md; phase 0 (packages/index) under way
+                                 ✅ Dataview phases 0–5 — blocks render, fold to source, TASK write-back
+                                 ⬜ Dataview phases 6–8 — inline `= expr`, offline mirror, dataviewjs
 M7  Multi-provider & mobile     ✅ GitHub + GitLab + OAuth device flow, Android (fully working)
                                  ⬜ Android Keystore, mobile gestures; Gitea/iOS parked
 M8  Publish & export            ✅ Single-note HTML export
@@ -133,10 +136,18 @@ Ordered for the web + Android focus (no desktop/local-git dependencies):
 
 *(Done: Command Palette + global keyboard-shortcut framework — US 2.)*
 
-**Cross-cutting, started on `data-view`:** the shared vault index (`packages/index`) generalises
-`tasks_cache`'s blob-SHA diffing so Tasks, backlinks, graph, the Tags pane, and Dataview all read
-one incrementally-refreshed index instead of three partial ones. It is a prerequisite for Dataview
-(phases 0–2 in [`dataview.md`](dataview.md)) and makes the **Tags pane (US 14)** mostly a UI job.
+**Cross-cutting, landed on `data-view`:** the shared vault index (`packages/index`) generalises
+`tasks_cache`'s blob-SHA diffing so Tasks, backlinks, graph, search, and Dataview all read one
+incrementally-refreshed index instead of several partial ones. Two knock-on effects worth knowing
+when picking the next thing up:
+
+- The **Tags pane (US 14)** is now mostly a UI job — `Index::tag_counts` and `pages_with_tag`
+  already exist and are tested.
+- **Phase 7 (full offline vault) is half-done by accident.** Search needed every note's body, so
+  the index already stores it — the content mirror exists in substance. What is missing is the
+  bulk *seed*: one tarball request instead of thousands of `read_file` calls, plus the two open
+  questions in [`dataview.md`](dataview.md) §7 (does `codeload.github.com` send CORS headers for an
+  authenticated request, and where to decompress gzip in wasm).
 
 ---
 
