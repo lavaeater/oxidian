@@ -8,6 +8,8 @@ const { test, expect } = require("@playwright/test");
 const { openFile, seedConfig, mockGitHub } = require("./helpers");
 
 const INDEX_KEY = "oxidian_index_v1";
+/** Tracks `index::FORMAT_VERSION` in packages/index/src/lib.rs — bump together. */
+const FORMAT_VERSION = 3;
 
 /** Read from one of the app's IndexedDB stores, in the page. */
 function readStore(page, store) {
@@ -138,7 +140,7 @@ test("an index left as a single blob by an older build is adopted, not rebuilt",
   // blob, with no per-note records. Built from what the app itself wrote, so
   // the payload is faithful rather than hand-rolled.
   await page.evaluate(
-    (key) =>
+    ({ key, version }) =>
       new Promise((resolve) => {
         const req = indexedDB.open("oxidian", 2);
         req.onsuccess = () => {
@@ -152,13 +154,16 @@ test("an index left as a single blob by an older build is adopted, not rebuilt",
             keys.result.forEach((k, i) => (pages[k] = JSON.parse(vals.result[i])));
             const t = db.transaction(["pages", "blobs"], "readwrite");
             t.objectStore("pages").clear();
-            t.objectStore("blobs").put(JSON.stringify({ version: 2, pages }), key);
+            // Must track `index::FORMAT_VERSION` (packages/index/src/lib.rs):
+            // the point of this test is a blob of the *current* format written
+            // by a previous build, not an outdated one, which is discarded.
+            t.objectStore("blobs").put(JSON.stringify({ version, pages }), key);
             t.oncomplete = () => { db.close(); resolve(); };
           };
         };
         req.onerror = () => resolve();
       }),
-    INDEX_KEY
+    { key: INDEX_KEY, version: FORMAT_VERSION }
   );
 
   const readsBefore = reads;

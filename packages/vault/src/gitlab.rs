@@ -210,6 +210,8 @@ mod tests {
             provider: crate::Provider::GitLab,
             templates_dir: String::new(),
             daily_note_template: String::new(),
+            weekly_note_template: String::new(),
+            monthly_note_template: String::new(),
         }
     }
 

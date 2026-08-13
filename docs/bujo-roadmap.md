@@ -1,6 +1,6 @@
 # Oxidian — Bullet Journal (US 20–22)
 
-**Status:** design only, nothing built.
+**Status:** phases 0–1 built — entries carry a real status (`[>] [<] [-] [o]`, not just done/not-done), and weekly and monthly logs exist alongside the daily note with a period switcher. Phase 2 (rapid logging in the editor) or 3 (the migration ritual) is next; 3 is where it starts to feel like a bullet journal.
 **Source material:** [`bullet-journal.md`](bullet-journal.md) — the method as described by its authors, plus the notes that started this.
 **Depends on:** `packages/index` (tasks, tags, dates), `packages/app/src/dates.rs`, `template.rs`, the tasks-move machinery in `views/vault.rs`.
 
@@ -129,8 +129,8 @@ Each phase is independently shippable, and the early ones pay for themselves eve
 
 | Phase | Deliverable | Depends on |
 |---|---|---|
-| **0** | `Status` enum replacing `checked: bool`; parse and write `[>] [<] [-] [o]`; `FORMAT_VERSION` → 3; Tasks panel and DQL `TASK` show the new states. **No new UI.** Pure `packages/index` work, fully unit-testable. | — |
-| **1** | Weekly and monthly logs (absorbs US 3.2/3.3): settings, templates, `dates.rs` period arithmetic, and the period switcher. Useful on its own to anyone who wants weekly notes. | 0 |
+| **0** ✅ | `Status` enum replacing `checked: bool`; parse and write `[>] [<] [-] [o]`; `FORMAT_VERSION` → 3; Tasks panel and DQL `TASK` show the new states. Pure `packages/index` work, fully unit-testable. `set_status_content` is the single write path, which phase 3 reuses. | — |
+| **1** ✅ | Weekly and monthly logs (absorbs the weekly/monthly half of US 3.2/3.3): `weekly_note_template` / `monthly_note_template` settings, `dates::Period` arithmetic, palette commands, and the period switcher. Useful on its own to anyone who wants weekly notes. | 0 |
 | **2** | Rapid logging in the editor: a keyboard shortcut and slash commands to cycle an entry's signifier, and glyph rendering in `MarkdownArea`. Makes the syntax pleasant instead of merely possible. | 0 |
 | **3** | **The migration ritual.** Review screen over the closing period with Done / Migrate / Schedule / Drop, on top of the existing transactional move. **The first recognisably-BuJo release.** | 1 |
 | **4** | **The running Index** — collections, threads, first-seen/last-touched, as a panel. | 0 |

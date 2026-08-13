@@ -542,6 +542,37 @@ kbd {
 .tb-sep { width: 1px; height: 16px; background: var(--border); margin: 0 3px; }
 
 /* ── Panel tabs ── */
+/* Period switcher: Day / Week / Month, with a step either side. Sits above the
+   panel tabs because moving between scales is a journal action, not a view. */
+.period-switcher {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.period-btn,
+.period-step {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 0.78rem;
+  padding: 3px 0;
+  cursor: pointer;
+}
+.period-btn { flex: 1; }
+.period-step { width: 26px; font-size: 0.95rem; line-height: 1; }
+.period-btn:hover,
+.period-step:hover { background: var(--bg3); color: var(--text); }
+.period-btn--active {
+  background: var(--bg3);
+  border-color: var(--border);
+  color: var(--text);
+}
+
 .panel-tabs {
   display: flex;
   border-bottom: 1px solid var(--border);

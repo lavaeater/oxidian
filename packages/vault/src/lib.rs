@@ -225,6 +225,8 @@ mod tests {
             provider: Provider::GitLab,
             templates_dir: "tpl".into(),
             daily_note_template: "tpl/daily.md".into(),
+            weekly_note_template: "tpl/weekly.md".into(),
+            monthly_note_template: String::new(),
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let back: GithubConfig = serde_json::from_str(&json).unwrap();

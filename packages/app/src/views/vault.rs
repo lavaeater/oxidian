@@ -31,13 +31,35 @@ use crate::wikilink_index::WikiLinkIndex;
 async fn apply_template(
     meta: &TemplateMeta,
     cfg: &GithubConfig,
-    mut files: Signal<Vec<FileMeta>>,
+    files: Signal<Vec<FileMeta>>,
     // Open mailbox of the target pane: setting it makes that pane open the path.
+    open: Signal<Option<String>>,
+    load_error: Signal<Option<String>>,
+    current_dir: &str,
+) {
+    apply_template_on(meta, cfg, files, open, load_error, current_dir, "").await;
+}
+
+/// [`apply_template`] with the date variables pinned to `date` (`YYYY-MM-DD`),
+/// or today when it is empty.
+///
+/// The weekly and monthly logs need this: you plan next week during *this* one,
+/// so the note being created is routinely for a period that doesn't contain
+/// today, and `${OXID_DATE_*}` has to resolve accordingly.
+async fn apply_template_on(
+    meta: &TemplateMeta,
+    cfg: &GithubConfig,
+    mut files: Signal<Vec<FileMeta>>,
     mut open: Signal<Option<String>>,
     mut load_error: Signal<Option<String>>,
     current_dir: &str,
+    date: &str,
 ) {
-    let date_json = crate::dates::date_vars_json().await;
+    let date_json = if date.is_empty() {
+        crate::dates::date_vars_json().await
+    } else {
+        crate::dates::date_vars_json_for(date)
+    };
     let vars = template::TemplateVars::from_json(&date_json, "", current_dir);
 
     if vars.year.is_empty() || vars.month.is_empty() || vars.date.is_empty() {
@@ -226,6 +248,8 @@ enum Cmd {
     NewFile,
     NewFolder,
     DailyNote,
+    WeeklyLog,
+    MonthlyLog,
     ExportHtml,
     ToggleSidebar,
     ToggleSplit,
@@ -244,6 +268,8 @@ impl Cmd {
         Cmd::NewFile,
         Cmd::NewFolder,
         Cmd::DailyNote,
+        Cmd::WeeklyLog,
+        Cmd::MonthlyLog,
         Cmd::ExportHtml,
         Cmd::ToggleSidebar,
         Cmd::ToggleSplit,
@@ -262,6 +288,8 @@ impl Cmd {
             Cmd::NewFile => "New note",
             Cmd::NewFolder => "New folder",
             Cmd::DailyNote => "Open today's daily note",
+            Cmd::WeeklyLog => "Open this week's log",
+            Cmd::MonthlyLog => "Open this month's log",
             Cmd::ExportHtml => "Export current note as HTML",
             Cmd::ToggleSidebar => "Toggle sidebar",
             Cmd::ToggleSplit => "Toggle editor split",
@@ -290,6 +318,8 @@ impl Cmd {
             Cmd::NewFile => "create page",
             Cmd::NewFolder => "create directory",
             Cmd::DailyNote => "today journal calendar",
+            Cmd::WeeklyLog => "week weekly log journal bujo periodic",
+            Cmd::MonthlyLog => "month monthly log journal bujo periodic",
             Cmd::ExportHtml => "download save html",
             Cmd::ToggleSidebar => "hide show panel",
             Cmd::ToggleSplit => "pane two columns",
@@ -579,26 +609,61 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
     let cfg_tmpl_run = config.clone();
     let cfg_link = config.clone();
 
+    // Which log scale the switcher is on, and the date it is browsing. The date
+    // is remembered so stepping is cumulative — ‹ ‹ ‹ walks back three weeks
+    // rather than bouncing off "last week" each time. Empty until the first
+    // step, which means "today".
+    let mut log_period = use_signal(|| dates::Period::Day);
+    let mut log_date = use_signal(String::new);
+    use_effect(move || {
+        spawn(async move {
+            if log_date.read().is_empty() {
+                log_date.set(crate::dates::today().await);
+            }
+        });
+    });
+    // The switcher is only meaningful once there is somewhere for a week or a
+    // month to go; with neither configured it would be three buttons that
+    // report an error.
+    let has_periodic_logs =
+        !config.weekly_note_template.is_empty() || !config.monthly_note_template.is_empty();
+
     // ── Command actions ───────────────────────────────────────────────────────
     // Shared, Copy callbacks so the same logic runs from a toolbar button, the
     // command palette, and a keyboard shortcut.
 
-    // Open (or create) today's daily note. Extracted from the sidebar button so
-    // the palette can trigger it too.
-    let run_daily = use_callback(move |(): ()| {
+    // Open (or create) the log for a period, on a given date ("" = today).
+    // Shared by the sidebar buttons, the period switcher, and the palette.
+    let run_periodic = use_callback(move |(period, date): (dates::Period, String)| {
         let cfg = cfg_daily.clone();
-        let tmpl_path = cfg.daily_note_template.clone();
-        let tmpl = templates
-            .read()
-            .iter()
-            .find(|t| t.source_path == tmpl_path)
-            .cloned();
+        let tmpl_path = match period {
+            dates::Period::Day => cfg.daily_note_template.clone(),
+            dates::Period::Week => cfg.weekly_note_template.clone(),
+            dates::Period::Month => cfg.monthly_note_template.clone(),
+        };
+        let tmpl = if tmpl_path.is_empty() {
+            None
+        } else {
+            templates
+                .read()
+                .iter()
+                .find(|t| t.source_path == tmpl_path)
+                .cloned()
+        };
         let open_mbx = focused_open_mbx();
         spawn(async move {
             if let Some(meta) = tmpl {
-                apply_template(&meta, &cfg, files, open_mbx, load_error, "").await;
+                apply_template_on(&meta, &cfg, files, open_mbx, load_error, "", &date).await;
+            } else if period != dates::Period::Day {
+                // Only the daily note has a sensible fallback path. Guessing one
+                // for a week would scatter notes into a folder the user never
+                // chose, so say what's missing instead.
+                load_error.set(Some(format!(
+                    "No {} log template configured — set one in Settings.",
+                    period.label().to_lowercase()
+                )));
             } else {
-                let date = crate::dates::today().await;
+                let date = if date.is_empty() { crate::dates::today().await } else { date };
                 if date.is_empty() {
                     return;
                 }
@@ -656,7 +721,9 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
             Cmd::QuickSwitcher => show_switcher.set(true),
             Cmd::NewFile => show_new_file.set(true),
             Cmd::NewFolder => show_new_folder.set(true),
-            Cmd::DailyNote => run_daily.call(()),
+            Cmd::DailyNote => run_periodic.call((dates::Period::Day, String::new())),
+            Cmd::WeeklyLog => run_periodic.call((dates::Period::Week, String::new())),
+            Cmd::MonthlyLog => run_periodic.call((dates::Period::Month, String::new())),
             Cmd::ExportHtml => run_export.call(()),
             Cmd::ToggleSidebar => sidebar_open.set(!sidebar_open()),
             Cmd::ToggleSplit => split.set(!split()),
@@ -836,7 +903,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                         button {
                             class: "sidebar-icon-btn",
                             title: "Today's note",
-                            onclick: move |_| run_daily.call(()),
+                            onclick: move |_| run_periodic.call((dates::Period::Day, String::new())),
                             IcoCalendar { size: 16 }
                         }
                         // Sign-in link is a web-only affordance: it carries the
@@ -877,6 +944,46 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                             title: "Close",
                             onclick: move |_| sidebar_open.set(false),
                             IcoX { size: 16 }
+                        }
+                    }
+                }
+
+                // Period switcher. The method's value comes from moving between
+                // scales, so "up" and "next" are always one tap away — and the
+                // date being browsed persists, so ‹ ‹ walks back through weeks.
+                if has_periodic_logs {
+                    div { class: "period-switcher",
+                        button {
+                            class: "period-step",
+                            title: "Previous",
+                            onclick: move |_| {
+                                let d = dates::shift_period(log_period(), &log_date(), -1);
+                                log_date.set(d.clone());
+                                run_periodic.call((log_period(), d));
+                            },
+                            "‹"
+                        }
+                        for p in [dates::Period::Day, dates::Period::Week, dates::Period::Month] {
+                            button {
+                                key: "{p:?}",
+                                class: if log_period() == p { "period-btn period-btn--active" } else { "period-btn" },
+                                title: "{dates::period_key(p, &log_date())}",
+                                onclick: move |_| {
+                                    log_period.set(p);
+                                    run_periodic.call((p, log_date()));
+                                },
+                                "{p.label()}"
+                            }
+                        }
+                        button {
+                            class: "period-step",
+                            title: "Next",
+                            onclick: move |_| {
+                                let d = dates::shift_period(log_period(), &log_date(), 1);
+                                log_date.set(d.clone());
+                                run_periodic.call((log_period(), d));
+                            },
+                            "›"
                         }
                     }
                 }
