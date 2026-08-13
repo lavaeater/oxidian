@@ -1,12 +1,12 @@
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::Deserialize;
 
-use crate::{FileContent, FileMeta, GithubConfig, SearchResult, VaultError};
+use crate::{FileContent, FileMeta, GithubConfig, VaultError};
 
 const API: &str = "https://api.github.com";
 
 fn request(method: reqwest::Method, url: &str, token: &str) -> reqwest::RequestBuilder {
-    reqwest::Client::new()
+    crate::http::client()
         .request(method, url)
         .header("Authorization", format!("Bearer {token}"))
         .header("User-Agent", "Oxidian/0.1")
@@ -29,7 +29,7 @@ fn status_error(status: u16, path: &str) -> Option<VaultError> {
     }
 }
 
-async fn check(resp: reqwest::Response) -> Result<reqwest::Response, VaultError> {
+fn check(resp: reqwest::Response) -> Result<reqwest::Response, VaultError> {
     if let Some(err) = status_error(resp.status().as_u16(), resp.url().path()) {
         return Err(err);
     }
@@ -41,6 +41,10 @@ async fn check(resp: reqwest::Response) -> Result<reqwest::Response, VaultError>
 #[derive(Deserialize)]
 struct TreeResponse {
     tree: Vec<TreeEntry>,
+    /// GitHub sets this when the recursive listing hit its limit (~100k entries
+    /// or 7 MB) and silently dropped the rest. See `list_files`.
+    #[serde(default)]
+    truncated: bool,
 }
 
 #[derive(Deserialize)]
@@ -59,13 +63,29 @@ fn tree_url(cfg: &GithubConfig) -> String {
     )
 }
 
+/// One directory level. `sha` is a tree SHA (or the branch name at the root);
+/// entry paths are bare names, not full paths.
+fn subtree_url(cfg: &GithubConfig, sha: &str) -> String {
+    format!("{API}/repos/{}/{}/git/trees/{sha}", cfg.owner, cfg.repo)
+}
+
+/// Join a directory prefix and an entry name, keeping root-level paths bare.
+fn join_path(prefix: &str, name: &str) -> String {
+    if prefix.is_empty() { name.to_string() } else { format!("{prefix}/{name}") }
+}
+
 /// Keep markdown notes plus `.gitkeep` placeholders so empty folders (created
 /// via "New folder" / Kanban columns) still appear in the tree; drop trees and
 /// non-note blobs.
+fn keep_blob(path: &str) -> bool {
+    let ext = std::path::Path::new(path).extension();
+    ext.is_some_and(|e| e.eq_ignore_ascii_case("md")) || path.ends_with(".gitkeep")
+}
+
 fn tree_to_files(tree: TreeResponse) -> Vec<FileMeta> {
     tree.tree
         .into_iter()
-        .filter(|e| e.kind == "blob" && (e.path.ends_with(".md") || e.path.ends_with(".gitkeep")))
+        .filter(|e| e.kind == "blob" && keep_blob(&e.path))
         .map(|e| FileMeta {
             path: e.path,
             sha: e.sha,
@@ -74,17 +94,55 @@ fn tree_to_files(tree: TreeResponse) -> Vec<FileMeta> {
         .collect()
 }
 
-pub async fn list_files(cfg: &GithubConfig) -> Result<Vec<FileMeta>, VaultError> {
-    let resp = get(&tree_url(cfg), &cfg.token)
+async fn fetch_tree(cfg: &GithubConfig, url: &str) -> Result<TreeResponse, VaultError> {
+    let resp = get(url, &cfg.token)
         .send()
         .await
         .map_err(|e| VaultError::Http(e.to_string()))?;
-    let tree: TreeResponse = check(resp)
-        .await?
+    check(resp)?
         .json()
         .await
-        .map_err(|e| VaultError::Http(e.to_string()))?;
-    Ok(tree_to_files(tree))
+        .map_err(|e| VaultError::Http(e.to_string()))
+}
+
+/// The whole vault listing, normally in a single recursive tree request.
+///
+/// If GitHub reports the recursive listing as `truncated` (~100k entries or
+/// 7 MB — reachable in a big vault with attachments), the response is silently
+/// missing files, which would show up as notes vanishing from the tree and as
+/// wrong query results once the index is built on top of this. In that case we
+/// fall back to walking one directory at a time, which costs one request per
+/// directory but is complete. The fallback is rare enough not to be worth
+/// parallelising.
+pub async fn list_files(cfg: &GithubConfig) -> Result<Vec<FileMeta>, VaultError> {
+    let tree = fetch_tree(cfg, &tree_url(cfg)).await?;
+    if !tree.truncated {
+        return Ok(tree_to_files(tree));
+    }
+    walk_tree(cfg).await
+}
+
+/// Breadth-first directory walk, used only when the recursive listing truncates.
+async fn walk_tree(cfg: &GithubConfig) -> Result<Vec<FileMeta>, VaultError> {
+    let mut files = Vec::new();
+    // (tree sha, path prefix); the branch name resolves as the root tree.
+    let mut queue = vec![(cfg.branch.clone(), String::new())];
+    while let Some((sha, prefix)) = queue.pop() {
+        let tree = fetch_tree(cfg, &subtree_url(cfg, &sha)).await?;
+        for entry in tree.tree {
+            let path = join_path(&prefix, &entry.path);
+            match entry.kind.as_str() {
+                "tree" => queue.push((entry.sha, path)),
+                "blob" if keep_blob(&path) => files.push(FileMeta {
+                    path,
+                    sha: entry.sha,
+                    size: entry.size.unwrap_or(0),
+                }),
+                _ => {}
+            }
+        }
+    }
+    Ok(files)
 }
 
 // ── read_file ─────────────────────────────────────────────────────────────────
@@ -117,8 +175,7 @@ pub async fn read_file(cfg: &GithubConfig, path: &str) -> Result<FileContent, Va
         .send()
         .await
         .map_err(|e| VaultError::Http(e.to_string()))?;
-    let body: ContentsResponse = check(resp)
-        .await?
+    let body: ContentsResponse = check(resp)?
         .json()
         .await
         .map_err(|e| VaultError::Http(e.to_string()))?;
@@ -172,83 +229,12 @@ pub async fn write_file(
         return Err(VaultError::Conflict);
     }
 
-    let written: WriteResponse = check(resp)
-        .await?
+    let written: WriteResponse = check(resp)?
         .json()
         .await
         .map_err(|e| VaultError::Http(e.to_string()))?;
 
     Ok(written.content.sha)
-}
-
-// ── search_code ───────────────────────────────────────────────────────────────
-
-#[derive(Deserialize)]
-struct SearchResponse {
-    items: Vec<SearchItem>,
-}
-
-#[derive(Deserialize)]
-struct SearchItem {
-    path: String,
-    sha: String,
-    #[serde(default)]
-    text_matches: Vec<TextMatch>,
-}
-
-#[derive(Deserialize)]
-struct TextMatch {
-    fragment: String,
-}
-
-fn search_url(cfg: &GithubConfig, query: &str) -> String {
-    let q = format!("{} repo:{}/{}", query.trim(), cfg.owner, cfg.repo);
-    format!("{API}/search/code?q={}&per_page=30", urlencoded(&q))
-}
-
-/// Keep only markdown hits and lift the first text-match fragment per item.
-fn search_to_results(body: SearchResponse) -> Vec<SearchResult> {
-    body.items
-        .into_iter()
-        .filter(|i| i.path.ends_with(".md"))
-        .map(|i| SearchResult {
-            path: i.path,
-            sha: i.sha,
-            fragment: i
-                .text_matches
-                .into_iter()
-                .next()
-                .map(|m| m.fragment)
-                .unwrap_or_default(),
-        })
-        .collect()
-}
-
-/// Full-text search across the repo using GitHub's Code Search API.
-/// Returns up to 30 results with matching text fragments.
-pub async fn search_code(cfg: &GithubConfig, query: &str) -> Result<Vec<SearchResult>, VaultError> {
-    if query.trim().is_empty() {
-        return Ok(vec![]);
-    }
-    let url = search_url(cfg, query);
-
-    let resp = reqwest::Client::new()
-        .get(&url)
-        .header("Authorization", format!("Bearer {}", cfg.token))
-        .header("User-Agent", "Oxidian/0.1")
-        // text-match media type returns matching fragments
-        .header("Accept", "application/vnd.github.text-match+json")
-        .send()
-        .await
-        .map_err(|e| VaultError::Http(e.to_string()))?;
-
-    let body: SearchResponse = check(resp)
-        .await?
-        .json()
-        .await
-        .map_err(|e| VaultError::Http(e.to_string()))?;
-
-    Ok(search_to_results(body))
 }
 
 // ── read_many ─────────────────────────────────────────────────────────────────
@@ -292,8 +278,7 @@ pub async fn create_file(
         return Err(VaultError::Http("File already exists".into()));
     }
 
-    let written: WriteResponse = check(resp)
-        .await?
+    let written: WriteResponse = check(resp)?
         .json()
         .await
         .map_err(|e| VaultError::Http(e.to_string()))?;
@@ -320,7 +305,7 @@ pub async fn delete_file(
         .send()
         .await
         .map_err(|e| VaultError::Http(e.to_string()))?;
-    check(resp).await?;
+    check(resp)?;
     Ok(())
 }
 
@@ -333,7 +318,7 @@ pub struct DeviceCodeResponse {
     pub device_code: String,
     pub user_code: String,
     pub verification_uri: String,
-    /// Pre-filled URL including the user_code as a query param — open this
+    /// Pre-filled URL including the `user_code` as a query param — open this
     /// directly so the user just has to click Authorize, no typing needed.
     #[serde(default)]
     pub verification_uri_complete: Option<String>,
@@ -365,7 +350,7 @@ fn classify_poll(access_token: Option<String>, error: Option<&str>, interval: Op
 }
 
 pub async fn request_device_code() -> Result<DeviceCodeResponse, VaultError> {
-    let resp = reqwest::Client::new()
+    let resp = crate::http::client()
         .post("https://github.com/login/device/code")
         .header("Accept", "application/json")
         .form(&[("client_id", GITHUB_CLIENT_ID), ("scope", "repo")])
@@ -384,7 +369,7 @@ pub async fn poll_device_token(device_code: &str) -> Result<PollOutcome, VaultEr
         error: Option<String>,
         interval: Option<u32>,
     }
-    let resp = reqwest::Client::new()
+    let resp = crate::http::client()
         .post("https://github.com/login/oauth/access_token")
         .header("Accept", "application/json")
         .form(&[
@@ -406,18 +391,8 @@ pub async fn get_username(token: &str) -> Result<String, VaultError> {
         .send()
         .await
         .map_err(|e| VaultError::Http(e.to_string()))?;
-    let user: User = check(resp).await?.json().await.map_err(|e| VaultError::Http(e.to_string()))?;
+    let user: User = check(resp)?.json().await.map_err(|e| VaultError::Http(e.to_string()))?;
     Ok(user.login)
-}
-
-fn urlencoded(s: &str) -> String {
-    s.chars()
-        .flat_map(|c| match c {
-            ' ' => "+".chars().collect::<Vec<_>>(),
-            c if c.is_alphanumeric() || "-_.~".contains(c) => vec![c],
-            c => format!("%{:02X}", c as u32).chars().collect(),
-        })
-        .collect()
 }
 
 #[cfg(test)]
@@ -450,16 +425,6 @@ mod tests {
     }
 
     #[test]
-    fn search_url_encodes_query_and_scopes_to_repo() {
-        let url = search_url(&cfg(), "hello world");
-        // Spaces -> '+', repo scope appended.
-        assert_eq!(
-            url,
-            "https://api.github.com/search/code?q=hello+world+repo%3Ame%2Fnotes&per_page=30"
-        );
-    }
-
-    #[test]
     fn tree_keeps_only_md_and_gitkeep_blobs() {
         let json = r#"{"tree":[
             {"path":"a.md","type":"blob","sha":"s1","size":10},
@@ -474,6 +439,34 @@ mod tests {
         // Missing size defaults to 0.
         assert_eq!(files[1].size, 0);
         assert_eq!(files[0].sha, "s1");
+    }
+
+    #[test]
+    fn truncated_flag_is_parsed_and_defaults_to_false() {
+        let plain: TreeResponse = serde_json::from_str(r#"{"tree":[]}"#).unwrap();
+        assert!(!plain.truncated, "absent flag must not be treated as truncated");
+        let cut: TreeResponse =
+            serde_json::from_str(r#"{"tree":[],"truncated":true}"#).unwrap();
+        assert!(cut.truncated, "a truncated listing must be detected, not silently used");
+    }
+
+    #[test]
+    fn subtree_url_and_path_joining_for_the_walk_fallback() {
+        assert_eq!(
+            subtree_url(&cfg(), "abc123"),
+            "https://api.github.com/repos/me/notes/git/trees/abc123"
+        );
+        // Root entries stay bare; nested ones get the prefix.
+        assert_eq!(join_path("", "a.md"), "a.md");
+        assert_eq!(join_path("notes", "a.md"), "notes/a.md");
+        assert_eq!(join_path("notes/sub", "a.md"), "notes/sub/a.md");
+    }
+
+    #[test]
+    fn keep_blob_matches_the_recursive_filter() {
+        assert!(keep_blob("a.md"));
+        assert!(keep_blob("empty/.gitkeep"));
+        assert!(!keep_blob("img.png"));
     }
 
     #[test]
@@ -495,23 +488,6 @@ mod tests {
     }
 
     #[test]
-    fn search_results_keep_md_and_lift_first_fragment() {
-        let json = r#"{"items":[
-            {"path":"note.md","sha":"a","text_matches":[{"fragment":"frag one"},{"fragment":"frag two"}]},
-            {"path":"code.rs","sha":"b","text_matches":[{"fragment":"x"}]},
-            {"path":"bare.md","sha":"c"}
-        ]}"#;
-        let body: SearchResponse = serde_json::from_str(json).unwrap();
-        let results = search_to_results(body);
-        assert_eq!(results.len(), 2);
-        assert_eq!(results[0].path, "note.md");
-        assert_eq!(results[0].fragment, "frag one");
-        // No text_matches -> empty fragment (serde default).
-        assert_eq!(results[1].path, "bare.md");
-        assert_eq!(results[1].fragment, "");
-    }
-
-    #[test]
     fn classify_poll_prefers_token() {
         assert_eq!(
             classify_poll(Some("gho_x".into()), Some("slow_down"), Some(5)),
@@ -528,12 +504,6 @@ mod tests {
         // Unknown/absent error while still waiting.
         assert_eq!(classify_poll(None, Some("authorization_pending"), None), PollOutcome::Pending);
         assert_eq!(classify_poll(None, None, None), PollOutcome::Pending);
-    }
-
-    #[test]
-    fn urlencoded_matches_github_query_rules() {
-        assert_eq!(urlencoded("a b/c"), "a+b%2Fc");
-        assert_eq!(urlencoded("keep-_.~"), "keep-_.~");
     }
 
     #[test]

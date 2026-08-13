@@ -19,13 +19,19 @@ module.exports = defineConfig({
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
-  workers: process.env.CI ? 1 : undefined,
+  // Every test loads a fresh ~3.4 MB wasm bundle and compiles it. Playwright's
+  // default (one worker per core) saturates the CPU and pushes `page.goto` past
+  // its timeout, so cap the pool well under the core count.
+  workers: process.env.CI ? 1 : Math.min(4, Math.max(1, Math.floor(require("os").cpus().length / 2))),
   reporter: process.env.CI ? [["html", { open: "never" }], ["list"]] : "list",
   timeout: 60 * 1000,
   expect: { timeout: 10 * 1000 },
   use: {
     baseURL: BASE_URL,
     trace: "retain-on-failure",
+    // Booting the app means fetching and compiling the wasm bundle; give that
+    // more room than the per-action default.
+    navigationTimeout: 30 * 1000,
   },
   projects: [
     { name: "chromium", use: { ...devices["Desktop Chrome"] } },

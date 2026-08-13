@@ -1,10 +1,9 @@
-/// In-memory WikiLink graph built from vault content.
+/// In-memory `WikiLink` graph built from vault content.
 ///
 /// We fetch file content lazily: files are added as the user opens them
 /// (content is already loaded), and a full index build can be triggered
 /// explicitly (fetches all remaining files).
-
-/// A single directed link: source_path → target_title.
+/// A single directed link: `source_path` → `target_title`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Link {
     pub source: String,
@@ -81,11 +80,11 @@ impl WikiLinkIndex {
                 let s = stem(f);
                 targets.iter().any(|t| stems_match(t, &s))
             })
-            .map(|f| f.as_str())
+            .map(std::string::String::as_str)
             .collect()
     }
 
-    /// Edges for graph rendering: (source_path, target_path) resolved pairs.
+    /// Edges for graph rendering: (`source_path`, `target_path`) resolved pairs.
     pub fn edges(&self, all_files: &[String]) -> Vec<(String, String)> {
         self.links
             .iter()
@@ -166,7 +165,7 @@ mod tests {
         idx.index_file("notes/b.md", "[[target]]"); // lowercase still matches
         idx.index_file("notes/Target.md", "[[Target]]"); // self-link excluded
         let mut back = idx.backlinks("notes/Target.md");
-        back.sort();
+        back.sort_unstable();
         assert_eq!(back, vec!["notes/a.md", "notes/b.md"]);
     }
 

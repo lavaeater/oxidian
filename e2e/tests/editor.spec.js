@@ -11,7 +11,7 @@
 // navigation spec here.
 
 const { test, expect } = require("@playwright/test");
-const { seedConfig, mockGitHub } = require("./helpers");
+const { openFile, seedConfig, mockGitHub } = require("./helpers");
 
 const FILES = {
   "Note.md": "# Title\n\nSome **bold** text and a [[Other]] link.",
@@ -24,7 +24,7 @@ async function openNote(page, files = FILES) {
   await seedConfig(page);
   await page.goto("/");
   await expect(page.getByText("Oxidian", { exact: true })).toBeVisible();
-  await page.getByText("Note", { exact: false }).first().click();
+  await openFile(page, "Note");
   await expect(page.locator(".md-area")).toBeVisible();
   await expect(page.locator(".editor-filename")).toHaveText("Note.md");
 }

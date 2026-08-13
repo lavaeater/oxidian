@@ -8,13 +8,13 @@ pub mod dates;
 pub mod export;
 pub mod icons;
 pub mod js;
+pub mod links;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod native_store;
 pub mod shortcuts;
 pub mod state;
-pub mod tasks;
-pub mod tasks_cache;
 pub mod template;
+pub mod vault_index;
 pub mod views;
 pub mod wikilink_index;
 
@@ -25,7 +25,7 @@ pub async fn sleep_ms(ms: u32) {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn sleep_ms(ms: u32) {
-    tokio::time::sleep(std::time::Duration::from_millis(ms as u64)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(u64::from(ms))).await;
 }
 
 /// Direct browser console.log — works even without a tracing subscriber.

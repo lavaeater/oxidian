@@ -17,12 +17,15 @@ mod bindings {
     use dioxus_use_js::use_js;
     use_js!("assets/oxidian.js"::{
         ls_get, ls_set, ls_remove,
+        blob_get, blob_set, blob_remove, storage_estimate,
+        records_all, records_put, records_delete, records_clear,
         today, date_vars,
         confirm_dialog, copy_to_clipboard,
         focus_selector, scroll_active_into_view, start_sidebar_resize,
         download_file,
         get_selection,
         slash_query, apply_slash,
+        task_menu_armed, dismiss_task_menu,
         build_signin_link, read_signin_link, request_persistent_storage,
         get_drag_data, set_drag_data, clear_drag_data,
     });
@@ -36,6 +39,7 @@ mod bindings {
 // localStorage. See `crate::native_store`.
 
 /// Reads a `localStorage` key, returning `""` when absent.
+#[allow(clippy::unused_async)] // native branch has no await; wasm32 branch does
 pub async fn ls_get(key: &str) -> String {
     #[cfg(target_arch = "wasm32")]
     {
@@ -72,6 +76,131 @@ pub fn ls_remove(key: impl Into<String>) {
     #[cfg(not(target_arch = "wasm32"))]
     {
         crate::native_store::remove(&key);
+    }
+}
+
+// ── Large blobs ───────────────────────────────────────────────────────────────
+
+// Anything that scales with the size of the vault goes here instead of
+// `localStorage`: IndexedDB on web, a file of its own on native. Small,
+// fixed-size settings stay in `ls_*`. See `crate::vault_index` and `docs/dataview.md` §6.7.
+
+/// Reads a blob, returning `""` when absent (as `ls_get` does).
+#[allow(clippy::unused_async)] // native branch has no await; wasm32 branch does
+pub async fn blob_get(key: &str) -> String {
+    #[cfg(target_arch = "wasm32")]
+    {
+        bindings::blob_get(key).await.unwrap_or_default()
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        crate::native_store::blob_get(key)
+    }
+}
+
+/// Writes a blob. Awaited rather than fire-and-forget so a caller that writes
+/// and immediately reads back (or navigates away) sees its own write.
+#[allow(clippy::unused_async)] // native branch has no await; wasm32 branch does
+pub async fn blob_set(key: &str, value: impl Into<String>) {
+    let value = value.into();
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _: Result<bool, _> = bindings::blob_set(key, value).await;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        crate::native_store::blob_set(key, &value);
+    }
+}
+
+#[allow(clippy::unused_async)] // native branch has no await; wasm32 branch does
+pub async fn blob_remove(key: &str) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _: Result<bool, _> = bindings::blob_remove(key).await;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        crate::native_store::blob_remove(key);
+    }
+}
+
+// ── Per-note index records ────────────────────────────────────────────────────
+
+// The index is stored one record per note (IndexedDB's `pages` store on web, a
+// file each on native) so saving a note costs one small write rather than a
+// rewrite of the whole index. Every call is a single batched transaction —
+// seeding a vault is thousands of records.
+
+/// Every record, as `(path, json)`.
+#[allow(clippy::unused_async)] // native branch has no await; wasm32 branch does
+pub async fn records_all() -> Vec<(String, String)> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        bindings::records_all().await.unwrap_or_default()
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        crate::native_store::records_all()
+    }
+}
+
+#[allow(clippy::unused_async)] // native branch has no await; wasm32 branch does
+pub async fn records_put(entries: Vec<(String, String)>) {
+    if entries.is_empty() {
+        return;
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _: Result<bool, _> = bindings::records_put(entries).await;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        crate::native_store::records_put(&entries);
+    }
+}
+
+#[allow(clippy::unused_async)] // native branch has no await; wasm32 branch does
+pub async fn records_delete(keys: Vec<String>) {
+    if keys.is_empty() {
+        return;
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _: Result<bool, _> = bindings::records_delete(keys).await;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        crate::native_store::records_delete(&keys);
+    }
+}
+
+#[allow(clippy::unused_async)] // native branch has no await; wasm32 branch does
+pub async fn records_clear() {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _: Result<bool, _> = bindings::records_clear().await;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        crate::native_store::records_clear();
+    }
+}
+
+/// `(usage, quota, persisted)` in bytes. `-1` for a figure the platform won't
+/// report — quota is always `-1` on native, where there isn't one.
+#[allow(clippy::unused_async)] // native branch has no await; wasm32 branch does
+pub async fn storage_estimate() -> (i64, i64, bool) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let v: [i64; 3] = bindings::storage_estimate().await.unwrap_or([-1, -1, 0]);
+        (v[0], v[1], v[2] == 1)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let (usage, quota) = crate::native_store::usage();
+        // A file in the app's private directory is as persistent as it gets.
+        (usage, quota, true)
     }
 }
 
@@ -136,7 +265,14 @@ pub fn download_file(filename: impl Into<String>, content: impl Into<String>) {
 /// `(start, end)` selection offsets in the active editor; `(0, 0)` when none.
 pub async fn get_selection() -> (usize, usize) {
     let v: [i64; 2] = bindings::get_selection().await.unwrap_or([-1, -1]);
-    if v[0] < 0 { (0, 0) } else { (v[0] as usize, v[1] as usize) }
+    if v[0] < 0 || v[1] < 0 {
+        (0, 0)
+    } else {
+        (
+            usize::try_from(v[0]).unwrap_or(0),
+            usize::try_from(v[1]).unwrap_or(0),
+        )
+    }
 }
 
 // ── Slash commands ────────────────────────────────────────────────────────────
@@ -156,10 +292,26 @@ pub fn apply_slash(snippet: impl Into<String>, slash_len: usize) {
     });
 }
 
+// ── Task metadata menu ────────────────────────────────────────────────────────
+
+/// Whether the caret sits on a blank task line just created by continuing a
+/// non-empty task via Enter — the trigger for the task-metadata menu.
+pub async fn task_menu_armed() -> bool {
+    bindings::task_menu_armed().await.unwrap_or(false)
+}
+
+/// Dismisses the task-metadata menu without changing any text.
+pub fn dismiss_task_menu() {
+    spawn(async move {
+        let _: Result<(), _> = bindings::dismiss_task_menu().await;
+    });
+}
+
 // ── Sign-in link / persistent storage ─────────────────────────────────────────
 
 /// Builds a bookmarkable sign-in link carrying `cfg_json` in the URL fragment.
 /// Web only — returns `""` on native (no shareable URL).
+#[allow(clippy::unused_async)] // native branch has no await; wasm32 branch does
 pub async fn build_signin_link(cfg_json: impl Into<String>) -> String {
     let cfg_json = cfg_json.into();
     #[cfg(target_arch = "wasm32")]
@@ -175,6 +327,7 @@ pub async fn build_signin_link(cfg_json: impl Into<String>) -> String {
 
 /// Consumes a `#cfg=…` sign-in link if the current URL carries one: returns the
 /// decoded config JSON and strips the fragment. `""` when there is none. Web only.
+#[allow(clippy::unused_async)] // native branch has no await; wasm32 branch does
 pub async fn read_signin_link() -> String {
     #[cfg(target_arch = "wasm32")]
     {

@@ -2,6 +2,7 @@
 ///
 /// Renders via a clean HTML-only pass (no contenteditable, no marker spans,
 /// no CSS classes that require the Oxidian stylesheet).
+use std::fmt::Write as _;
 
 use ui::tokenizer::{tokenize, TokenKind};
 
@@ -47,6 +48,7 @@ pub fn to_html(title: &str, markdown: &str) -> String {
     )
 }
 
+#[allow(clippy::too_many_lines)]
 fn render_tokens(source: &str, tokens: &[ui::tokenizer::Token]) -> String {
     let mut out = String::new();
     let mut in_code_fence = false;
@@ -89,9 +91,9 @@ fn render_tokens(source: &str, tokens: &[ui::tokenizer::Token]) -> String {
                 out.push_str("</s>");
             }
             TokenKind::Heading(level) => {
-                out.push_str(&format!("<h{level}>"));
+                let _ = write!(out, "<h{level}>");
                 out.push_str(&escape_html(display));
-                out.push_str(&format!("</h{level}>"));
+                let _ = write!(out, "</h{level}>");
             }
             TokenKind::Blockquote => {
                 out.push_str("<blockquote>");
@@ -102,16 +104,17 @@ fn render_tokens(source: &str, tokens: &[ui::tokenizer::Token]) -> String {
                 let indent = "  ".repeat(*depth as usize);
                 let tag = if *ordered { "ol" } else { "ul" };
                 // Simple single-item list (no grouping for now)
-                out.push_str(&format!("{indent}<{tag}><li>"));
+                let _ = write!(out, "{indent}<{tag}><li>");
                 out.push_str(&escape_html(display));
-                out.push_str(&format!("</li></{tag}>"));
+                let _ = write!(out, "</li></{tag}>");
             }
             TokenKind::TaskItem { checked, .. } => {
                 let check = if *checked { " checked" } else { "" };
-                out.push_str(&format!(
+                let _ = write!(
+                    out,
                     "<ul><li><input type=\"checkbox\" disabled{check}> {}",
                     escape_html(display)
-                ));
+                );
                 out.push_str("</li></ul>");
             }
             TokenKind::HorizontalRule => {
@@ -119,28 +122,32 @@ fn render_tokens(source: &str, tokens: &[ui::tokenizer::Token]) -> String {
             }
             TokenKind::Link { url_range } => {
                 let url = escape_html(&source[url_range.clone()]);
-                out.push_str(&format!("<a href=\"{url}\">"));
+                let _ = write!(out, "<a href=\"{url}\">");
                 out.push_str(&escape_html(display));
                 out.push_str("</a>");
             }
             TokenKind::WikiLink { target_range, .. } => {
                 let target = escape_html(&source[target_range.clone()]);
-                out.push_str(&format!("<span class=\"wikilink\" data-target=\"{target}\">"));
+                let _ = write!(out, "<span class=\"wikilink\" data-target=\"{target}\">");
                 out.push_str(&escape_html(display));
                 out.push_str("</span>");
             }
             TokenKind::Image { url_range } => {
                 let url = escape_html(&source[url_range.clone()]);
-                out.push_str(&format!("<img src=\"{url}\" alt=\"{}\" style=\"max-width:100%\">", escape_html(display)));
+                let _ = write!(
+                    out,
+                    "<img src=\"{url}\" alt=\"{}\" style=\"max-width:100%\">",
+                    escape_html(display)
+                );
             }
             TokenKind::CodeFence { lang_range } => {
                 if in_code_fence {
                     out.push_str("</code></pre>");
                     in_code_fence = false;
                 } else {
-                    let lang = lang_range.as_ref().map(|r| &source[r.clone()]).unwrap_or("");
+                    let lang = lang_range.as_ref().map_or("", |r| &source[r.clone()]);
                     let lang_attr = if lang.is_empty() { String::new() } else { format!(" class=\"language-{lang}\"") };
-                    out.push_str(&format!("<pre><code{lang_attr}>"));
+                    let _ = write!(out, "<pre><code{lang_attr}>");
                     in_code_fence = true;
                 }
             }

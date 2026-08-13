@@ -68,6 +68,11 @@ pub fn SlashMenu(
                 for (name, desc, insert) in cmds {
                     div {
                         class: "slash-item",
+                        // Without this, clicking the item steals focus/collapses
+                        // the editor's Selection before on_select runs, so
+                        // apply_slash has nowhere to insert into. Same pattern as
+                        // the formatting toolbar (`views::toolbar`).
+                        onmousedown: move |e| e.prevent_default(),
                         onclick: move |_| on_select(insert.clone()),
                         span { class: "slash-name", "{name}" }
                         span { class: "slash-desc", "{desc}" }
@@ -81,6 +86,7 @@ pub fn SlashMenu(
                         rsx! {
                             div {
                                 class: "slash-item slash-item--template",
+                                onmousedown: move |e| e.prevent_default(),
                                 onclick: move |_| on_template(t.clone()),
                                 span { class: "slash-name", "{name}" }
                                 span { class: "slash-desc", "Template · {kind}" }

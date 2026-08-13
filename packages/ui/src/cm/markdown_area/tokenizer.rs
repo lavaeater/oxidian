@@ -74,8 +74,7 @@ pub fn tokenize(source: &str) -> Vec<Token> {
     while pos < source.len() {
         let line_end = source[pos..]
             .find('\n')
-            .map(|i| pos + i)
-            .unwrap_or(source.len());
+            .map_or(source.len(), |i| pos + i);
         let line = &source[pos..line_end];
 
         if line.starts_with("```") {
@@ -148,9 +147,8 @@ fn is_horizontal_rule(line: &str) -> bool {
     if trimmed.len() < 3 {
         return false;
     }
-    let first = match trimmed.chars().next() {
-        Some(c @ ('-' | '*' | '_')) => c,
-        _ => return false,
+    let Some(first @ ('-' | '*' | '_')) = trimmed.chars().next() else {
+        return false;
     };
     trimmed.chars().all(|c| c == first || c == ' ')
         && trimmed.chars().filter(|&c| c == first).count() >= 3
@@ -188,7 +186,7 @@ fn detect_list_item(line: &str, pos: usize) -> Option<(bool, u8, usize)> {
     while i < bytes.len() && bytes[i] == b' ' {
         i += 1;
     }
-    let depth = (i / 2) as u8;
+    let depth = u8::try_from(i / 2).unwrap_or(u8::MAX);
 
     // Unordered: `- ` / `* ` / `+ `
     if i < bytes.len()
@@ -296,6 +294,7 @@ fn detect_task_item(line: &str, pos: usize, line_end: usize) -> Option<Token> {
     })
 }
 
+#[allow(clippy::too_many_lines)]
 pub fn tokenize_line(line: &str, line_offset: usize) -> Vec<Token> {
     let bytes = line.as_bytes();
     let len = bytes.len();
@@ -336,8 +335,7 @@ pub fn tokenize_line(line: &str, line_offset: usize) -> Vec<Token> {
         );
 
         // Inline code: `...`
-        if bytes[pos] == b'`' {
-            if let Some(end) = find_closing(bytes, pos + 1, b'`') {
+        if bytes[pos] == b'`' && let Some(end) = find_closing(bytes, pos + 1, b'`') {
                 flush_plain(line, line_offset, plain_start, pos, &mut tokens);
                 tokens.push(Token {
                     kind: TokenKind::Code,
@@ -347,12 +345,10 @@ pub fn tokenize_line(line: &str, line_offset: usize) -> Vec<Token> {
                 pos = end + 1;
                 plain_start = pos;
                 continue;
-            }
         }
 
         // Strikethrough: ~~...~~
-        if pos + 1 < len && bytes[pos] == b'~' && bytes[pos + 1] == b'~' {
-            if let Some(end) = find_double_closing(bytes, pos + 2, b'~') {
+        if pos + 1 < len && bytes[pos] == b'~' && bytes[pos + 1] == b'~' && let Some(end) = find_double_closing(bytes, pos + 2, b'~') {
                 flush_plain(line, line_offset, plain_start, pos, &mut tokens);
                 tokens.push(Token {
                     kind: TokenKind::Strikethrough,
@@ -362,7 +358,6 @@ pub fn tokenize_line(line: &str, line_offset: usize) -> Vec<Token> {
                 pos = end + 2;
                 plain_start = pos;
                 continue;
-            }
         }
 
         // Bold+Italic: ***...*** or ___...___  (must precede Bold and Italic checks)
@@ -513,8 +508,8 @@ fn parse_image(bytes: &[u8], line_offset: usize, pos: usize) -> Option<(Token, u
 /// Find a single closing `marker` byte, requiring at least one char between
 /// opener and closer (no empty spans).
 fn find_closing(bytes: &[u8], start: usize, marker: u8) -> Option<usize> {
-    for i in start..bytes.len() {
-        if bytes[i] == marker && i > start {
+    for (i, item) in bytes.iter().enumerate().skip(start) {
+        if *item == marker && i > start {
             return Some(i);
         }
     }
@@ -549,8 +544,8 @@ fn find_triple_closing(bytes: &[u8], start: usize, marker: u8) -> Option<usize> 
 
 /// Find `]` without crossing a `[` or newline (no nested brackets).
 fn find_bracket_close(bytes: &[u8], start: usize) -> Option<usize> {
-    for i in start..bytes.len() {
-        match bytes[i] {
+    for (i, item) in bytes.iter().enumerate().skip(start) {
+        match item {
             b']' => return Some(i),
             b'[' | b'\n' => return None,
             _ => {}
@@ -561,8 +556,8 @@ fn find_bracket_close(bytes: &[u8], start: usize) -> Option<usize> {
 
 /// Find `)` without crossing a newline.
 fn find_paren_close(bytes: &[u8], start: usize) -> Option<usize> {
-    for i in start..bytes.len() {
-        match bytes[i] {
+    for (i, item) in bytes.iter().enumerate().skip(start) {
+        match item {
             b')' => return Some(i),
             b'\n' => return None,
             _ => {}

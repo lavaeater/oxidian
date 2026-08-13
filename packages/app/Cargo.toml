@@ -12,6 +12,7 @@ manganis = "0.8.0-alpha.0"
 dioxus-use-js = { workspace = true }
 ui = { workspace = true }
 vault = { workspace = true }
+index = { workspace = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
@@ -43,3 +44,6 @@ log = { workspace = true }
 # match what wry/tao already pull in, so the JavaVM/context pointers are ABI-safe.
 jni = "0.21"
 ndk-context = "0.1"
+
+[lints]
+workspace = true

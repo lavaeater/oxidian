@@ -11,19 +11,80 @@ export function setup_tasks(id) {
     if (!el || el.dataset.taskSetup) return;
     el.dataset.taskSetup = '1';
     el.addEventListener('mousedown', function (e) {
+        const nav = e.target.closest('[data-navigate]');
+        if (nav) {
+            // Same reason as the action path below: letting the caret land here
+            // fires a selectionchange, the editor re-renders the now-active line
+            // as source, and the node is detached before `click` arrives — so
+            // the navigation would be silently dropped. `preventDefault` on
+            // mousedown does not cancel the click, so a real <a href> (an
+            // external markdown link) still follows its href.
+            e.preventDefault();
+            el._navClick = nav.dataset.navigate;
+            return;
+        }
+        // An action inside rendered output (a dataview task checkbox). The
+        // payload is opaque here — the host decides what it means. Checked
+        // before the render click below, so the checkbox wins over "edit the
+        // source of the block I'm in".
+        const action = e.target.closest('[data-action]');
+        if (action) {
+            // Keep the caret out of the block. Letting it move would fire a
+            // selectionchange, which re-renders the editor and detaches this
+            // node before the `click` event lands — the action would be lost.
+            // `preventDefault` on mousedown does not cancel the click.
+            e.preventDefault();
+            el._actionClick = action.dataset.action;
+            // Flip it now rather than waiting for the write to land: the host
+            // repaints from real data afterwards, and this matches what the
+            // in-source checkboxes already do.
+            if (action.classList.contains('md-task-checkbox')) {
+                const on = action.dataset.checked !== 'true';
+                action.dataset.checked = on ? 'true' : 'false';
+                // Edit the existing text node rather than assigning
+                // `textContent`, which replaces it: swapping the node the
+                // pointer is over between mousedown and mouseup makes the
+                // browser skip the `click` event entirely, and the action
+                // would never reach the host.
+                if (action.firstChild) action.firstChild.nodeValue = on ? '[x]' : '[ ]';
+            }
+            return;
+        }
+        // `data-pos` is the source offset of the `[`; a checkbox without one
+        // (a rendered dataview task) isn't editable through this path yet.
         const cb = e.target.closest('.md-task-checkbox');
-        if (cb) {
+        if (cb && cb.dataset.pos !== undefined) {
             el._taskClick = {
                 pos: parseInt(cb.dataset.pos),
                 checked: cb.dataset.checked === 'true'
             };
             return;
         }
-        const nav = e.target.closest('[data-navigate]');
-        if (nav) {
-            el._navClick = nav.dataset.navigate;
+        // Clicking a rendered block (a folded ```dataview) asks to edit its
+        // source: the offset is where the caret should land once it unfolds.
+        const render = e.target.closest('[data-md-render]');
+        if (render && render.dataset.editOffset !== undefined) {
+            // Same reason as above; the caret is placed deliberately once the
+            // block has unfolded (`apply_html_and_restore_cursor`).
+            e.preventDefault();
+            el._renderClick = render.dataset.editOffset;
         }
     }, true);
+}
+
+// The text of a node as the *document model* sees it: rendered blocks
+// (`[data-md-render]`, e.g. a dataview table) are output, not note content, so
+// they contribute nothing. Every caret/offset calculation goes through this —
+// plain `textContent` would count the rendered table's text as note text and
+// desynchronise the model from the source on the very first keystroke.
+// Works on elements, text nodes, and the DocumentFragment a Range clones into.
+function visibleText(node) {
+    if (!node) return '';
+    if (node.nodeType === 3) return node.textContent || '';
+    if (node.nodeType === 1 && node.dataset && node.dataset.mdRender !== undefined) return '';
+    let t = '';
+    for (let i = 0; i < node.childNodes.length; i++) t += visibleText(node.childNodes[i]);
+    return t;
 }
 
 // Sets up a selectionchange listener that marks the active line div so CSS
@@ -85,7 +146,29 @@ export function setup_keyboard(id) {
     if (!el || el.dataset.kbSetup) return;
     el.dataset.kbSetup = '1';
 
+    // Space on a task line offers the task-metadata menu (due date, priority,
+    // done). Obsidian triggers on space too, and although it fires often, it
+    // fires *while you are still on the task you mean* — which is the whole
+    // point. Enter used to arm it, and that was backwards: Enter also moves the
+    // caret to the next line, so the menu appeared for a task you had already
+    // left.
+    //
+    // The space itself is never intercepted: it types normally, and the menu is
+    // purely additive. `updateTaskMenuArm` disarms the moment you type anything
+    // else, so ignoring it costs one keystroke.
     el.addEventListener('keydown', function (e) {
+        if (e.key === ' ' && !e.ctrlKey && !e.metaKey && !e.isComposing) {
+            const [text, cursor] = lineTextAndCursor(el);
+            if (cursor >= 0) {
+                const ls = text.lastIndexOf('\n', cursor - 1) + 1;
+                let le = text.indexOf('\n', cursor);
+                if (le < 0) le = text.length;
+                // Only at the end of a task line: mid-line, a space is just a
+                // space between words, and popping a menu there would be noise.
+                el._armTaskMenu = cursor === le && /^\s*[-*+] \[[ xX]\] /.test(text.slice(ls, le));
+            }
+            return;
+        }
         // ctrl/meta+Enter may be a shortcut elsewhere; IME Enter confirms a
         // composition rather than inserting a line.
         if (e.key !== 'Enter' || e.ctrlKey || e.metaKey || e.isComposing) return;
@@ -163,33 +246,35 @@ function lineTextAndCursor(el) {
             const pre = range.cloneRange();
             pre.selectNodeContents(kid);
             try { pre.setEnd(range.startContainer, range.startOffset); } catch (_) { }
-            cursor = text.length + pre.toString().length;
+            cursor = text.length + visibleText(pre.cloneContents()).length;
         }
-        text += (kid.textContent || '');
+        text += visibleText(kid);
     }
     // Caret sitting directly on the editor element, between line nodes.
     if (range && cursor < 0 && range.startContainer === el) {
         let t = '';
         for (let i = 0; i < range.startOffset && i < kids.length; i++) {
             if (i > 0) t += '\n';
-            t += (kids[i].textContent || '');
+            t += visibleText(kids[i]);
         }
         cursor = t.length;
     }
     return [text, cursor];
 }
 
-// Reads text + cursor together and returns the tagged-string protocol the Rust
-// side parses. If a navigate or task-checkbox click was recorded, those are
-// returned first. Possible returns:
-//   "-1\n"                          → element missing
+// What the last mousedown asked for, if anything. Read (and cleared) by the
+// click handler only — deliberately separate from `read_state`, because both
+// are destructive reads and a click and a selectionchange arrive together: when
+// they shared one function, whichever handler ran first ate the other's payload
+// and the editor silently skipped a re-render.
+//   ""                              → nothing pending
 //   "nav:<url>"                     → navigate click
 //   "cb:<pos>:<0|1>"                → task-checkbox click
-//   "linechange\n<cursor>\n<text>"  → active line changed
-//   "<cursor>\n<text>"              → normal keystroke
-export function read_state(id) {
+//   "act:<payload>"                 → action inside rendered output
+//   "edit:<offset>"                 → rendered block clicked; show its source
+export function read_click(id) {
     const el = document.getElementById(id);
-    if (!el) return "-1\n";
+    if (!el) return '';
     if (el._navClick) {
         const url = el._navClick;
         el._navClick = null;
@@ -200,6 +285,27 @@ export function read_state(id) {
         el._taskClick = null;
         return 'cb:' + tc.pos + ':' + (tc.checked ? '1' : '0');
     }
+    if (el._actionClick != null) {
+        const a = el._actionClick;
+        el._actionClick = null;
+        return 'act:' + a;
+    }
+    if (el._renderClick != null) {
+        const off = el._renderClick;
+        el._renderClick = null;
+        return 'edit:' + off;
+    }
+    return '';
+}
+
+// Reads text + cursor together and returns the tagged-string protocol the Rust
+// side parses. Possible returns:
+//   "-1\n"                          → element missing
+//   "linechange\n<cursor>\n<text>"  → active line changed
+//   "<cursor>\n<text>"              → normal keystroke
+export function read_state(id) {
+    const el = document.getElementById(id);
+    if (!el) return "-1\n";
     // Enter handler computed the new text + caret in the model (see
     // setup_keyboard) — use it verbatim and force a re-render.
     if (el._pendingText != null) {
@@ -207,14 +313,35 @@ export function read_state(id) {
         el._pendingText = null;
         el._pendingCursor = null;
         el.dataset.lineChange = '';
+        updateTaskMenuArm(el, text, cursor);
         return 'linechange\n' + cursor + '\n' + text;
     }
     const [text, cursor] = lineTextAndCursor(el);
+    updateTaskMenuArm(el, text, cursor);
     if (el.dataset.lineChange) {
         el.dataset.lineChange = '';
         return 'linechange\n' + cursor + '\n' + text;
     }
     return cursor + "\n" + text;
+}
+
+// Keeps `el._armTaskMenu` accurate as the user keeps typing: it's set true by
+// space at the end of a task line (see `setup_keyboard`), and stays true only
+// while the caret is still sitting right after that space. Typing any character
+// disarms it — which is the "start typing and it goes away" behaviour — as does
+// moving off the line. `app`'s `task_menu_armed()` (in `oxidian.js`) polls this
+// flag directly off the DOM element to decide whether to show the menu.
+function updateTaskMenuArm(el, text, cursor) {
+    if (!el._armTaskMenu) return;
+    if (cursor < 0) { el._armTaskMenu = false; return; }
+    const lineStart = text.lastIndexOf('\n', cursor - 1) + 1;
+    let lineEnd = text.indexOf('\n', cursor);
+    if (lineEnd < 0) lineEnd = text.length;
+    const line = text.slice(lineStart, lineEnd);
+    const stillArmed = cursor === lineEnd
+        && /^\s*[-*+] \[[ xX]\] /.test(line)
+        && line.endsWith(' ');
+    if (!stillArmed) el._armTaskMenu = false;
 }
 
 // ── Keep the writing line comfortable ────────────────────────────────────────
@@ -286,7 +413,16 @@ function activeLineFromSelection(el) {
 // the line has no text node (an empty line), the caret is set on the element
 // itself so it still lands on that blank line.
 function placeCaretInLine(line, offset) {
-    const walker = document.createTreeWalker(line, NodeFilter.SHOW_TEXT, null);
+    // Skip text inside rendered blocks — the caret belongs in the source, and
+    // `offset` was measured in the source's coordinate space (`visibleText`).
+    const walker = document.createTreeWalker(line, NodeFilter.SHOW_TEXT, {
+        acceptNode: function (n) {
+            for (let p = n.parentElement; p && p !== line; p = p.parentElement) {
+                if (p.dataset && p.dataset.mdRender !== undefined) return NodeFilter.FILTER_REJECT;
+            }
+            return NodeFilter.FILTER_ACCEPT;
+        }
+    });
     let acc = 0, node = null, nodeOff = 0;
     while (walker.nextNode()) {
         const n = walker.currentNode, len = n.textContent.length;
@@ -316,12 +452,16 @@ export function apply_html_and_restore_cursor(id, html, cursor) {
     el.dataset.rendering = '1';
     el.innerHTML = html;
     if (cursor >= 0) {
+        // A click on a rendered block can ask for the caret while the editor is
+        // not yet focused; without this the selection would be set on a blurred
+        // element and the first keystroke would go nowhere.
+        if (document.activeElement !== el) el.focus();
         const lines = el.querySelectorAll(':scope > .md-line');
         if (lines.length) {
             let remaining = cursor;
             let placed = false;
             for (let li = 0; li < lines.length; li++) {
-                const len = lines[li].textContent.length;
+                const len = visibleText(lines[li]).length;
                 if (remaining <= len) {
                     placeCaretInLine(lines[li], remaining);
                     placed = true;
@@ -331,7 +471,7 @@ export function apply_html_and_restore_cursor(id, html, cursor) {
             }
             if (!placed) {
                 const last = lines[lines.length - 1];
-                placeCaretInLine(last, last.textContent.length);
+                placeCaretInLine(last, visibleText(last).length);
             }
         }
     }

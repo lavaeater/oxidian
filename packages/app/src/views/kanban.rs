@@ -49,10 +49,10 @@ fn parse_board(content: &str) -> (String, Vec<(String, Vec<String>)>) {
                 .unwrap_or(item)
                 .trim()
                 .to_string();
-            if !title.is_empty() {
-                if let Some(col) = columns.last_mut() {
-                    col.1.push(title);
-                }
+            if !title.is_empty()
+                && let Some(col) = columns.last_mut()
+            {
+                col.1.push(title);
             }
         }
     }
@@ -84,20 +84,42 @@ fn serialize_board(preamble: &str, columns: &[(String, Vec<String>)]) -> String 
 /// Build initial columns by scanning the vault for existing subfolders of the
 /// board directory that already contain notes. Used when first creating the
 /// board doc so existing folder structures are picked up automatically.
-fn import_columns(files: &[FileMeta], board_dir: &str, board_path: &str) -> Vec<(String, Vec<String>)> {
-    let prefix = if board_dir.is_empty() { String::new() } else { format!("{board_dir}/") };
+fn import_columns(
+    files: &[FileMeta],
+    board_dir: &str,
+    board_path: &str,
+) -> Vec<(String, Vec<String>)> {
+    let prefix = if board_dir.is_empty() {
+        String::new()
+    } else {
+        format!("{board_dir}/")
+    };
     let mut columns: Vec<(String, Vec<String>)> = Vec::new();
     let mut sorted: Vec<&FileMeta> = files.iter().collect();
     sorted.sort_by(|a, b| a.path.cmp(&b.path));
     for file in sorted {
-        if file.path == board_path { continue; }
-        let rest = if prefix.is_empty() { file.path.as_str() } else {
-            match file.path.strip_prefix(&prefix) { Some(r) => r, None => continue }
+        if file.path == board_path {
+            continue;
+        }
+        let rest = if prefix.is_empty() {
+            file.path.as_str()
+        } else {
+            match file.path.strip_prefix(&prefix) {
+                Some(r) => r,
+                None => continue,
+            }
         };
-        let Some(slash) = rest.find('/') else { continue };
+        let Some(slash) = rest.find('/') else {
+            continue;
+        };
         let col = &rest[..slash];
         let filename = &rest[slash + 1..];
-        if filename.contains('/') || filename == ".gitkeep" || !filename.ends_with(".md") { continue; }
+        let is_md = std::path::Path::new(filename)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("md"));
+        if filename.contains('/') || filename == ".gitkeep" || !is_md {
+            continue;
+        }
         let title = filename.trim_end_matches(".md").to_string();
         if let Some(entry) = columns.iter_mut().find(|(c, _)| c == col) {
             entry.1.push(title);
@@ -109,7 +131,11 @@ fn import_columns(files: &[FileMeta], board_dir: &str, board_path: &str) -> Vec<
 }
 
 fn join(dir: &str, rest: &str) -> String {
-    if dir.is_empty() { rest.to_string() } else { format!("{dir}/{rest}") }
+    if dir.is_empty() {
+        rest.to_string()
+    } else {
+        format!("{dir}/{rest}")
+    }
 }
 
 // ── KanbanBoard ───────────────────────────────────────────────────────────────
@@ -132,7 +158,10 @@ pub fn KanbanBoard(
     let mut adding_col = use_signal(|| false);
     let mut new_col_name: Signal<String> = use_signal(String::new);
 
-    let board_dir = board_path.rsplit_once('/').map(|(d, _)| d.to_string()).unwrap_or_default();
+    let board_dir = board_path
+        .rsplit_once('/')
+        .map(|(d, _)| d.to_string())
+        .unwrap_or_default();
 
     // Load (or create) the board document on mount. The parent gives this
     // component a `key` of the board path, so changing boards remounts and
@@ -162,7 +191,14 @@ pub fn KanbanBoard(
                         let cols = import_columns(&files, &dir, &bp);
                         let pre = DEFAULT_PREAMBLE.to_string();
                         let content = serialize_board(&pre, &cols);
-                        match vault::dispatch::create_file(&cfg, &bp, &content, "Create kanban board").await {
+                        match vault::dispatch::create_file(
+                            &cfg,
+                            &bp,
+                            &content,
+                            "Create kanban board",
+                        )
+                        .await
+                        {
                             Ok(sha) => {
                                 preamble.set(pre);
                                 columns.set(cols);
@@ -189,8 +225,14 @@ pub fn KanbanBoard(
         let content = serialize_board(&preamble.peek(), &columns.peek());
         let sha = board_sha.peek().clone();
         match vault::dispatch::write_file(&cfg, &bp, &content, &sha, "Update kanban board").await {
-            Ok(new_sha) => { board_sha.set(new_sha); true }
-            Err(e) => { error.set(Some(format!("Board save failed: {e}"))); false }
+            Ok(new_sha) => {
+                board_sha.set(new_sha);
+                true
+            }
+            Err(e) => {
+                error.set(Some(format!("Board save failed: {e}")));
+                false
+            }
         }
     };
 
@@ -308,9 +350,7 @@ pub fn KanbanBoard(
                                             if let Some(c) = cols.iter_mut().find(|(n, _)| *n == src_col) {
                                                 c.1.retain(|t| t != &title);
                                             }
-                                            if let Some(c) = cols.iter_mut().find(|(n, _)| *n == dst) {
-                                                if !c.1.contains(&title) { c.1.push(title.clone()); }
-                                            }
+                                            if let Some(c) = cols.iter_mut().find(|(n, _)| *n == dst) && !c.1.contains(&title) { c.1.push(title.clone()); }
                                         });
                                         persist(cfg.clone(), bp).await;
                                         if let Ok(mut l) = vault::dispatch::list_files(&cfg).await {
@@ -441,7 +481,7 @@ fn KanbanColumn(
                                 class: "kanban-card",
                                 draggable: true,
                                 ondragstart: move |_| {
-                                    crate::js::set_drag_data(format!("{}\x1e{}", drag_col, drag_title));
+                                    crate::js::set_drag_data(format!("{drag_col}\x1e{drag_title}"));
                                 },
                                 onclick: move |_| on_open(title.clone()),
                                 "{card}"

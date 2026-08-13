@@ -8,6 +8,18 @@ use app::views::{Settings, VaultBrowser};
 const FAVICON: Asset = asset!("/assets/favicon.ico");
 
 fn main() {
+    // The default menu bar is disabled: on Linux/GTK3, muda's `init_for_gtk_window`
+    // recurses inside `gtk_widget_realize` until the main thread's stack overflows,
+    // so the app aborts before the first frame. We don't use a native menu anyway —
+    // all commands live in the in-app toolbar.
+    #[cfg(feature = "desktop")]
+    dioxus::LaunchBuilder::desktop()
+        .with_cfg(dioxus::desktop::Config::new().with_menu(None))
+        .launch(App);
+
+    // Without the renderer feature (plain `cargo check`/`cargo test` over the
+    // workspace) there is no `dioxus::desktop`; keep the crate compiling.
+    #[cfg(not(feature = "desktop"))]
     dioxus::launch(App);
 }
 
@@ -32,7 +44,7 @@ fn App() -> Element {
         } else if let Some(cfg) = config() {
             VaultBrowser {
                 config: cfg,
-                on_logout: move |_| config.set(None),
+                on_logout: move |()| config.set(None),
             }
         } else {
             Settings {

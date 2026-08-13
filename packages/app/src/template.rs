@@ -149,39 +149,35 @@ pub fn strip_tabstops(s: &str) -> String {
 pub fn parse_template(source_path: &str, raw: &str) -> TemplateMeta {
     let mut filepath = None;
     let mut description = None;
-    let body;
+    let mut body = raw.to_string();
 
-    if raw.starts_with("---") {
-        if let Some(rel) = raw[3..].find("\n---") {
-            let yaml = &raw[3..3 + rel];
-            let after = &raw[3 + rel + 4..];
-            body = after.trim_start_matches('\n').to_string();
+    if let Some(stripped) = raw.strip_prefix("---")
+        && let Some(rel) = stripped.find("\n---")
+    {
+        let yaml = &stripped[..rel];
+        let after = &stripped[rel + 4..];
+        body = after.trim_start_matches('\n').to_string();
 
-            let mut in_template_block = false;
-            for line in yaml.lines() {
-                let trimmed = line.trim();
-                // Recognize both oxid_template (primary) and foam_template (compat)
-                if trimmed == "oxid_template:" || trimmed == "foam_template:" {
-                    in_template_block = true;
-                    continue;
-                }
-                if in_template_block {
-                    if line.starts_with("  ") || line.starts_with('\t') {
-                        if let Some(v) = trimmed.strip_prefix("filepath:") {
-                            filepath = Some(v.trim().trim_matches('"').trim_matches('\'').to_string());
-                        } else if let Some(v) = trimmed.strip_prefix("description:") {
-                            description = Some(v.trim().trim_matches('"').trim_matches('\'').to_string());
-                        }
-                    } else {
-                        in_template_block = false;
+        let mut in_template_block = false;
+        for line in yaml.lines() {
+            let trimmed = line.trim();
+            // Recognize both oxid_template (primary) and foam_template (compat)
+            if trimmed == "oxid_template:" || trimmed == "foam_template:" {
+                in_template_block = true;
+                continue;
+            }
+            if in_template_block {
+                if line.starts_with("  ") || line.starts_with('\t') {
+                    if let Some(v) = trimmed.strip_prefix("filepath:") {
+                        filepath = Some(v.trim().trim_matches('"').trim_matches('\'').to_string());
+                    } else if let Some(v) = trimmed.strip_prefix("description:") {
+                        description = Some(v.trim().trim_matches('"').trim_matches('\'').to_string());
                     }
+                } else {
+                    in_template_block = false;
                 }
             }
-        } else {
-            body = raw.to_string();
         }
-    } else {
-        body = raw.to_string();
     }
 
     let name = description.unwrap_or_else(|| {

@@ -18,6 +18,121 @@ export function ls_remove(key) {
     localStorage.removeItem(key);
 }
 
+// NOTE: every promise-returning export here MUST be declared `async`.
+// `use_js!` only emits an `await` for functions marked async, so a plain
+// `function` returning a Promise hands the Promise itself back across the
+// bridge, where it fails to serialise and the Rust side silently sees a default
+// value — a write that appears to work and a read that always comes back empty.
+//
+// ── Large blobs (IndexedDB) ──────────────────────────────────────────────────
+// `localStorage` caps out around 5 MB and is synchronous, which makes it the
+// wrong place for the vault index — a few thousand notes exceed it and the
+// write blocks the UI thread. IndexedDB has a quota in the hundreds of MB (and
+// no hard cap when storage is persisted), so anything that scales with vault
+// size lives here. Small, fixed-size settings stay in localStorage.
+//
+// Deliberately hand-rolled rather than pulling in a wrapper library: one object
+// store, three operations, no schema evolution to speak of.
+
+const BLOB_DB = 'oxidian';
+const BLOB_DB_VERSION = 2;
+const BLOB_STORE = 'blobs';
+// One record per note, keyed by path. See `records_*` below.
+const PAGE_STORE = 'pages';
+
+function blobDb() {
+    return new Promise((resolve, reject) => {
+        const req = indexedDB.open(BLOB_DB, BLOB_DB_VERSION);
+        req.onupgradeneeded = () => {
+            const db = req.result;
+            if (!db.objectStoreNames.contains(BLOB_STORE)) db.createObjectStore(BLOB_STORE);
+            if (!db.objectStoreNames.contains(PAGE_STORE)) db.createObjectStore(PAGE_STORE);
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+    });
+}
+
+function tx(store, mode, run) {
+    return blobDb().then(db => new Promise((resolve, reject) => {
+        const t = db.transaction(store, mode);
+        const req = run(t.objectStore(store));
+        t.oncomplete = () => { db.close(); resolve(req ? req.result : undefined); };
+        t.onerror = () => { db.close(); reject(t.error); };
+    }));
+}
+
+// Returns '' when the key is absent, matching `ls_get`, so callers treat a
+// missing store and an empty store the same way.
+export async function blob_get(key) {
+    return tx(BLOB_STORE, 'readonly', st => st.get(key)).then(v => v || '').catch(() => '');
+}
+
+export async function blob_set(key, value) {
+    // Swallows quota errors: the index is a cache, and failing to save it must
+    // never break the app — the next refresh simply rebuilds it.
+    return tx(BLOB_STORE, 'readwrite', st => st.put(value, key)).then(() => true).catch(() => false);
+}
+
+export async function blob_remove(key) {
+    return tx(BLOB_STORE, 'readwrite', st => st.delete(key)).then(() => true).catch(() => false);
+}
+
+// ── Per-note index records ───────────────────────────────────────────────────
+// The index is stored one record per note rather than as a single blob. Saving
+// a note then costs one small write instead of re-serialising and rewriting the
+// entire index — which, now that the index carries every note's text for search,
+// is roughly the size of the vault.
+//
+// Every operation is batched into a single transaction: seeding a vault is
+// thousands of puts, and one transaction per put would be pathologically slow.
+
+// All records as `[[path, json], ...]`.
+export async function records_all() {
+    return blobDb().then(db => new Promise((resolve, reject) => {
+        const t = db.transaction(PAGE_STORE, 'readonly');
+        const st = t.objectStore(PAGE_STORE);
+        // getAllKeys + getAll rather than a cursor: two requests instead of one
+        // round trip per record.
+        const keys = st.getAllKeys();
+        const vals = st.getAll();
+        t.oncomplete = () => {
+            db.close();
+            resolve(keys.result.map((k, i) => [k, vals.result[i]]));
+        };
+        t.onerror = () => { db.close(); reject(t.error); };
+    })).catch(() => []);
+}
+
+export async function records_put(entries) {
+    return tx(PAGE_STORE, 'readwrite', st => {
+        for (const [key, value] of entries) st.put(value, key);
+    }).then(() => true).catch(() => false);
+}
+
+export async function records_delete(keys) {
+    return tx(PAGE_STORE, 'readwrite', st => {
+        for (const key of keys) st.delete(key);
+    }).then(() => true).catch(() => false);
+}
+
+export async function records_clear() {
+    return tx(PAGE_STORE, 'readwrite', st => st.clear()).then(() => true).catch(() => false);
+}
+
+// `[usage, quota, persisted]` in bytes, for the storage readout in Settings.
+// -1 for usage/quota when the browser won't say (Safari, mostly).
+export async function storage_estimate() {
+    const persisted = () => (navigator.storage && navigator.storage.persisted)
+        ? navigator.storage.persisted() : Promise.resolve(false);
+    if (!navigator.storage || !navigator.storage.estimate) {
+        return persisted().then(p => [-1, -1, p ? 1 : 0]);
+    }
+    return Promise.all([navigator.storage.estimate(), persisted()])
+        .then(([est, p]) => [est.usage ?? -1, est.quota ?? -1, p ? 1 : 0])
+        .catch(() => [-1, -1, 0]);
+}
+
 // ── Dates ────────────────────────────────────────────────────────────────────
 
 // Today's date as YYYY-MM-DD.
@@ -234,6 +349,24 @@ export function apply_slash(snippet, slashLen) {
     r2.collapse(true);
     sel.removeAllRanges(); sel.addRange(r2);
     el.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+// ── Task metadata menu ────────────────────────────────────────────────────────
+// Armed by `markdown_area.js`'s Enter handler the moment it continues a
+// non-empty *task* line (`- [ ] ` → new blank task line); kept accurate by
+// `read_state` as the user keeps typing. This just polls that flag off the
+// currently-focused editor's DOM element — the "insert the picked emoji" side
+// reuses `apply_slash(snippet, 0)` (no token to delete, just insert at caret).
+export function task_menu_armed() {
+    const el = activeMdArea();
+    return !!(el && el._armTaskMenu);
+}
+
+// Explicit dismissal (e.g. clicking outside the menu) with no text change, so
+// `apply_slash`'s own re-render can't re-validate the flag for us.
+export function dismiss_task_menu() {
+    const el = activeMdArea();
+    if (el) el._armTaskMenu = false;
 }
 
 // ── Sign-in link (portable config) ────────────────────────────────────────────

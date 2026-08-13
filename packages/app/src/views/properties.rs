@@ -1,68 +1,13 @@
 /// YAML frontmatter properties editor.
 /// Renders the `---\nkey: value\n---` block at the top of a note
 /// as a collapsible key→value UI. Edits write back into the content signal.
-
 use dioxus::prelude::*;
 
-// ── YAML parser (minimal) ─────────────────────────────────────────────────────
-
-/// Returns `(frontmatter_text, body_after_fence)` if the content starts with `---`.
-pub fn split_frontmatter(content: &str) -> Option<(&str, &str)> {
-    let content = content.strip_prefix("---")?;
-    // Accept `---\n` or `---\r\n`
-    let content = content.strip_prefix('\n').or_else(|| content.strip_prefix("\r\n"))?;
-    // Find the closing `---`
-    for (i, line) in content.lines().enumerate() {
-        if line.trim() == "---" {
-            // Calculate byte offset of the end of this line
-            let prefix_len: usize = content.lines().take(i).map(|l| l.len() + 1).sum();
-            let fm = &content[..prefix_len.saturating_sub(1).min(content.len())];
-            let rest_start = prefix_len + line.len() + 1;
-            let rest = if rest_start <= content.len() { &content[rest_start..] } else { "" };
-            return Some((fm, rest));
-        }
-    }
-    None
-}
-
-/// Parse simple `key: value` pairs from YAML frontmatter.
-/// Only handles string/number/boolean scalar values (not nested objects or arrays).
-pub fn parse_pairs(fm: &str) -> Vec<(String, String)> {
-    fm.lines()
-        .filter_map(|line| {
-            let (key, val) = line.split_once(':')?;
-            let key = key.trim().to_string();
-            let val = val.trim().trim_matches('"').trim_matches('\'').to_string();
-            if key.is_empty() { return None; }
-            Some((key, val))
-        })
-        .collect()
-}
-
-/// Serialise key-value pairs back to YAML frontmatter (simple scalar values only).
-fn pairs_to_yaml(pairs: &[(String, String)]) -> String {
-    pairs.iter()
-        .filter(|(k, _)| !k.is_empty())
-        .map(|(k, v)| {
-            // Quote values that contain special chars
-            if v.contains(':') || v.starts_with(['#', '[', '{', '\'', '"', '&', '*']) {
-                format!("{k}: \"{v}\"")
-            } else {
-                format!("{k}: {v}")
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-/// Rebuild content with updated frontmatter.
-pub fn set_frontmatter(content: &str, pairs: &[(String, String)]) -> String {
-    let yaml = pairs_to_yaml(pairs);
-    match split_frontmatter(content) {
-        Some((_, body)) => format!("---\n{yaml}\n---\n{body}"),
-        None => format!("---\n{yaml}\n---\n\n{content}"),
-    }
-}
+// The frontmatter parser lives in the `index` crate so that the editor and the
+// vault index can never disagree about what a note declares — see
+// docs/dataview.md §4.1. Re-exported here because callers (and tests) have
+// always reached for `properties::split_frontmatter`.
+pub use index::frontmatter::{parse_pairs, set_frontmatter, split_frontmatter};
 
 // ── Component ─────────────────────────────────────────────────────────────────
 

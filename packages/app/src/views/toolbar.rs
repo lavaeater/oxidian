@@ -16,7 +16,7 @@ pub fn wrap(source: &str, start: usize, end: usize, prefix: &str, suffix: &str) 
 }
 
 pub fn toggle_line_prefix(source: &str, cursor: usize, prefix: &str) -> String {
-    let ls = source[..cursor].rfind('\n').map(|i| i + 1).unwrap_or(0);
+    let ls = source[..cursor].rfind('\n').map_or(0, |i| i + 1);
     let line = &source[ls..];
     let mut s = source.to_string();
     if line.starts_with(prefix) {

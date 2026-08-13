@@ -6,7 +6,7 @@
 // DOM glue — the native SSR tests have no layout/scroll to measure.
 
 const { test, expect } = require("@playwright/test");
-const { seedConfig, mockGitHub } = require("./helpers");
+const { openFile, seedConfig, mockGitHub } = require("./helpers");
 
 /** Boot into the vault and open `Note.md`. */
 async function openNote(page, files) {
@@ -14,7 +14,7 @@ async function openNote(page, files) {
   await seedConfig(page);
   await page.goto("/");
   await expect(page.getByText("Oxidian", { exact: true })).toBeVisible();
-  await page.getByText("Note", { exact: false }).first().click();
+  await openFile(page, "Note");
   await expect(page.locator(".md-area")).toBeVisible();
 }
 

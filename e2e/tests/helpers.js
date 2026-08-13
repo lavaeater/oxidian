@@ -46,6 +46,17 @@ async function seedBoard(page, root = "kanban") {
   );
 }
 
+/**
+ * Click a note in the sidebar file tree.
+ *
+ * Scoped to `.file-entry-name` on purpose: a bare `getByText("Note")` matches
+ * anything on the page, so unrelated sidebar copy (the storage footer's
+ * "N notes indexed", say) can win the race and the click goes nowhere.
+ */
+async function openFile(page, name) {
+  await page.locator(".file-entry-name", { hasText: name }).first().click();
+}
+
 /** base64-encode a UTF-8 string the way the GitHub Contents API returns it. */
 function b64(text) {
   return Buffer.from(text, "utf-8").toString("base64");
@@ -135,4 +146,5 @@ async function mockGitHub(page, files = {}, options = {}) {
   });
 }
 
-module.exports = { seedConfig, seedBoard, mockGitHub, fakeConfig, b64, CONFIG_KEY };
+module.exports = {
+  openFile, seedConfig, seedBoard, mockGitHub, fakeConfig, b64, CONFIG_KEY };

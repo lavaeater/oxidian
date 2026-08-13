@@ -4,9 +4,9 @@ This document sequences the work from `git-integration.md` and `user-stories.md`
 
 ---
 
-## Current status (June 2026)
+## Current status (August 2026)
 
-The app is live and working on **web** and **Android**. The core read/write loop, editor, graph, Kanban, and multi-provider support are done.
+The app is live and working on **web** and **Android**. The core read/write loop, editor, graph, Kanban, and multi-provider support are done. The `data-view` branch added the shared vault index and, on top of it, inline Dataview blocks and local full-text search.
 
 **Platform priority is now web + mobile (Android).** The author always has either a computer or an Android phone, and web also covers iPad. `packages/desktop` still builds and shares all the same code, but is no longer a focus — so the desktop-only **local git backend (M4)** and **iOS** are deprioritized. See `CLAUDE.md`.
 
@@ -27,11 +27,14 @@ Below is a detailed status for every user story.
 | US 9.1 | **Export as HTML** — standalone single-note export | ✅ Done |
 | US 2.1 / 2.2 | **Command Palette** (Ctrl/⌘-P) — fuzzy command search + reusable global keyboard-shortcut framework (`shortcuts.rs`) | ✅ Done |
 | US 10.1 / 10.2 | **Quick Switcher** — fuzzy file search modal (Ctrl/⌘-O) | ✅ Done |
-| US 11.1 | **Global search** — full-text search across all notes | ✅ Done |
+| US 11.1 | **Global search** — full-text search across all notes, served from the local index (`index::search`; see `docs/dataview.md` §12). Was GitHub code-search, which the browser blocks on CORS. | ✅ Done |
+| US 11.2 | **Search filters** — `path:`, `file:`, `tag:` prefixes, ANDed with the free-text terms; filters alone are a valid query (`tag:daily`) | ✅ Done |
 | US 12.1 | **Slash commands** — `/` menu for tables, callouts, etc. | ✅ Done |
 | US 16.1 / 16.2 | **Word count** — live word count in editor status bar | ✅ Done |
 | US 17.1 | **Formatting toolbar** — floating Bold/Italic/Heading/List toolbar | ✅ Done |
 | US 19.1 / 19.2 | **Kanban** — headings as columns, drag to reorder | ✅ Done |
+| US 18.1 / 18.2 | **Dataview** — `dataview` fences render inline: `TABLE` / `LIST` / `TASK`, `FROM` / `WHERE` / `SORT` / `LIMIT`, ~20 built-in functions. A block folds back to its source when the caret enters it or you click the output, and `TASK` results toggle through to the note. Phases 0–5 of [`dataview.md`](dataview.md); 6–8 remain, see below | ✅ Done |
+| — | **Shared vault index** (`packages/index`) — one incrementally-refreshed model of the vault (frontmatter, inline `key:: value` fields, tags, headings, links, tasks, body text) behind Tasks, backlinks, graph, search and Dataview, stored one record per note in IndexedDB (web) / a file each (native), with a storage footer and Rebuild | ✅ Done |
 | — | **Tasks view** — vault-wide checkbox aggregation grouped by file, Obsidian-Tasks metadata (📅 due / priority / ✅ done), toggle + jump (`tasks.rs`, `Panel::Tasks`) | ✅ Done |
 | — | **GitLab support** — second provider alongside GitHub | ✅ Done |
 | — | **GitHub OAuth device flow** — no-PAT sign-in (incl. mobile copy-code + token persistence) | ✅ Done |
@@ -57,8 +60,7 @@ Listed roughly by priority / dependency order. Filtered to the web + Android foc
 | US | Feature | Effort |
 |----|---------|--------|
 | US 15.1 / 15.2 | **Templates** — folder setting + insert via slash/palette (*engine + daily-note done; general insertion remaining*) | Small–Medium |
-| US 14.1 / 14.2 | **Tags pane** — collects all `#tags`, click to search | Medium |
-| US 11.2 | Search filters (`path:`, `tag:`, `file:` prefixes) | Small |
+| US 14.1 / 14.2 | **Tags pane** — collects all `#tags`, click to search. Downgraded from Medium: the index already collects tags (`tag_counts` / `pages_with_tag`, nested tags kept whole) and search already understands `tag:`, so only the panel is left | Small |
 | US 3.2 / 3.3 | Weekly/Monthly notes; natural-language date parsing (`@today`, `@next friday`) | Medium |
 
 ### Medium priority — knowledge graph completeness
@@ -74,7 +76,7 @@ Listed roughly by priority / dependency order. Filtered to the web + Android foc
 |----|---------|--------|
 | US 5.1 | **Extract to note** — selection → new note + `[[link]]` | Medium |
 | US 5.2 | **Merge notes** — append + delete source + update links | Medium |
-| US 18.1 / 18.2 | **Dataview** — SQL-like query blocks rendered inline | Large |
+| US 18.1 / 18.2 | **Dataview — remaining phases** — inline `` `= expr` `` queries (phase 6); bulk archive seed for a full offline vault (phase 7, partly overtaken — see below); `dataviewjs` (phase 8, maybe never). Plus the DQL clauses deliberately deferred in phase 3: `GROUP BY`, `FLATTEN`, `CALENDAR`, each of which parses to a "not supported yet" message rather than a syntax error | Medium |
 
 ### Publishing & export
 
@@ -112,7 +114,9 @@ M3  Editing productivity        ✅ Slash, Properties, Toolbar, Daily note, temp
 M4  Local git (desktop)         ⬜ Deprioritized (desktop not a focus)
 M5  Knowledge graph             ✅ Force-directed graph, WikiLink index, Backlinks
                                  ⬜ Hover preview, local graph (remaining)
-M6  Note refactoring            ⬜ Not started (Extract, Merge, Dataview)
+M6  Note refactoring            ⬜ Not started (Extract, Merge)
+                                 ✅ Dataview phases 0–5 — blocks render, fold to source, TASK write-back
+                                 ⬜ Dataview phases 6–8 — inline `= expr`, offline mirror, dataviewjs
 M7  Multi-provider & mobile     ✅ GitHub + GitLab + OAuth device flow, Android (fully working)
                                  ⬜ Android Keystore, mobile gestures; Gitea/iOS parked
 M8  Publish & export            ✅ Single-note HTML export
@@ -126,12 +130,24 @@ M8  Publish & export            ✅ Single-note HTML export
 Ordered for the web + Android focus (no desktop/local-git dependencies):
 
 1. **Templates — general insertion** (US 15) — *in progress*: reuse the existing engine; expose "Insert template" via the Command Palette (and slash menu).
-2. **Tags pane** (US 14) — completes M2.
+2. **Tags pane** (US 14) — completes M2, and is now the cheapest item on the board: the index and the `tag:` search filter are both already there, so this is a panel and a click handler.
 3. **Hover preview** (US 7) — small effort, completes M5.
-4. **Search filters** (US 11.2) — small, makes search much more useful.
-5. **Weekly/Monthly notes + natural-language dates** (US 3.2/3.3) — completes M3.
+4. **Weekly/Monthly notes + natural-language dates** (US 3.2/3.3) — completes M3.
 
 *(Done: Command Palette + global keyboard-shortcut framework — US 2.)*
+
+**Cross-cutting, landed on `data-view`:** the shared vault index (`packages/index`) generalises
+`tasks_cache`'s blob-SHA diffing so Tasks, backlinks, graph, search, and Dataview all read one
+incrementally-refreshed index instead of several partial ones. Two knock-on effects worth knowing
+when picking the next thing up:
+
+- The **Tags pane (US 14)** is now mostly a UI job — `Index::tag_counts` and `pages_with_tag`
+  already exist and are tested.
+- **Phase 7 (full offline vault) is half-done by accident.** Search needed every note's body, so
+  the index already stores it — the content mirror exists in substance. What is missing is the
+  bulk *seed*: one tarball request instead of thousands of `read_file` calls, plus the two open
+  questions in [`dataview.md`](dataview.md) §7 (does `codeload.github.com` send CORS headers for an
+  authenticated request, and where to decompress gzip in wasm).
 
 ---
 

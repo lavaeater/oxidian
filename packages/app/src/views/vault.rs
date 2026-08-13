@@ -1,25 +1,28 @@
-use dioxus::prelude::*;
 use crate::icons::{
-    IcoBookmark, IcoBookmarkCheck, IcoCalendar, IcoChevronDown, IcoChevronLeft,
-    IcoChevronRight, IcoDownload, IcoFileText, IcoFilePlus, IcoFolderClosed,
-    IcoFolderOpen, IcoFolderPlus, IcoFolderTree, IcoLayoutList, IcoLink2,
-    IcoListChecks, IcoNetwork, IcoSearch, IcoSettings, IcoTrash2, IcoX, IcoFolderKanban,
+    IcoBookmark, IcoBookmarkCheck, IcoCalendar, IcoChevronDown, IcoChevronLeft, IcoChevronRight,
+    IcoDownload, IcoFilePlus, IcoFileText, IcoFolderClosed, IcoFolderKanban, IcoFolderOpen,
+    IcoFolderPlus, IcoFolderTree, IcoLayoutList, IcoLink2, IcoListChecks, IcoNetwork, IcoSearch,
+    IcoSettings, IcoTrash2, IcoX,
 };
-use crate::tasks::{self, Task};
+use index::Index;
+use index::tasks::{self, Task};
+use dioxus::prelude::*;
 use ui::{MarkdownArea, MarkdownAreaVariant};
-use vault::{FileMeta, GithubConfig, SearchResult};
+use vault::{FileMeta, GithubConfig};
 
+use super::graph::GraphView;
+use super::kanban::KanbanBoard;
+use super::properties::PropertiesPanel;
+use super::slash::SlashMenu;
+use super::task_menu::TaskMenu;
+use super::toolbar::FormattingToolbar;
 use crate::console_log;
+use crate::dates;
 use crate::export;
 use crate::js;
 use crate::state;
 use crate::template::{self, TemplateMeta};
 use crate::wikilink_index::WikiLinkIndex;
-use super::graph::GraphView;
-use super::kanban::KanbanBoard;
-use super::properties::PropertiesPanel;
-use super::slash::SlashMenu;
-use super::toolbar::FormattingToolbar;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -38,13 +41,16 @@ async fn apply_template(
     let vars = template::TemplateVars::from_json(&date_json, "", current_dir);
 
     if vars.year.is_empty() || vars.month.is_empty() || vars.date.is_empty() {
-        load_error.set(Some("Could not read current date — please try again.".to_string()));
+        load_error.set(Some(
+            "Could not read current date — please try again.".to_string(),
+        ));
         return;
     }
 
     if let Some(ref fp_tmpl) = meta.filepath {
         let path = template::substitute_vars(fp_tmpl, &vars)
-            .trim_start_matches('/').to_string();
+            .trim_start_matches('/')
+            .to_string();
         if files.read().iter().any(|f| f.path == path) {
             open.set(Some(path));
         } else {
@@ -103,9 +109,15 @@ fn fuzzy_match(haystack: &str, needle: &str) -> bool {
 fn fuzzy_score(path: &str, needle: &str) -> usize {
     let name = path.rsplit('/').next().unwrap_or(path).to_lowercase();
     let q = needle.to_lowercase();
-    if name == q { return 1000; }
-    if name.starts_with(&q) { return 500; }
-    if name.contains(&q) { return 200; }
+    if name == q {
+        return 1000;
+    }
+    if name.starts_with(&q) {
+        return 500;
+    }
+    if name.contains(&q) {
+        return 200;
+    }
     let mut score = 0usize;
     let mut last = 0usize;
     for nc in q.chars() {
@@ -117,15 +129,46 @@ fn fuzzy_score(path: &str, needle: &str) -> usize {
     score
 }
 
+fn is_md_path(path: &str) -> bool {
+    std::path::Path::new(path)
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+}
+
 fn extract_headings(content: &str) -> Vec<(u8, String)> {
-    content.lines().filter_map(|line| {
-        let level = line.bytes().take_while(|&b| b == b'#').count();
-        if level >= 1 && level <= 6 && line.as_bytes().get(level) == Some(&b' ') {
-            Some((level as u8, line[level + 1..].trim().to_string()))
-        } else {
-            None
-        }
-    }).collect()
+    content
+        .lines()
+        .filter_map(|line| {
+            let level = line.bytes().take_while(|&b| b == b'#').count();
+            if !(1..=6).contains(&level) {
+                return None;
+            }
+            let text = line[level..].strip_prefix(' ')?;
+            // Bounded 1..=6 by the check above.
+            #[allow(clippy::cast_possible_truncation)]
+            let level = level as u8;
+            Some((level, text.trim().to_string()))
+        })
+        .collect()
+}
+
+/// Stamp `updated: <today>` into a note's frontmatter on save, returning `None`
+/// when it already says today (so a note is rewritten at most once per day).
+///
+/// A git host knows commit dates, not file mtimes, and asking for the last
+/// commit touching a path costs one request per file — unaffordable at vault
+/// scale. Since we own the write path, we record the date in the note itself,
+/// which makes `updated` exact, queryable, and version-controlled.
+/// See `docs/dataview.md` §2.5.
+async fn stamped_for_save(content: &str) -> Option<String> {
+    let today = crate::dates::today().await;
+    if today.is_empty() {
+        return None;
+    }
+    if index::frontmatter::get_key(content, "updated").as_deref() == Some(today.as_str()) {
+        return None;
+    }
+    Some(index::frontmatter::set_key(content, "updated", &today))
 }
 
 fn word_count(text: &str) -> usize {
@@ -135,29 +178,43 @@ fn word_count(text: &str) -> usize {
 // ── Save status ───────────────────────────────────────────────────────────────
 
 #[derive(Clone, PartialEq)]
-enum SaveStatus { Idle, Countdown(u8), Saving, Saved, Error(String) }
+enum SaveStatus {
+    Idle,
+    Countdown(u8),
+    Saving,
+    Saved,
+    Error(String),
+}
 
 impl SaveStatus {
     fn label(&self) -> String {
         match self {
             SaveStatus::Idle | SaveStatus::Saved => "Saved".into(),
             SaveStatus::Countdown(n) => format!("Saving in {n}s…"),
-            SaveStatus::Saving  => "Saving…".into(),
+            SaveStatus::Saving => "Saving…".into(),
             SaveStatus::Error(_) => "Save failed".into(),
         }
     }
     fn css_class(&self) -> &str {
         match self {
-            SaveStatus::Error(_)   => "save-status save-status--error",
+            SaveStatus::Error(_) => "save-status save-status--error",
             SaveStatus::Countdown(_) => "save-status save-status--unsaved",
-            SaveStatus::Saving     => "save-status save-status--saving",
+            SaveStatus::Saving => "save-status save-status--saving",
             _ => "save-status",
         }
     }
 }
 
 #[derive(Clone, PartialEq)]
-enum Panel { Files, Search, Backlinks, Graph, Bookmarks, Kanban, Tasks }
+enum Panel {
+    Files,
+    Search,
+    Backlinks,
+    Graph,
+    Bookmarks,
+    Kanban,
+    Tasks,
+}
 
 // ── Command palette ─────────────────────────────────────────────────────────
 // Every action reachable from the Command Palette (Ctrl/⌘-P). `VaultBrowser`
@@ -183,28 +240,38 @@ enum Cmd {
 
 impl Cmd {
     const ALL: &'static [Cmd] = &[
-        Cmd::QuickSwitcher, Cmd::NewFile, Cmd::NewFolder, Cmd::DailyNote, Cmd::ExportHtml,
-        Cmd::ToggleSidebar, Cmd::ToggleSplit,
-        Cmd::GoFiles, Cmd::GoSearch, Cmd::GoBacklinks, Cmd::GoGraph, Cmd::GoBookmarks,
-        Cmd::GoKanban, Cmd::GoTasks,
+        Cmd::QuickSwitcher,
+        Cmd::NewFile,
+        Cmd::NewFolder,
+        Cmd::DailyNote,
+        Cmd::ExportHtml,
+        Cmd::ToggleSidebar,
+        Cmd::ToggleSplit,
+        Cmd::GoFiles,
+        Cmd::GoSearch,
+        Cmd::GoBacklinks,
+        Cmd::GoGraph,
+        Cmd::GoBookmarks,
+        Cmd::GoKanban,
+        Cmd::GoTasks,
     ];
 
     fn title(self) -> &'static str {
         match self {
             Cmd::QuickSwitcher => "Go to file…",
-            Cmd::NewFile       => "New note",
-            Cmd::NewFolder     => "New folder",
-            Cmd::DailyNote     => "Open today's daily note",
-            Cmd::ExportHtml    => "Export current note as HTML",
+            Cmd::NewFile => "New note",
+            Cmd::NewFolder => "New folder",
+            Cmd::DailyNote => "Open today's daily note",
+            Cmd::ExportHtml => "Export current note as HTML",
             Cmd::ToggleSidebar => "Toggle sidebar",
-            Cmd::ToggleSplit   => "Toggle editor split",
-            Cmd::GoFiles       => "Show: Files",
-            Cmd::GoSearch      => "Show: Search",
-            Cmd::GoBacklinks   => "Show: Backlinks",
-            Cmd::GoGraph       => "Show: Graph",
-            Cmd::GoBookmarks   => "Show: Bookmarks",
-            Cmd::GoKanban      => "Show: Kanban",
-            Cmd::GoTasks       => "Show: Tasks",
+            Cmd::ToggleSplit => "Toggle editor split",
+            Cmd::GoFiles => "Show: Files",
+            Cmd::GoSearch => "Show: Search",
+            Cmd::GoBacklinks => "Show: Backlinks",
+            Cmd::GoGraph => "Show: Graph",
+            Cmd::GoBookmarks => "Show: Bookmarks",
+            Cmd::GoKanban => "Show: Kanban",
+            Cmd::GoTasks => "Show: Tasks",
         }
     }
 
@@ -220,19 +287,19 @@ impl Cmd {
     fn keywords(self) -> &'static str {
         match self {
             Cmd::QuickSwitcher => "switch open jump find",
-            Cmd::NewFile       => "create page",
-            Cmd::NewFolder     => "create directory",
-            Cmd::DailyNote     => "today journal calendar",
-            Cmd::ExportHtml    => "download save html",
+            Cmd::NewFile => "create page",
+            Cmd::NewFolder => "create directory",
+            Cmd::DailyNote => "today journal calendar",
+            Cmd::ExportHtml => "download save html",
             Cmd::ToggleSidebar => "hide show panel",
-            Cmd::ToggleSplit   => "pane two columns",
-            Cmd::GoFiles       => "tree explorer",
-            Cmd::GoSearch      => "find grep",
-            Cmd::GoBacklinks   => "links references",
-            Cmd::GoGraph       => "network",
-            Cmd::GoBookmarks   => "saved pinned",
-            Cmd::GoKanban      => "board",
-            Cmd::GoTasks       => "todo checklist due priority overview",
+            Cmd::ToggleSplit => "pane two columns",
+            Cmd::GoFiles => "tree explorer",
+            Cmd::GoSearch => "find grep",
+            Cmd::GoBacklinks => "links references",
+            Cmd::GoGraph => "network",
+            Cmd::GoBookmarks => "saved pinned",
+            Cmd::GoKanban => "board",
+            Cmd::GoTasks => "todo checklist due priority overview",
         }
     }
 }
@@ -253,20 +320,28 @@ enum PaletteAction {
 // clicking the tab pins it, so the next open spawns a fresh preview tab instead.
 
 #[derive(Clone, PartialEq)]
-struct Tab { path: String, pinned: bool }
+struct Tab {
+    path: String,
+    pinned: bool,
+}
 
 /// Open `path` in a pane: activate it if already open, otherwise reuse the
 /// pane's preview (unpinned) tab, or append a new preview tab. Sets `active`,
 /// which drives the pane's load effect.
 fn open_in_pane(mut tabs: Signal<Vec<Tab>>, mut active: Signal<Option<String>>, path: String) {
-    if active.peek().as_deref() == Some(path.as_str()) { return; }
+    if active.peek().as_deref() == Some(path.as_str()) {
+        return;
+    }
     let already = tabs.peek().iter().any(|t| t.path == path);
     if !already {
         tabs.with_mut(|ts| {
             if let Some(preview) = ts.iter_mut().find(|t| !t.pinned) {
-                preview.path = path.clone();
+                preview.path.clone_from(&path);
             } else {
-                ts.push(Tab { path: path.clone(), pinned: false });
+                ts.push(Tab {
+                    path: path.clone(),
+                    pinned: false,
+                });
             }
         });
     }
@@ -277,11 +352,15 @@ fn open_in_pane(mut tabs: Signal<Vec<Tab>>, mut active: Signal<Option<String>>, 
 fn close_tab(mut tabs: Signal<Vec<Tab>>, mut active: Signal<Option<String>>, path: &str) {
     let idx = tabs.peek().iter().position(|t| t.path == path);
     let Some(idx) = idx else { return };
-    tabs.with_mut(|ts| { ts.remove(idx); });
+    tabs.with_mut(|ts| {
+        ts.remove(idx);
+    });
     if active.peek().as_deref() == Some(path) {
         let next = {
             let ts = tabs.peek();
-            ts.get(idx).or_else(|| ts.get(idx.wrapping_sub(1))).map(|t| t.path.clone())
+            ts.get(idx)
+                .or_else(|| ts.get(idx.wrapping_sub(1)))
+                .map(|t| t.path.clone())
         };
         active.set(next);
     }
@@ -309,8 +388,14 @@ pub struct NavPlugin {
 
 #[allow(dead_code)]
 static NAV_PLUGINS: &[NavPlugin] = &[
-    NavPlugin { id: "tree", label: "Tree" },
-    NavPlugin { id: "flat", label: "Flat list" },
+    NavPlugin {
+        id: "tree",
+        label: "Tree",
+    },
+    NavPlugin {
+        id: "flat",
+        label: "Flat list",
+    },
 ];
 
 // ── VaultBrowser ──────────────────────────────────────────────────────────────
@@ -350,6 +435,13 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
     let mut show_new_folder = use_signal(|| false);
     let mut new_file_result: Signal<Option<String>> = use_signal(|| None);
     let index: Signal<WikiLinkIndex> = use_signal(WikiLinkIndex::new);
+    // The shared vault index — frontmatter, tags, links and tasks for every
+    // note. Dataview blocks query it, so it has to be in memory, not just in
+    // the store. Provided here and consumed by whoever needs it below.
+    let mut vault_idx = crate::vault_index::provide();
+    // Bumped to force a refresh even when the file listing hasn't changed —
+    // what "Rebuild" in the storage footer does.
+    let mut index_gen = use_signal(|| 0u32);
     let mut templates: Signal<Vec<TemplateMeta>> = use_signal(Vec::new);
     let mut board_root: Signal<String> = use_signal(String::new);
     let mut board_input: Signal<String> = use_signal(String::new);
@@ -361,8 +453,11 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
     // Route an open request to whichever pane is focused. Copy (captures only
     // Copy signals) so it can be used inside many event closures.
     let open_focused = move |path: String| {
-        if focused() == 1 { open_in_pane(tabs_b, active_b, path); }
-        else { open_in_pane(tabs_a, active_a, path); }
+        if focused() == 1 {
+            open_in_pane(tabs_b, active_b, path);
+        } else {
+            open_in_pane(tabs_a, active_a, path);
+        }
     };
     // The focused pane's open mailbox, for APIs that take a Signal (templates).
     let focused_open_mbx = move || if focused() == 1 { open_b } else { open_a };
@@ -375,7 +470,10 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
             let file_result = vault::dispatch::list_files(&cfg).await;
             let bm = state::load_bookmarks().await;
             match file_result {
-                Ok(mut list) => { list.sort_by(|a, b| a.path.cmp(&b.path)); files.set(list); }
+                Ok(mut list) => {
+                    list.sort_by(|a, b| a.path.cmp(&b.path));
+                    files.set(list);
+                }
                 Err(e) => load_error.set(Some(e.to_string())),
             }
             bookmarks.set(bm);
@@ -389,22 +487,45 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
         });
     });
 
+    // Keep the vault index current. The stored copy loads instantly so blocks
+    // render on first paint; the refresh that follows only reads notes whose
+    // blob SHA changed, so an unchanged vault costs zero file requests.
+    let cfg_idx = config.clone();
+    use_effect(move || {
+        let cfg = cfg_idx.clone();
+        let _ = index_gen();
+        let listing = files();
+        spawn(async move {
+            vault_idx.set(crate::vault_index::load().await);
+            if !listing.is_empty() {
+                crate::vault_index::refresh(vault_idx, &cfg, &listing).await;
+            }
+        });
+    });
+
     // Load templates whenever the file list changes.
     let cfg_tmpl = config.clone();
     use_effect(move || {
         let cfg = cfg_tmpl.clone();
         let prefix = format!("{}/", cfg.templates_dir);
-        let paths: Vec<String> = files.read()
+        let paths: Vec<String> = files
+            .read()
             .iter()
             .filter(|f| f.path.starts_with(&prefix))
             .map(|f| f.path.clone())
             .collect();
         spawn(async move {
-            if paths.is_empty() { templates.set(vec![]); return; }
+            if paths.is_empty() {
+                templates.set(vec![]);
+                return;
+            }
             let contents = vault::dispatch::read_many(&cfg, &paths).await;
-            templates.set(contents.iter()
-                .map(|(p, c)| template::parse_template(p, c))
-                .collect());
+            templates.set(
+                contents
+                    .iter()
+                    .map(|(p, c)| template::parse_template(p, c))
+                    .collect(),
+            );
         });
     });
 
@@ -413,7 +534,9 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
     // Handle new-file result: refresh list then open the file.
     let cfg = config.clone();
     use_effect(move || {
-        let Some(path) = new_file_result() else { return };
+        let Some(path) = new_file_result() else {
+            return;
+        };
         new_file_result.set(None);
         show_new_file.set(false);
         let cfg = cfg.clone();
@@ -462,21 +585,31 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
 
     // Open (or create) today's daily note. Extracted from the sidebar button so
     // the palette can trigger it too.
-    let run_daily = use_callback(move |_: ()| {
+    let run_daily = use_callback(move |(): ()| {
         let cfg = cfg_daily.clone();
         let tmpl_path = cfg.daily_note_template.clone();
-        let tmpl = templates.read().iter().find(|t| t.source_path == tmpl_path).cloned();
+        let tmpl = templates
+            .read()
+            .iter()
+            .find(|t| t.source_path == tmpl_path)
+            .cloned();
         let open_mbx = focused_open_mbx();
         spawn(async move {
             if let Some(meta) = tmpl {
                 apply_template(&meta, &cfg, files, open_mbx, load_error, "").await;
             } else {
                 let date = crate::dates::today().await;
-                if date.is_empty() { return; }
+                if date.is_empty() {
+                    return;
+                }
                 let path = format!("{date}.md");
                 let _ = vault::dispatch::create_file(
-                    &cfg, &path, &format!("# {date}\n\n"), &format!("Daily note {date}"),
-                ).await;
+                    &cfg,
+                    &path,
+                    &format!("# {date}\n\n"),
+                    &format!("Daily note {date}"),
+                )
+                .await;
                 if let Ok(mut list) = vault::dispatch::list_files(&cfg).await {
                     list.sort_by(|a, b| a.path.cmp(&b.path));
                     files.set(list);
@@ -504,9 +637,14 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
     });
 
     // Export the focused note as standalone HTML (uses the focused-pane mirrors).
-    let run_export = use_callback(move |_: ()| {
+    let run_export = use_callback(move |(): ()| {
         if let Some(p) = active_path() {
-            let title = p.rsplit('/').next().unwrap_or(&p).trim_end_matches(".md").to_string();
+            let title = p
+                .rsplit('/')
+                .next()
+                .unwrap_or(&p)
+                .trim_end_matches(".md")
+                .to_string();
             let html = export::to_html(&title, &content.read());
             js::download_file(format!("{title}.html"), html);
         }
@@ -516,26 +654,26 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
     let run_cmd = use_callback(move |cmd: Cmd| {
         match cmd {
             Cmd::QuickSwitcher => show_switcher.set(true),
-            Cmd::NewFile       => show_new_file.set(true),
-            Cmd::NewFolder     => show_new_folder.set(true),
-            Cmd::DailyNote     => run_daily.call(()),
-            Cmd::ExportHtml    => run_export.call(()),
+            Cmd::NewFile => show_new_file.set(true),
+            Cmd::NewFolder => show_new_folder.set(true),
+            Cmd::DailyNote => run_daily.call(()),
+            Cmd::ExportHtml => run_export.call(()),
             Cmd::ToggleSidebar => sidebar_open.set(!sidebar_open()),
-            Cmd::ToggleSplit   => split.set(!split()),
-            Cmd::GoFiles       => panel.set(Panel::Files),
-            Cmd::GoSearch      => panel.set(Panel::Search),
-            Cmd::GoBacklinks   => panel.set(Panel::Backlinks),
-            Cmd::GoGraph       => panel.set(Panel::Graph),
-            Cmd::GoBookmarks   => panel.set(Panel::Bookmarks),
-            Cmd::GoKanban      => panel.set(Panel::Kanban),
-            Cmd::GoTasks       => panel.set(Panel::Tasks),
+            Cmd::ToggleSplit => split.set(!split()),
+            Cmd::GoFiles => panel.set(Panel::Files),
+            Cmd::GoSearch => panel.set(Panel::Search),
+            Cmd::GoBacklinks => panel.set(Panel::Backlinks),
+            Cmd::GoGraph => panel.set(Panel::Graph),
+            Cmd::GoBookmarks => panel.set(Panel::Bookmarks),
+            Cmd::GoKanban => panel.set(Panel::Kanban),
+            Cmd::GoTasks => panel.set(Panel::Tasks),
         }
         show_palette.set(false);
     });
 
     // Global keyboard shortcuts (web/desktop; harmless no-op on mobile).
     let on_shortcut = use_callback(move |id: String| match id.as_str() {
-        "palette"  => show_palette.set(true),
+        "palette" => show_palette.set(true),
         "switcher" => show_switcher.set(true),
         _ => {}
     });
@@ -545,11 +683,19 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
         let cfg = cfg_delete.clone();
         spawn(async move {
             let name = file.name().to_string();
-            let confirmed = js::confirm_dialog(
-                &format!("Delete '{name}'? This cannot be undone.")
-            ).await;
-            if !confirmed { return; }
-            match vault::dispatch::delete_file(&cfg, &file.path, &file.sha, &format!("Delete {name}")).await {
+            let confirmed =
+                js::confirm_dialog(&format!("Delete '{name}'? This cannot be undone.")).await;
+            if !confirmed {
+                return;
+            }
+            match vault::dispatch::delete_file(
+                &cfg,
+                &file.path,
+                &file.sha,
+                &format!("Delete {name}"),
+            )
+            .await
+            {
                 Ok(()) => {
                     files.with_mut(|f| f.retain(|fi| fi.path != file.path));
                     // Drop the (now-gone) file from any pane that had it open.
@@ -569,53 +715,100 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
             let mut parts = payload.splitn(2, '\x1e');
             let kind = parts.next().unwrap_or("").to_string();
             let src = parts.next().unwrap_or("").trim_matches('/').to_string();
-            if src.is_empty() { return; }
+            if src.is_empty() {
+                return;
+            }
             let dest = dest_dir.trim_matches('/').to_string();
             let name = src.rsplit('/').next().unwrap_or(&src).to_string();
-            let src_parent = src.rfind('/').map(|i| &src[..i]).unwrap_or("");
+            let src_parent = src.rfind('/').map_or("", |i| &src[..i]);
 
             // No-op: already directly inside the destination folder.
-            if src_parent == dest { return; }
-            let new_path = if dest.is_empty() { name.clone() } else { format!("{dest}/{name}") };
+            if src_parent == dest {
+                return;
+            }
+            let new_path = if dest.is_empty() {
+                name.clone()
+            } else {
+                format!("{dest}/{name}")
+            };
             // Can't drop a folder into itself or a descendant.
-            if kind == "dir" && (dest == src || dest.starts_with(&format!("{src}/"))) { return; }
+            if kind == "dir" && (dest == src || dest.starts_with(&format!("{src}/"))) {
+                return;
+            }
 
-            let dest_label = if dest.is_empty() { "vault root".to_string() } else { dest.clone() };
-            let confirmed = js::confirm_dialog(&format!("Move '{name}' into '{dest_label}'?")).await;
-            if !confirmed { return; }
+            let dest_label = if dest.is_empty() {
+                "vault root".to_string()
+            } else {
+                dest.clone()
+            };
+            let confirmed =
+                js::confirm_dialog(&format!("Move '{name}' into '{dest_label}'?")).await;
+            if !confirmed {
+                return;
+            }
 
             let snapshot = files.peek().clone();
             let result = if kind == "dir" {
                 vault::dispatch::move_dir(&cfg, &src, &new_path, &snapshot).await
             } else {
-                let sha = snapshot.iter().find(|f| f.path == src).map(|f| f.sha.clone()).unwrap_or_default();
+                let sha = snapshot
+                    .iter()
+                    .find(|f| f.path == src)
+                    .map(|f| f.sha.clone())
+                    .unwrap_or_default();
                 vault::dispatch::move_file(&cfg, &src, &sha, &new_path).await
             };
-            match result {
-                Ok(()) => {
-                    if let Ok(mut list) = vault::dispatch::list_files(&cfg).await {
-                        list.sort_by(|a, b| a.path.cmp(&b.path));
-                        files.set(list);
+            if let Err(ref e) = result {
+                load_error.set(Some(format!("Move failed: {e}")));
+            }
+
+            // Always re-fetch, success or failure: `move_dir` moves files one at
+            // a time and stops at the first error (e.g. a name collision at the
+            // destination), so a failed move can still be a *partial* one —
+            // some files really did move server-side even though `result` is
+            // `Err`. Leaving the sidebar showing the pre-move snapshot in that
+            // case is exactly the "tree doesn't update" bug: it claims files
+            // are still where they no longer are.
+            let Ok(mut list) = vault::dispatch::list_files(&cfg).await else {
+                return;
+            };
+            list.sort_by(|a, b| a.path.cmp(&b.path));
+            let paths: std::collections::HashSet<String> =
+                list.iter().map(|f| f.path.clone()).collect();
+            let still_exists = |p: &str| paths.contains(p);
+            files.set(list);
+
+            // Rewrite any open tabs / active paths that pointed at the moved
+            // file or a file inside the moved folder, in both panes — but only
+            // for paths that actually landed at their new location (confirmed
+            // against the fresh listing above), so a sub-path a partial folder
+            // move never reached keeps pointing at its still-valid old path.
+            let rewrite = |p: &str| -> Option<String> {
+                let candidate = if kind == "dir" {
+                    if p == src {
+                        Some(new_path.clone())
+                    } else {
+                        p.strip_prefix(&format!("{src}/")).map(|rel| format!("{new_path}/{rel}"))
                     }
-                    // Rewrite any open tabs / active paths that pointed at the
-                    // moved file or a file inside the moved folder, in both panes.
-                    let rewrite = |p: &str| -> Option<String> {
-                        if kind == "dir" {
-                            if p == src { Some(new_path.clone()) }
-                            else { p.strip_prefix(&format!("{src}/")).map(|rel| format!("{new_path}/{rel}")) }
-                        } else if p == src { Some(new_path.clone()) } else { None }
-                    };
-                    for (mut tabs, mut active) in [(tabs_a, active_a), (tabs_b, active_b)] {
-                        tabs.with_mut(|ts| {
-                            for t in ts.iter_mut() {
-                                if let Some(n) = rewrite(&t.path) { t.path = n; }
-                            }
-                        });
-                        let cur = active.peek().clone();
-                        if let Some(n) = cur.and_then(|c| rewrite(&c)) { active.set(Some(n)); }
+                } else if p == src {
+                    Some(new_path.clone())
+                } else {
+                    None
+                };
+                candidate.filter(|c| still_exists(c))
+            };
+            for (mut tabs, mut active) in [(tabs_a, active_a), (tabs_b, active_b)] {
+                tabs.with_mut(|ts| {
+                    for t in ts.iter_mut() {
+                        if let Some(n) = rewrite(&t.path) {
+                            t.path = n;
+                        }
                     }
+                });
+                let cur = active.peek().clone();
+                if let Some(n) = cur.and_then(|c| rewrite(&c)) {
+                    active.set(Some(n));
                 }
-                Err(e) => load_error.set(Some(format!("Move failed: {e}"))),
             }
         });
     };
@@ -755,7 +948,6 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                         },
                         Panel::Search => rsx! {
                             SearchPanel {
-                                config: cfg_search,
                                 on_select: move |path: String| {
                                     open_focused(path);
                                     show_switcher.set(false);
@@ -768,7 +960,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                                 active: active_path.read().clone(),
                                 backlinks: {
                                     let idx = index.read();
-                                    active_path.read().as_ref().map(|p| idx.backlinks(p).into_iter().map(|s| s.to_string()).collect::<Vec<_>>()).unwrap_or_default()
+                                    active_path.read().as_ref().map(|p| idx.backlinks(p).into_iter().map(std::string::ToString::to_string).collect::<Vec<_>>()).unwrap_or_default()
                                 },
                                 on_select: move |path: String| {
                                     open_focused(path);
@@ -845,6 +1037,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                             TasksView {
                                 config: config.clone(),
                                 files,
+                                templates,
                                 on_open: move |path: String| {
                                     open_focused(path);
                                     sidebar_open.set(false);
@@ -853,6 +1046,8 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                         },
                     }
                 }
+
+                StorageFooter { on_rebuild: move |()| index_gen += 1 }
             }
 
             // ── Drawer scrim (mobile only — `.sidebar-scrim` is display:none on
@@ -877,7 +1072,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                         // Resolve the input into a board *document* path. A bare
                         // folder name (e.g. "kanban") maps to "kanban/kanban.md".
                         let raw = board_root.read().trim().trim_matches('/').to_string();
-                        let board_path = if raw.ends_with(".md") { raw } else { format!("{raw}/kanban.md") };
+                        let board_path = if is_md_path(&raw) { raw } else { format!("{raw}/kanban.md") };
                         rsx! {
                             KanbanBoard {
                                 key: "{board_path}",
@@ -911,11 +1106,11 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                         mirror_active: active_path,
                         mirror_content: content,
                         can_split: !split(),
-                        on_split: move |_| split.set(true),
+                        on_split: move |()| split.set(true),
                         on_close_pane: None,
                         on_send_other: move |p: String| { open_in_pane(tabs_b, active_b, p); focused.set(1); split.set(true); },
-                        on_back: move |_| sidebar_open.set(true),
-                        on_palette: move |_| show_palette.set(true),
+                        on_back: move |()| sidebar_open.set(true),
+                        on_palette: move |()| show_palette.set(true),
                     }
                     if split() {
                         EditorPane {
@@ -933,11 +1128,11 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                             mirror_active: active_path,
                             mirror_content: content,
                             can_split: false,
-                            on_split: move |_| {},
-                            on_close_pane: Some(EventHandler::new(move |_| { split.set(false); focused.set(0); })),
+                            on_split: move |()| {},
+                            on_close_pane: Some(EventHandler::new(move |()| { split.set(false); focused.set(0); })),
                             on_send_other: move |p: String| { open_in_pane(tabs_a, active_a, p); focused.set(0); },
-                            on_back: move |_| sidebar_open.set(true),
-                            on_palette: move |_| show_palette.set(true),
+                            on_back: move |()| sidebar_open.set(true),
+                            on_palette: move |()| show_palette.set(true),
                         }
                     }
                 }
@@ -991,7 +1186,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                         open_focused(path);
                         show_switcher.set(false);
                     },
-                    on_close: move |_| show_switcher.set(false),
+                    on_close: move |()| show_switcher.set(false),
                 }
             }
 
@@ -1003,7 +1198,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                         PaletteAction::Cmd(c) => run_cmd.call(c),
                         PaletteAction::Template(t) => run_template.call(t),
                     },
-                    on_close: move |_| show_palette.set(false),
+                    on_close: move |()| show_palette.set(false),
                 }
             }
 
@@ -1015,7 +1210,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                     config: cfg_newfile.clone(),
                     result: new_file_result,
                     current_dir: selected_dir.read().clone(),
-                    on_close: move |_| show_new_file.set(false),
+                    on_close: move |()| show_new_file.set(false),
                 }
             }
 
@@ -1023,7 +1218,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                 NewFolderModal {
                     config: cfg_newfile,
                     parent: selected_dir.read().clone(),
-                    on_created: move |_| {
+                    on_created: move |()| {
                         show_new_folder.set(false);
                         let cfg = config.clone();
                         spawn(async move {
@@ -1033,11 +1228,233 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                             }
                         });
                     },
-                    on_close: move |_| show_new_folder.set(false),
+                    on_close: move |()| show_new_folder.set(false),
                 }
             }
         }
     }
+}
+
+
+// Where the vault index lives, and how much room it has left.
+//
+// Worth surfacing because the index is the one piece of local state that grows
+// with the vault, and on web it lives in a quota the browser may evict. The
+// "Rebuild" button is the escape hatch: the index is only a cache, so throwing
+// it away costs one slow refresh and can never cost data.
+#[component]
+fn StorageFooter(on_rebuild: EventHandler<()>) -> Element {
+    let mut vault_idx = crate::vault_index::use_index();
+    let mut rebuilding = use_signal(|| false);
+    // Re-measured whenever the index changes, which is when the number moves.
+    let estimate = use_resource(move || async move {
+        let _ = vault_idx.read();
+        crate::js::storage_estimate().await
+    });
+
+    let pages = vault_idx.read().len();
+    let detail = match estimate.read().as_ref() {
+        Some((usage, quota, persisted)) => {
+            let used = if *usage < 0 { "—".to_string() } else { human_bytes(usage.cast_unsigned()) };
+            // No quota on native, and browsers that decline to report one.
+            let of = if *quota <= 0 {
+                String::new()
+            } else {
+                format!(" of {}", human_bytes(quota.cast_unsigned()))
+            };
+            let evictable = if *persisted { "" } else { " · evictable" };
+            format!("{used}{of} used{evictable}")
+        }
+        None => "measuring…".to_string(),
+    };
+
+    rsx! {
+        div { class: "storage-footer",
+            div { class: "storage-line",
+                span { "{pages} notes indexed" }
+                button {
+                    class: "storage-rebuild",
+                    disabled: rebuilding(),
+                    title: "Discard the local index and read the vault again",
+                    onclick: move |_| {
+                        rebuilding.set(true);
+                        spawn(async move {
+                            crate::vault_index::clear().await;
+                            vault_idx.set(index::Index::new());
+                            // Re-triggering the file listing re-runs the refresh
+                            // effect, which is what actually repopulates it.
+                            on_rebuild.call(());
+                            rebuilding.set(false);
+                        });
+                    },
+                    if rebuilding() { "Rebuilding…" } else { "Rebuild" }
+                }
+            }
+            div { class: "storage-detail", "{detail}" }
+        }
+    }
+}
+
+/// Bytes as something a person can read. Binary units, one decimal above KB.
+fn human_bytes(n: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    // Display rounding only — a decimal digit or two here is inconsequential.
+    #[allow(clippy::cast_precision_loss)]
+    let mut v = n as f64;
+    let mut unit = 0;
+    while v >= 1024.0 && unit < UNITS.len() - 1 {
+        v /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{n} B")
+    } else {
+        format!("{v:.1} {}", UNITS[unit])
+    }
+}
+
+/// Flip one task in its file and fold the result back into the index.
+///
+/// Shared by the Tasks panel and by `TASK` results inside a dataview block:
+/// both flip optimistically in the UI first, so the write path has to behave
+/// identically or the two views drift apart. The file is re-read for a fresh
+/// SHA, which is what makes the write conflict-safe.
+///
+/// Returns the updated index, or `None` if the task could not be found or the
+/// write failed — in which case the optimistic flip was wrong and the next
+/// repaint corrects it.
+async fn write_task_toggle(
+    idx: Signal<Index>,
+    cfg: &GithubConfig,
+    task: &Task,
+    today: &str,
+) -> Option<()> {
+    let fc = vault::dispatch::read_file(cfg, &task.path).await.ok()?;
+    let new_content = tasks::toggled_content(&fc.content, task, today)?;
+    let name = task.path.rsplit('/').next().unwrap_or(&task.path);
+    let new_sha = vault::dispatch::write_file(
+        cfg,
+        &task.path,
+        &new_content,
+        &fc.sha,
+        &format!("Toggle task in {name}"),
+    )
+    .await
+    .ok()?;
+    crate::vault_index::update_page(idx, &task.path, &new_sha, &new_content).await;
+    Some(())
+}
+
+/// Today's periodic note: the path it lives at, and the body to seed it with if
+/// it isn't there yet.
+///
+/// The daily-note *template* owns the path (its `filepath:` is where the user's
+/// journal actually lives — a dated folder tree, typically), so this resolves
+/// through the template exactly as the "Today's note" button does. Without a
+/// configured template it falls back to `YYYY-MM-DD.md` at the vault root, which
+/// is what that button does too.
+async fn todays_note(cfg: &GithubConfig, templates: &[TemplateMeta]) -> Option<(String, String)> {
+    let date_json = crate::dates::date_vars_json().await;
+    let vars = template::TemplateVars::from_json(&date_json, "", "");
+    if vars.year.is_empty() || vars.month.is_empty() || vars.date.is_empty() {
+        return None;
+    }
+    let tmpl = templates
+        .iter()
+        .find(|t| t.source_path == cfg.daily_note_template);
+    if let Some((t, fp)) = tmpl.and_then(|t| t.filepath.as_ref().map(|fp| (t, fp))) {
+        let path = template::substitute_vars(fp, &vars)
+            .trim_start_matches('/')
+            .to_string();
+        let body = template::strip_tabstops(&template::substitute_vars(&t.body, &vars));
+        Some((path, body))
+    } else {
+        let date = crate::dates::today().await;
+        if date.is_empty() {
+            return None;
+        }
+        Some((format!("{date}.md"), format!("# {date}\n\n")))
+    }
+}
+
+/// Moves `tasks` out of the notes holding them and appends them to `dest`,
+/// creating `dest` (seeded with `dest_body`) when it doesn't exist.
+///
+/// The destination is written **first**, then each source. If a source write
+/// fails the task shows up in both notes — visible and fixable — whereas the
+/// other order would drop it on the floor. Tasks already living in `dest` are
+/// skipped rather than moved onto themselves.
+///
+/// Updates the live index as it goes; returns an error message fit to show the
+/// user, or nothing on success.
+async fn move_tasks(
+    idx: Signal<Index>,
+    cfg: &GithubConfig,
+    tasks: &[Task],
+    dest: &str,
+    dest_body: &str,
+) -> Result<(), String> {
+    let mut by_file: std::collections::BTreeMap<String, Vec<Task>> = std::collections::BTreeMap::default();
+    for t in tasks.iter().filter(|t| t.path != dest) {
+        by_file.entry(t.path.clone()).or_default().push(t.clone());
+    }
+    if by_file.is_empty() {
+        return Err("Nothing to move.".to_string());
+    }
+
+    // Cut the lines out of each source, in memory. Nothing is written yet: if a
+    // read fails we want to have changed nothing at all.
+    let mut moved_lines: Vec<String> = Vec::new();
+    let mut rewrites: Vec<(String, String, String)> = Vec::new(); // path, content, sha
+    for (path, items) in &by_file {
+        let fc = vault::dispatch::read_file(cfg, path)
+            .await
+            .map_err(|e| format!("Could not read {path}: {e}"))?;
+        let (rest, moved) = tasks::extract_lines(&fc.content, items);
+        if moved.is_empty() {
+            continue;
+        }
+        moved_lines.extend(moved);
+        rewrites.push((path.clone(), rest, fc.sha));
+    }
+    if moved_lines.is_empty() {
+        return Err("Those tasks are no longer in their notes — rescan and retry.".to_string());
+    }
+
+    // Destination first.
+    let dest_name = dest.rsplit('/').next().unwrap_or(dest);
+    let msg = format!("Move {} task(s) to {dest_name}", moved_lines.len());
+    let (dest_content, dest_sha) = match vault::dispatch::read_file(cfg, dest).await {
+        Ok(fc) => (tasks::append_lines(&fc.content, &moved_lines), Some(fc.sha)),
+        // Not there yet — this is the "creating it if it doesn't exist" path.
+        Err(_) => (tasks::append_lines(dest_body, &moved_lines), None),
+    };
+    let dest_new_sha = match dest_sha {
+        Some(sha) => vault::dispatch::write_file(cfg, dest, &dest_content, &sha, &msg)
+            .await
+            .map_err(|e| format!("Could not write {dest}: {e}"))?,
+        None => vault::dispatch::create_file(cfg, dest, &dest_content, &msg)
+            .await
+            .map_err(|e| format!("Could not create {dest}: {e}"))?,
+    };
+    crate::vault_index::update_page(idx, dest, &dest_new_sha, &dest_content).await;
+
+    // Then the sources.
+    for (path, content, sha) in &rewrites {
+        let msg = format!("Move task(s) out of {}", path.rsplit('/').next().unwrap_or(path));
+        match vault::dispatch::write_file(cfg, path, content, sha, &msg).await {
+            Ok(new_sha) => {
+                crate::vault_index::update_page(idx, path, &new_sha, content).await;
+            }
+            Err(e) => {
+                return Err(format!(
+                    "Moved to {dest_name}, but could not update {path} ({e}) — \
+                     the tasks are now in both notes."
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 // ── Editor pane ─────────────────────────────────────────────────────────────
@@ -1077,6 +1494,133 @@ fn EditorPane(
     let mut loaded_path: Signal<Option<String>> = use_signal(|| None);
     let mut loading_file = use_signal(|| false);
     let mut slash_query: Signal<Option<String>> = use_signal(|| None);
+    let mut task_menu_open: Signal<bool> = use_signal(|| false);
+
+    // ── Dataview blocks ──
+    // The editor renders ```dataview fences through this. It runs on every
+    // paint of the note, so it must stay synchronous: it reads the in-memory
+    // index and never touches the network. `today` is resolved once, up front,
+    // because `dates::today` is async and the renderer cannot await.
+    let vault_idx = crate::vault_index::use_index();
+    let mut today: Signal<Option<index::Date>> = use_signal(|| None);
+    use_effect(move || {
+        spawn(async move {
+            today.set(index::Date::parse(&crate::dates::today().await));
+        });
+    });
+    // ── Wikilinks ──
+    // The folder a link in the open note resolves against (`""` at the root).
+    let link_dir = use_memo(move || {
+        active()
+            .and_then(|p| p.rfind('/').map(|i| p[..i].to_string()))
+            .unwrap_or_default()
+    });
+
+    // Which `[[targets]]` already exist. Rebuilt when the file list or the open
+    // note changes — both move the answer — and the editor repaints its links
+    // when this identity changes, so a note created from a link immediately
+    // stops advertising itself as missing.
+    let resolve_link = use_memo(move || {
+        let paths: Vec<String> = files.read().iter().map(|f| f.path.clone()).collect();
+        let dir = link_dir();
+        Some(ui::LinkResolver::new(move |target: &str| {
+            crate::links::resolve(target, &paths, &dir).is_some()
+        }))
+    });
+
+    // Clicking a resolved link opens that note in this pane. Markdown links to
+    // the web arrive here too, but they are real anchors with an `href` — the
+    // browser has already handled them, and they never resolve to a vault path.
+    let on_navigate = move |target: String| {
+        let paths: Vec<String> = files.peek().iter().map(|f| f.path.clone()).collect();
+        if let Some(path) = crate::links::resolve(&target, &paths, &link_dir.peek()) {
+            open_in_pane(tabs, active, path);
+        }
+    };
+
+    // A click inside rendered output: a `task:<line>:<path>` from a TASK result,
+    // or `newnote:<target>` from an unresolved wikilink.
+    let cfg_action = config.clone();
+    let cfg_newnote = config.clone();
+    let on_block_action = move |action: String| {
+        if let Some(target) = action.strip_prefix("newnote:") {
+            // The link text decides the path (see `links::new_note_path`), and
+            // the note is seeded with its own title so it isn't blank.
+            let path = crate::links::new_note_path(target, &link_dir.peek());
+            if path.is_empty() || path == ".md" {
+                return;
+            }
+            let title = path
+                .rsplit('/')
+                .next()
+                .unwrap_or(&path)
+                .trim_end_matches(".md")
+                .to_string();
+            let cfg = cfg_newnote.clone();
+            spawn(async move {
+                let body = format!("# {title}\n\n");
+                match vault::dispatch::create_file(&cfg, &path, &body, &format!("Create {path}"))
+                    .await
+                {
+                    Ok(_) => {}
+                    // Already there (a stale file list, or a double click) —
+                    // opening it is still the right outcome.
+                    Err(ref e) if e.to_string().contains("File already exists") => {}
+                    Err(e) => {
+                        load_error.set(Some(e.to_string()));
+                        return;
+                    }
+                }
+                if let Ok(mut list) = vault::dispatch::list_files(&cfg).await {
+                    list.sort_by(|a, b| a.path.cmp(&b.path));
+                    files.set(list);
+                }
+                open_in_pane(tabs, active, path);
+            });
+            return;
+        }
+
+        let Some(rest) = action.strip_prefix("task:") else {
+            return;
+        };
+        let Some((line, path)) = rest.split_once(':') else {
+            return;
+        };
+        let (Ok(line), path) = (line.parse::<usize>(), path.to_string()) else {
+            return;
+        };
+        let Some(task) = vault_idx
+            .peek()
+            .tasks()
+            .into_iter()
+            .find(|t| t.line == line && t.path == path)
+        else {
+            return;
+        };
+        let cfg = cfg_action.clone();
+        let today_str = today.peek().map_or_else(String::new, |d| d.to_string());
+        spawn(async move {
+            write_task_toggle(vault_idx, &cfg, &task, &today_str).await;
+        });
+    };
+
+    // Rebuilt whenever the index or the date changes: the editor repaints its
+    // blocks when the renderer identity changes, which is how a query picks up
+    // notes that were indexed after the block was first drawn.
+    let render_block = use_memo(move || {
+        let _ = vault_idx.read();
+        let _ = today.read();
+        Some(ui::BlockRenderer::new(move |lang: &str, body: &str| {
+            if lang != "dataview" {
+                return String::new();
+            }
+            let ctx = index::dql::Context {
+                current_path: active.peek().clone().unwrap_or_default(),
+                today: *today.peek(),
+            };
+            index::dql::run(body, &vault_idx.peek(), &ctx)
+        }))
+    });
 
     // Mailbox: parent writes a path here to ask this pane to open it.
     use_effect(move || {
@@ -1101,13 +1645,17 @@ fn EditorPane(
     // Pin the active tab once its document is edited (so the next open spawns a
     // fresh preview tab instead of replacing this one).
     use_effect(move || {
-        if loading_file() { return; }
-        if content() != saved_content() {
-            if let Some(p) = active.peek().clone() {
-                tabs.with_mut(|ts| {
-                    if let Some(t) = ts.iter_mut().find(|t| t.path == p && !t.pinned) { t.pinned = true; }
-                });
-            }
+        if loading_file() {
+            return;
+        }
+        if content() != saved_content()
+            && let Some(p) = active.peek().clone()
+        {
+            tabs.with_mut(|ts| {
+                if let Some(t) = ts.iter_mut().find(|t| t.path == p && !t.pinned) {
+                    t.pinned = true;
+                }
+            });
         }
     });
 
@@ -1125,16 +1673,26 @@ fn EditorPane(
         let old_content = content.peek().clone();
         let old_saved = saved_content.peek().clone();
         spawn(async move {
-            if let Some(ref old_p) = old_path {
-                if !old_sha.is_empty() && old_content != old_saved {
-                    let name = old_p.rsplit('/').next().unwrap_or(old_p).to_string();
-                    if let Ok(new_sha) = vault::dispatch::write_file(
-                        &cfg, old_p, &old_content, &old_sha, &format!("Update {name}")
-                    ).await {
-                        file_sha.set(new_sha);
-                    }
+            if let Some(ref old_p) = old_path
+                && !old_sha.is_empty()
+                && old_content != old_saved
+            {
+                let name = old_p.rsplit('/').next().unwrap_or(old_p).to_string();
+                let to_write = stamped_for_save(&old_content).await.unwrap_or(old_content);
+                if let Ok(new_sha) = vault::dispatch::write_file(
+                    &cfg,
+                    old_p,
+                    &to_write,
+                    &old_sha,
+                    &format!("Update {name}"),
+                )
+                .await
+                {
+                    crate::vault_index::update_page(vault_idx, old_p, &new_sha, &to_write).await;
+                    file_sha.set(new_sha);
                 }
             }
+
             match vault::dispatch::read_file(&cfg, &p).await {
                 Ok(fc) => {
                     console_log(&format!("[oxidian] loaded {p} sha={}", fc.sha));
@@ -1167,27 +1725,57 @@ fn EditorPane(
         spawn(async move {
             for remaining in (1u8..5).rev() {
                 sleep_ms(1000).await;
-                if edit_gen() != this_gen { return; }
+                if edit_gen() != this_gen {
+                    return;
+                }
                 save_status.set(SaveStatus::Countdown(remaining));
             }
             sleep_ms(1000).await;
-            if edit_gen() != this_gen { return; }
+            if edit_gen() != this_gen {
+                return;
+            }
             let Some(path) = active() else { return };
             let sha = file_sha();
-            if sha.is_empty() { return; }
+            if sha.is_empty() {
+                return;
+            }
             let snapshot = content();
-            if snapshot == saved_content() { return; }
+            if snapshot == saved_content() {
+                return;
+            }
             save_status.set(SaveStatus::Saving);
             let name = path.rsplit('/').next().unwrap_or(&path).to_string();
-            match vault::dispatch::write_file(&cfg, &path, &snapshot, &sha, &format!("Update {name}")).await {
+            let to_write = stamped_for_save(&snapshot).await.unwrap_or_else(|| snapshot.clone());
+            match vault::dispatch::write_file(
+                &cfg,
+                &path,
+                &to_write,
+                &sha,
+                &format!("Update {name}"),
+            )
+            .await
+            {
                 Ok(new_sha) => {
-                    index.with_mut(|idx| idx.reindex_file(&path, &snapshot));
+                    index.with_mut(|idx| idx.reindex_file(&path, &to_write));
+                    crate::vault_index::update_page(vault_idx, &path, &new_sha, &to_write).await;
                     file_sha.set(new_sha);
-                    saved_content.set(snapshot);
+                    // Adopt the stamped text only if the user hasn't typed since
+                    // the snapshot was taken — otherwise we would overwrite the
+                    // keystrokes made while the write was in flight. Those land
+                    // (and get stamped) on the next save.
+                    let mut content = content;
+                    if content.peek().as_str() == snapshot.as_str() {
+                        content.set(to_write.clone());
+                        saved_content.set(to_write);
+                    } else {
+                        saved_content.set(snapshot);
+                    }
                     save_status.set(SaveStatus::Saved);
                 }
                 Err(e) => {
-                    console_log(&format!("[oxidian] auto-save: write_file FAILED for {path}: {e}"));
+                    console_log(&format!(
+                        "[oxidian] auto-save: write_file FAILED for {path}: {e}"
+                    ));
                     tracing::error!("auto-save: write_file failed for {path}: {e}");
                     save_status.set(SaveStatus::Error(e.to_string()));
                 }
@@ -1201,22 +1789,53 @@ fn EditorPane(
         spawn(async move {
             loop {
                 sleep_ms(150).await;
-                if focused() != pane_idx || active().is_none() { slash_query.set(None); continue; }
+                if focused() != pane_idx || active().is_none() {
+                    slash_query.set(None);
+                    continue;
+                }
                 let q = js::slash_query().await;
-                if q == js::NO_SLASH { slash_query.set(None); } else { slash_query.set(Some(q)); }
+                if q == js::NO_SLASH {
+                    slash_query.set(None);
+                } else {
+                    slash_query.set(Some(q));
+                }
+            }
+        });
+    });
+
+    // Poll for the task-metadata menu — same focus-aware pattern as slash,
+    // just a bool instead of a query string (see `js::task_menu_armed`).
+    use_effect(move || {
+        spawn(async move {
+            loop {
+                sleep_ms(150).await;
+                if focused() != pane_idx || active().is_none() {
+                    task_menu_open.set(false);
+                    continue;
+                }
+                task_menu_open.set(js::task_menu_armed().await);
             }
         });
     });
 
     // Pre-compute for rsx.
     let path_opt = active.read().clone();
-    let is_bookmarked = path_opt.as_ref().map(|p| bookmarks.read().contains(p)).unwrap_or(false);
+    let is_bookmarked = path_opt
+        .as_ref()
+        .is_some_and(|p| bookmarks.read().contains(p));
     let words = word_count(&content.read());
     let status_class = save_status.read().css_class().to_string();
     let status_label = save_status.read().label();
-    let status_title = match &*save_status.read() { SaveStatus::Error(e) => e.clone(), _ => String::new() };
+    let status_title = match &*save_status.read() {
+        SaveStatus::Error(e) => e.clone(),
+        _ => String::new(),
+    };
     let is_focused = focused() == pane_idx;
-    let col_class = if is_focused { "editor-pane-col editor-pane-col--focused" } else { "editor-pane-col" };
+    let col_class = if is_focused {
+        "editor-pane-col editor-pane-col--focused"
+    } else {
+        "editor-pane-col"
+    };
     let cfg_slash = config.clone();
 
     rsx! {
@@ -1337,6 +1956,10 @@ fn EditorPane(
                     content,
                     variant: MarkdownAreaVariant::Ghost,
                     placeholder: "Empty file.",
+                    render_block: render_block(),
+                    resolve_link: resolve_link(),
+                    on_block_action,
+                    on_navigate,
                     onfocus: move |_| focused.set(pane_idx),
                 }
             } else {
@@ -1364,20 +1987,10 @@ fn EditorPane(
                                 on_select: move |insert: String| {
                                     let query_len = slash_query().unwrap_or_default().len();
                                     slash_query.set(None);
-                                    // Task-metadata snippets carry date placeholders; fill them
-                                    // in with real dates (async) before inserting.
-                                    if insert.contains("{{today}}") || insert.contains("{{tomorrow}}") {
-                                        spawn(async move {
-                                            let today = crate::dates::today().await;
-                                            let tomorrow = crate::dates::add_days(&today, 1);
-                                            let snippet = insert
-                                                .replace("{{today}}", &today)
-                                                .replace("{{tomorrow}}", &tomorrow);
-                                            js::apply_slash(snippet, 1 + query_len);
-                                        });
-                                    } else {
-                                        js::apply_slash(insert, 1 + query_len);
-                                    }
+                                    spawn(async move {
+                                        let snippet = dates::fill_placeholders(&insert).await;
+                                        js::apply_slash(snippet, 1 + query_len);
+                                    });
                                 },
                                 on_template: move |meta: TemplateMeta| {
                                     let query_len = slash_query().unwrap_or_default().len();
@@ -1398,10 +2011,28 @@ fn EditorPane(
                                         }
                                     });
                                 },
-                                on_close: move |_| slash_query.set(None),
+                                on_close: move |()| slash_query.set(None),
                             }
                         }
                     }
+                }
+            }
+
+            // ── Task metadata menu (focused pane only) ──
+            if is_focused && task_menu_open() {
+                TaskMenu {
+                    on_select: move |insert: String| {
+                        task_menu_open.set(false);
+                        js::dismiss_task_menu();
+                        spawn(async move {
+                            let snippet = dates::fill_placeholders(&insert).await;
+                            js::apply_slash(snippet, 0);
+                        });
+                    },
+                    on_close: move |()| {
+                        task_menu_open.set(false);
+                        js::dismiss_task_menu();
+                    },
                 }
             }
         }
@@ -1426,23 +2057,40 @@ fn NewFileModal(
 
     let current_dir_effect = current_dir.clone();
     use_effect(move || {
-        if !trigger() { return; }
+        if !trigger() {
+            return;
+        }
         trigger.set(false);
         let raw = name.read().trim().to_string();
-        if raw.is_empty() { error.set(Some("Enter a file name.".into())); return; }
+        if raw.is_empty() {
+            error.set(Some("Enter a file name.".into()));
+            return;
+        }
         // Leading "/" means root-relative; otherwise place in current_dir.
-        let resolved = resolve_folder_path(&current_dir_effect, &raw);
-        let path = if resolved.ends_with(".md") { resolved } else { format!("{resolved}.md") };
+        let resolved = resolve_folder_path(current_dir_effect.as_ref(), &raw);
+        let path = if is_md_path(&resolved) {
+            resolved
+        } else {
+            format!("{resolved}.md")
+        };
         let title = path.trim_end_matches(".md").to_string();
         let cfg = config.clone();
         creating.set(true);
         error.set(None);
         spawn(async move {
             match vault::dispatch::create_file(
-                &cfg, &path, &format!("# {title}\n\n"), &format!("Create {path}")
-            ).await {
-                Ok(_)  => result.set(Some(path)),
-                Err(e) => { error.set(Some(e.to_string())); creating.set(false); }
+                &cfg,
+                &path,
+                &format!("# {title}\n\n"),
+                &format!("Create {path}"),
+            )
+            .await
+            {
+                Ok(_) => result.set(Some(path)),
+                Err(e) => {
+                    error.set(Some(e.to_string()));
+                    creating.set(false);
+                }
             }
         });
     });
@@ -1450,9 +2098,15 @@ fn NewFileModal(
     let preview = {
         let raw = name.read();
         let r = raw.trim();
-        if r.is_empty() { String::new() } else {
-            let resolved = resolve_folder_path(&current_dir, r);
-            if resolved.ends_with(".md") { resolved } else { format!("{resolved}.md") }
+        if r.is_empty() {
+            String::new()
+        } else {
+            let resolved = resolve_folder_path(current_dir.as_ref(), r);
+            if is_md_path(&resolved) {
+                resolved
+            } else {
+                format!("{resolved}.md")
+            }
         }
     };
 
@@ -1506,9 +2160,10 @@ fn NewFileModal(
 /// Resolve a folder-name input into a full vault path:
 ///  - leading "/"  → root-relative (ignore the current folder)
 ///  - otherwise    → relative to `parent` (the current folder) if present
+///
 /// Intermediate folders are created implicitly (mkdir -p style) since git
 /// derives directories from the blob path.
-fn resolve_folder_path(parent: &Option<String>, raw: &str) -> String {
+fn resolve_folder_path(parent: Option<&String>, raw: &str) -> String {
     let raw = raw.trim();
     if let Some(stripped) = raw.strip_prefix('/') {
         stripped.trim_matches('/').to_string()
@@ -1533,20 +2188,33 @@ fn NewFolderModal(
 
     let parent_effect = parent.clone();
     use_effect(move || {
-        if !trigger() { return; }
+        if !trigger() {
+            return;
+        }
         trigger.set(false);
         let raw = name.read().trim().to_string();
-        if raw.is_empty() { error.set(Some("Enter a folder name.".into())); return; }
-        let folder = resolve_folder_path(&parent_effect, &raw);
-        if folder.is_empty() { error.set(Some("Enter a folder name.".into())); return; }
+        if raw.is_empty() {
+            error.set(Some("Enter a folder name.".into()));
+            return;
+        }
+        let folder = resolve_folder_path(parent_effect.as_ref(), &raw);
+        if folder.is_empty() {
+            error.set(Some("Enter a folder name.".into()));
+            return;
+        }
         let path = format!("{folder}/.gitkeep");
         let cfg = config.clone();
         creating.set(true);
         error.set(None);
         spawn(async move {
-            match vault::dispatch::create_file(&cfg, &path, "", &format!("Create folder {folder}")).await {
-                Ok(_)  => on_created(()),
-                Err(e) => { error.set(Some(e.to_string())); creating.set(false); }
+            match vault::dispatch::create_file(&cfg, &path, "", &format!("Create folder {folder}"))
+                .await
+            {
+                Ok(_) => on_created(()),
+                Err(e) => {
+                    error.set(Some(e.to_string()));
+                    creating.set(false);
+                }
             }
         });
     });
@@ -1554,7 +2222,11 @@ fn NewFolderModal(
     let preview = {
         let raw = name.read();
         let r = raw.trim();
-        if r.is_empty() { String::new() } else { resolve_folder_path(&parent, r) }
+        if r.is_empty() {
+            String::new()
+        } else {
+            resolve_folder_path(parent.as_ref(), r)
+        }
     };
 
     rsx! {
@@ -1602,64 +2274,81 @@ fn NewFolderModal(
     }
 }
 
-// ── IcoSearch panel ──────────────────────────────────────────────────────────────
+// ── Search panel ─────────────────────────────────────────────────────────────
 
+/// Full-text search, served entirely from the local index.
+///
+/// This used to call GitHub's code-search API, which the browser blocks: that
+/// endpoint sends no CORS headers, so every search failed with a network error
+/// on the web build — the priority target. Searching the index instead is
+/// instant, works offline, works on GitLab, and costs no requests, because the
+/// refresh that built the index already downloaded every note.
+///
+/// The trade-off is honest and worth stating: results cover what the index
+/// holds, so a note the index hasn't picked up yet won't appear. The footer's
+/// note count is the user's read on that, and Rebuild is the fix.
 #[component]
-fn SearchPanel(config: GithubConfig, on_select: EventHandler<String>) -> Element {
+fn SearchPanel(on_select: EventHandler<String>) -> Element {
+    let vault_idx = crate::vault_index::use_index();
     let mut query = use_signal(String::new);
-    let mut results: Signal<Vec<SearchResult>> = use_signal(Vec::new);
-    let mut searching = use_signal(|| false);
-    let mut search_error: Signal<Option<String>> = use_signal(|| None);
 
     use_effect(move || {
         js::focus_selector(".search-input");
     });
 
-    use_effect(move || {
-        let q = query();
-        let cfg = config.clone();
-        if q.trim().is_empty() { results.set(vec![]); return; }
-        searching.set(true);
-        search_error.set(None);
-        spawn(async move {
-            sleep_ms(500).await;
-            if query() != q { return; }
-            match vault::github::search_code(&cfg, &q).await {
-                Ok(r)  => results.set(r),
-                Err(e) => search_error.set(Some(e.to_string())),
-            }
-            searching.set(false);
-        });
-    });
-
-    let items: Vec<(String, String, String)> = results.read().iter()
-        .map(|r| (r.path.clone(), r.path.rsplit('/').next().unwrap_or(&r.path).to_string(), r.fragment.clone()))
-        .collect();
+    // No debounce and no spinner: this is a synchronous pass over data already
+    // in memory, so there is nothing to wait for.
+    let hits = use_memo(move || index::search::search(&vault_idx.read(), &query.read()));
+    let indexed = vault_idx.read().len();
 
     rsx! {
         div { class: "search-panel",
             div { class: "search-input-wrap",
                 input {
                     class: "search-input",
-                    placeholder: "IcoSearch notes…",
+                    placeholder: "Search notes…",
                     value: "{query}",
                     oninput: move |e| query.set(e.value()),
                 }
-                if searching() { span { class: "search-spinner", "⟳" } }
             }
-            if let Some(err) = search_error() {
-                div { class: "search-error", "{err}" }
-            } else if items.is_empty() && !query.read().is_empty() && !searching() {
+            if query.read().trim().is_empty() {
+                div { class: "sidebar-status", "Searching {indexed} indexed notes." }
+                // Nobody guesses a prefix that isn't shown to them. Clicking one
+                // types it, which matters most on a phone keyboard.
+                div { class: "search-hint",
+                    "Narrow with"
+                    for prefix in ["path:", "file:", "tag:"] {
+                        button {
+                            key: "{prefix}",
+                            class: "search-hint-chip",
+                            onclick: move |_| {
+                                query.set(prefix.to_string());
+                                js::focus_selector(".search-input");
+                            },
+                            "{prefix}"
+                        }
+                    }
+                }
+            } else if hits.read().is_empty() {
                 div { class: "search-empty", "No results." }
             } else {
                 div { class: "search-results",
-                    for (path, name, fragment) in items {
-                        div {
-                            class: "search-item",
-                            onclick: move |_| on_select(path.clone()),
-                            div { class: "search-item-name", "{name}" }
-                            if !fragment.is_empty() {
-                                div { class: "search-item-fragment", "{fragment}" }
+                    for hit in hits.read().iter().cloned() {
+                        {
+                            let path = hit.path.clone();
+                            rsx! {
+                                div {
+                                    key: "{hit.path}",
+                                    class: "search-item",
+                                    onclick: move |_| on_select(path.clone()),
+                                    div { class: "search-item-head",
+                                        span { class: "search-item-name", "{hit.title}" }
+                                        span { class: "search-item-kind", "{hit.kind.label()}" }
+                                    }
+                                    if !hit.fragment.is_empty() {
+                                        div { class: "search-item-fragment", "{hit.fragment}" }
+                                    }
+                                }
                             }
                         }
                     }
@@ -1752,16 +2441,19 @@ fn QuickSwitcher(
         let mut v: Vec<_> = if q.is_empty() {
             files.iter().map(|f| (0usize, f)).take(8).collect()
         } else {
-            let mut ranked: Vec<_> = files.iter()
+            let mut ranked: Vec<_> = files
+                .iter()
                 .filter(|f| fuzzy_match(&f.path.to_lowercase(), &q))
                 .map(|f| (fuzzy_score(&f.path, &q), f))
                 .collect();
-            ranked.sort_by(|a, b| b.0.cmp(&a.0));
+            ranked.sort_by_key(|b| std::cmp::Reverse(b.0));
             ranked.truncate(8);
             ranked
         };
         first_path = v.first().map(|(_, f)| f.path.clone());
-        v.drain(..).map(|(_, f)| (f.path.clone(), f.name().to_string(), f.dir().to_string())).collect()
+        v.drain(..)
+            .map(|(_, f)| (f.path.clone(), f.name().to_string(), f.dir().to_string()))
+            .collect()
     };
 
     rsx! {
@@ -1777,9 +2469,7 @@ fn QuickSwitcher(
                     oninput: move |e| query.set(e.value()),
                     onkeydown: move |e| {
                         if e.key() == Key::Escape { on_close(()); }
-                        if e.key() == Key::Enter {
-                            if let Some(ref p) = first_path { on_select(p.clone()); }
-                        }
+                        if e.key() == Key::Enter && let Some(ref p) = first_path { on_select(p.clone()); }
                     },
                 }
                 if items.is_empty() {
@@ -1819,22 +2509,32 @@ fn CommandPalette(
     // (label, hint, keywords, action)
     let mut items: Vec<(String, String, String, PaletteAction)> = Vec::new();
     for c in Cmd::ALL.iter().copied() {
-        items.push((c.title().into(), c.hint().into(), c.keywords().into(), PaletteAction::Cmd(c)));
+        items.push((
+            c.title().into(),
+            c.hint().into(),
+            c.keywords().into(),
+            PaletteAction::Cmd(c),
+        ));
     }
     for t in &templates {
-        items.push((format!("Template: {}", t.name), "New note".into(), "template new note".into(),
-            PaletteAction::Template(t.clone())));
+        items.push((
+            format!("Template: {}", t.name),
+            "New note".into(),
+            "template new note".into(),
+            PaletteAction::Template(t.clone()),
+        ));
     }
 
     let q = query.read().to_lowercase();
-    let mut matches: Vec<(String, String, PaletteAction)> = items.into_iter()
+    let mut matches: Vec<(String, String, PaletteAction)> = items
+        .into_iter()
         .filter(|(label, _, keywords, _)| {
             q.is_empty() || fuzzy_match(&label.to_lowercase(), &q) || keywords.contains(&q)
         })
         .map(|(label, hint, _, action)| (label, hint, action))
         .collect();
     if !q.is_empty() {
-        matches.sort_by(|a, b| fuzzy_score(&b.0, &q).cmp(&fuzzy_score(&a.0, &q)));
+        matches.sort_by_key(|b| std::cmp::Reverse(fuzzy_score(&b.0, &q)));
     }
     let first = matches.first().map(|(_, _, a)| a.clone());
     let empty = matches.is_empty();
@@ -1852,9 +2552,7 @@ fn CommandPalette(
                     oninput: move |e| query.set(e.value()),
                     onkeydown: move |e| {
                         if e.key() == Key::Escape { on_close(()); }
-                        if e.key() == Key::Enter {
-                            if let Some(a) = &first { on_run(a.clone()); }
-                        }
+                        if e.key() == Key::Enter && let Some(a) = &first { on_run(a.clone()); }
                     },
                 }
                 if empty {
@@ -1884,12 +2582,21 @@ fn CommandPalette(
 fn TasksView(
     config: GithubConfig,
     files: Signal<Vec<FileMeta>>,
+    templates: Signal<Vec<TemplateMeta>>,
     on_open: EventHandler<String>,
 ) -> Element {
     let mut all_tasks = use_signal(Vec::<Task>::new);
     let mut loading = use_signal(|| true);
     let mut scan_gen = use_signal(|| 0u32);
     let mut hide_done = use_signal(|| true);
+    // The move in flight, if any: the source note whose buttons are disabled.
+    let mut moving = use_signal(|| Option::<String>::None);
+    let mut move_error = use_signal(|| Option::<String>::None);
+    // Set to the tasks awaiting a destination while the "Move to…" picker is up.
+    let mut picking = use_signal(|| Option::<Vec<Task>>::None);
+    // This view's scan refreshes the shared index, so publish it — every other
+    // consumer (dataview blocks, most of all) gets the fresher data for free.
+    let vault_idx = crate::vault_index::use_index();
 
     // Today's date, for overdue styling (YYYY-MM-DD compares lexicographically).
     let today = use_resource(move || async move { crate::dates::today().await });
@@ -1902,7 +2609,8 @@ fn TasksView(
         let cfg = cfg_scan.clone();
         loading.set(true);
         spawn(async move {
-            let mut t = crate::tasks_cache::scan(&cfg, &snapshot).await;
+            crate::vault_index::refresh(vault_idx, &cfg, &snapshot).await;
+            let mut t = vault_idx.peek().tasks();
             t.sort_by(tasks::cmp);
             all_tasks.set(t);
             loading.set(false);
@@ -1914,25 +2622,57 @@ fn TasksView(
     let cfg_toggle = config.clone();
     let toggle = use_callback(move |task: Task| {
         all_tasks.with_mut(|ts| {
-            if let Some(t) = ts.iter_mut().find(|t| t.path == task.path && t.line == task.line) {
+            if let Some(t) = ts
+                .iter_mut()
+                .find(|t| t.path == task.path && t.line == task.line)
+            {
                 t.checked = !t.checked;
             }
         });
         let cfg = cfg_toggle.clone();
         let today_now = today.read().as_deref().unwrap_or("").to_string();
         spawn(async move {
-            if let Ok(fc) = vault::dispatch::read_file(&cfg, &task.path).await {
-                if let Some(new_content) = tasks::toggled_content(&fc.content, &task, &today_now) {
-                    let name = task.path.rsplit('/').next().unwrap_or(&task.path).to_string();
-                    if vault::dispatch::write_file(
-                        &cfg, &task.path, &new_content, &fc.sha,
-                        &format!("Toggle task in {name}"),
-                    ).await.is_ok() {
-                        // The file changed remotely; force a fresh read next scan.
-                        crate::tasks_cache::invalidate(&task.path).await;
+            write_task_toggle(vault_idx, &cfg, &task, &today_now).await;
+        });
+    });
+
+    // Run a move, then refold the index into the list so the rows disappear from
+    // the source group and reappear under the destination.
+    let cfg_move = config.clone();
+    let run_move = use_callback(move |(items, dest): (Vec<Task>, Option<String>)| {
+        let Some(source) = items.first().map(|t| t.path.clone()) else {
+            return;
+        };
+        let cfg = cfg_move.clone();
+        let tmpls = templates.peek().clone();
+        moving.set(Some(source));
+        move_error.set(None);
+        spawn(async move {
+            // `None` means today's periodic note, resolved (and seeded) through
+            // the daily-note template.
+            let target = match dest {
+                Some(p) => Some((p, String::new())),
+                None => todays_note(&cfg, &tmpls).await,
+            };
+            let Some((path, body)) = target else {
+                move_error.set(Some("Could not work out today's note.".to_string()));
+                moving.set(None);
+                return;
+            };
+            match move_tasks(vault_idx, &cfg, &items, &path, &body).await {
+                Ok(()) => {
+                    let mut t = vault_idx.peek().tasks();
+                    t.sort_by(tasks::cmp);
+                    all_tasks.set(t);
+                    // The destination may be brand new; keep the sidebar honest.
+                    if let Ok(mut list) = vault::dispatch::list_files(&cfg).await {
+                        list.sort_by(|a, b| a.path.cmp(&b.path));
+                        files.set(list);
                     }
                 }
+                Err(e) => move_error.set(Some(e)),
             }
+            moving.set(None);
         });
     });
 
@@ -1941,14 +2681,16 @@ fn TasksView(
 
     // Group by file (BTreeMap path order = folders together), sorted within.
     let mut groups: Vec<(String, Vec<Task>)> = {
-        let mut by_file: std::collections::BTreeMap<String, Vec<Task>> = Default::default();
+        let mut by_file: std::collections::BTreeMap<String, Vec<Task>> = std::collections::BTreeMap::default();
         for t in all_tasks.read().iter() {
-            if hide && t.checked { continue; }
+            if hide && t.checked {
+                continue;
+            }
             by_file.entry(t.path.clone()).or_default().push(t.clone());
         }
         by_file.into_iter().collect()
     };
-    for (_, items) in groups.iter_mut() {
+    for (_, items) in &mut groups {
         items.sort_by(tasks::cmp);
     }
     let total_open = all_tasks.read().iter().filter(|t| !t.checked).count();
@@ -1974,6 +2716,28 @@ fn TasksView(
                     "↻"
                 }
             }
+            if let Some(err) = move_error() {
+                div { class: "tasks-move-error",
+                    span { "{err}" }
+                    button {
+                        class: "tasks-move-error-dismiss",
+                        onclick: move |_| move_error.set(None),
+                        "×"
+                    }
+                }
+            }
+            if let Some(items) = picking() {
+                MoveTargetPicker {
+                    files,
+                    count: items.len(),
+                    source: items.first().map(|t| t.path.clone()).unwrap_or_default(),
+                    on_cancel: move |()| picking.set(None),
+                    on_pick: move |dest: String| {
+                        picking.set(None);
+                        run_move.call((items.clone(), Some(dest)));
+                    },
+                }
+            }
             if first_load {
                 div { class: "sidebar-status", "Scanning vault…" }
             } else if is_empty {
@@ -1986,13 +2750,49 @@ fn TasksView(
                             let name = path.rsplit('/').next().unwrap_or(&path)
                                 .trim_end_matches(".md").to_string();
                             let dir = path.rfind('/').map(|i| path[..i].to_string()).unwrap_or_default();
+                            // Only open tasks move: a completed one is a record of
+                            // what happened in the note it happened in, and
+                            // dragging it forward would falsify that.
+                            let open_items: Vec<Task> =
+                                items.iter().filter(|t| !t.checked).cloned().collect();
+                            let has_open = !open_items.is_empty();
+                            let busy = moving() == Some(path.clone());
+                            let for_today = open_items.clone();
+                            let for_pick = open_items.clone();
                             rsx! {
                                 div { class: "tasks-group",
                                     div {
                                         class: "tasks-group-header",
-                                        onclick: move |_| on_open(p_open.clone()),
-                                        span { class: "tasks-group-name", "{name}" }
-                                        if !dir.is_empty() { span { class: "tasks-group-dir", "{dir}" } }
+                                        div {
+                                            class: "tasks-group-title",
+                                            onclick: move |_| on_open(p_open.clone()),
+                                            span { class: "tasks-group-name", "{name}" }
+                                            if !dir.is_empty() { span { class: "tasks-group-dir", "{dir}" } }
+                                        }
+                                        if has_open {
+                                            div { class: "tasks-group-actions",
+                                                button {
+                                                    class: "tasks-move-btn",
+                                                    disabled: busy,
+                                                    title: "Move the open tasks to today's note",
+                                                    onclick: move |e: Event<MouseData>| {
+                                                        e.stop_propagation();
+                                                        run_move.call((for_today.clone(), None));
+                                                    },
+                                                    if busy { "Moving…" } else { "Move to today" }
+                                                }
+                                                button {
+                                                    class: "tasks-move-btn",
+                                                    disabled: busy,
+                                                    title: "Move the open tasks to another note",
+                                                    onclick: move |e: Event<MouseData>| {
+                                                        e.stop_propagation();
+                                                        picking.set(Some(for_pick.clone()));
+                                                    },
+                                                    "Move to…"
+                                                }
+                                            }
+                                        }
                                     }
                                     for t in items {
                                         {
@@ -2000,7 +2800,7 @@ fn TasksView(
                                             let p_jump = t.path.clone();
                                             let overdue = !t.checked
                                                 && !today_str.is_empty()
-                                                && t.due.as_deref().map(|d| d < today_str.as_str()).unwrap_or(false);
+                                                && t.due.as_deref().is_some_and(|d| d < today_str.as_str());
                                             let due_class = if overdue { "task-due task-due--overdue" } else { "task-due" };
                                             let row_class = if t.checked { "task-row task-row--done" } else { "task-row" };
                                             rsx! {
@@ -2030,6 +2830,84 @@ fn TasksView(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+/// Note picker for "Move to…": a filter box over the vault's markdown files.
+///
+/// Deliberately its own small component rather than a reuse of the quick
+/// switcher — that one lives at the vault root and opens notes, which is the
+/// opposite of what a destination picker should do when you click a row.
+#[component]
+fn MoveTargetPicker(
+    files: Signal<Vec<FileMeta>>,
+    count: usize,
+    /// The note the tasks are leaving; excluded from the list.
+    source: String,
+    on_pick: EventHandler<String>,
+    on_cancel: EventHandler<()>,
+) -> Element {
+    let mut query = use_signal(String::new);
+
+    let q = query().to_lowercase();
+    let matches: Vec<String> = files
+        .read()
+        .iter()
+        .map(|f| f.path.clone())
+        .filter(|p| is_md_path(p) && *p != source)
+        .filter(|p| q.is_empty() || fuzzy_match(&p.to_lowercase(), &q))
+        .take(50)
+        .collect();
+
+    rsx! {
+        div { class: "move-picker-backdrop", onclick: move |_| on_cancel(()),
+            div {
+                class: "move-picker",
+                onclick: move |e: Event<MouseData>| e.stop_propagation(),
+                div { class: "move-picker-header",
+                    "Move {count} task(s) to…"
+                }
+                input {
+                    class: "move-picker-input",
+                    r#type: "text",
+                    placeholder: "Filter notes…",
+                    autofocus: true,
+                    value: "{query}",
+                    oninput: move |e| query.set(e.value()),
+                    onkeydown: move |e: Event<KeyboardData>| {
+                        if e.key() == Key::Escape {
+                            on_cancel(());
+                        }
+                    },
+                }
+                div { class: "move-picker-list",
+                    if matches.is_empty() {
+                        div { class: "sidebar-status", "No matching notes." }
+                    } else {
+                        for path in matches {
+                            {
+                                let p = path.clone();
+                                let name = path.rsplit('/').next().unwrap_or(&path)
+                                    .trim_end_matches(".md").to_string();
+                                let dir = path.rfind('/').map(|i| path[..i].to_string())
+                                    .unwrap_or_default();
+                                rsx! {
+                                    div {
+                                        class: "move-picker-row",
+                                        onclick: move |_| on_pick(p.clone()),
+                                        span { class: "move-picker-name", "{name}" }
+                                        if !dir.is_empty() {
+                                            span { class: "move-picker-dir", "{dir}" }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                button { class: "move-picker-cancel", onclick: move |_| on_cancel(()), "Cancel" }
             }
         }
     }
@@ -2087,14 +2965,21 @@ fn GraphPanel(
     let total = files.len();
     let edges = index.edges(&files);
 
-    let connected: std::collections::HashSet<String> = edges.iter()
+    let connected: std::collections::HashSet<String> = edges
+        .iter()
         .flat_map(|(s, t)| [s.clone(), t.clone()])
         .collect();
 
-    let nodes: Vec<(String, String, bool)> = files.iter()
+    let nodes: Vec<(String, String, bool)> = files
+        .iter()
         .filter(|f| active.as_deref() == Some(f.as_str()) || connected.contains(*f))
         .map(|f| {
-            let label = f.rsplit('/').next().unwrap_or(f).trim_end_matches(".md").to_string();
+            let label = f
+                .rsplit('/')
+                .next()
+                .unwrap_or(f)
+                .trim_end_matches(".md")
+                .to_string();
             let is_active = active.as_deref() == Some(f.as_str());
             (f.clone(), label, is_active)
         })
@@ -2134,7 +3019,15 @@ struct NavCallbacks {
 }
 
 fn nav_dispatch(id: &'static str, cb: NavCallbacks) -> Element {
-    let NavCallbacks { files, active, selected_dir, on_select, on_select_dir, on_delete, on_move } = cb;
+    let NavCallbacks {
+        files,
+        active,
+        selected_dir,
+        on_select,
+        on_select_dir,
+        on_delete,
+        on_move,
+    } = cb;
     match id {
         "flat" => rsx! {
             FlatList {
@@ -2180,19 +3073,30 @@ fn nav_dispatch(id: &'static str, cb: NavCallbacks) -> Element {
 // same JS-backed helpers the Kanban board uses.
 
 /// Builds the `ondrop` payload for a draggable file.
-fn file_drag_payload(path: &str) -> String { format!("file\x1e{path}") }
+fn file_drag_payload(path: &str) -> String {
+    format!("file\x1e{path}")
+}
 /// Builds the `ondrop` payload for a draggable folder.
-fn dir_drag_payload(prefix: &str) -> String { format!("dir\x1e{prefix}") }
+fn dir_drag_payload(prefix: &str) -> String {
+    format!("dir\x1e{prefix}")
+}
 
 // ── File tree ─────────────────────────────────────────────────────────────────
 
 fn group_by_dir(files: &[FileMeta], prefix: &str) -> (Vec<FileMeta>, Vec<(String, Vec<FileMeta>)>) {
-    let strip = if prefix.is_empty() { String::new() } else { format!("{prefix}/") };
+    let strip = if prefix.is_empty() {
+        String::new()
+    } else {
+        format!("{prefix}/")
+    };
     let mut root: Vec<FileMeta> = Vec::new();
     let mut dirs: Vec<(String, Vec<FileMeta>)> = Vec::new();
     for file in files {
-        let relative = if strip.is_empty() { file.path.as_str() }
-                       else { file.path.strip_prefix(&strip).unwrap_or(&file.path) };
+        let relative = if strip.is_empty() {
+            file.path.as_str()
+        } else {
+            file.path.strip_prefix(&strip).unwrap_or(&file.path)
+        };
         if let Some(slash) = relative.find('/') {
             let child_name = &relative[..slash];
             let child_prefix = if prefix.is_empty() {
@@ -2291,14 +3195,18 @@ fn FileTreeDir(
 ) -> Element {
     let prefix_slash = format!("{prefix}/");
     let contains_active = |a: &Option<String>| {
-        a.as_deref().map(|p| p.starts_with(&prefix_slash)).unwrap_or(false)
+        a.as_deref()
+            .is_some_and(|p| p.starts_with(&prefix_slash))
     };
     let mut collapsed = use_signal(|| !contains_active(&active()));
     let mut drag_over = use_signal(|| false);
     // Auto-expand when the active file moves into this directory.
     let prefix_slash_effect = prefix_slash.clone();
     use_effect(move || {
-        if active().as_deref().map(|a| a.starts_with(&prefix_slash_effect)).unwrap_or(false) {
+        if active()
+            .as_deref()
+            .is_some_and(|a| a.starts_with(&prefix_slash_effect))
+        {
             collapsed.set(false);
         }
     });
@@ -2308,9 +3216,13 @@ fn FileTreeDir(
     let prefix_click = prefix.clone();
     let prefix_drag = prefix.clone();
     let prefix_drop = prefix.clone();
-    let dir_class = if drag_over() { "file-tree-dir-name file-tree-dir-name--drop" }
-                    else if is_selected { "file-tree-dir-name file-tree-dir-name--active" }
-                    else { "file-tree-dir-name" };
+    let dir_class = if drag_over() {
+        "file-tree-dir-name file-tree-dir-name--drop"
+    } else if is_selected {
+        "file-tree-dir-name file-tree-dir-name--active"
+    } else {
+        "file-tree-dir-name"
+    };
     rsx! {
         div { class: "file-tree-dir",
             div {
@@ -2436,7 +3348,8 @@ fn FlatList(
     let q = filter.read().to_lowercase();
 
     // Build sorted, filtered file list.
-    let filtered: Vec<&FileMeta> = files.iter()
+    let filtered: Vec<&FileMeta> = files
+        .iter()
         .filter(|f| f.name() != ".gitkeep")
         .filter(|f| q.is_empty() || f.path.to_lowercase().contains(&q))
         .collect();
@@ -2444,7 +3357,11 @@ fn FlatList(
     // Group into (folder_or_root, files) sections preserving sort order.
     let mut sections: Vec<(String, Vec<FileMeta>)> = Vec::new();
     for file in &filtered {
-        let dir = file.path.rfind('/').map(|i| file.path[..i].to_string()).unwrap_or_default();
+        let dir = file
+            .path
+            .rfind('/')
+            .map(|i| file.path[..i].to_string())
+            .unwrap_or_default();
         if let Some(s) = sections.iter_mut().find(|(d, _)| d == &dir) {
             s.1.push((*file).clone());
         } else {
@@ -2552,15 +3469,19 @@ fn ColumnView(
 
     // Sync open_child with external selected_dir when col_path is root (initial load).
     use_effect(move || {
-        if !col_path.read().is_empty() { return; }
+        if !col_path.read().is_empty() {
+            return;
+        }
         if let Some(ref s) = selected_dir() {
             // If s is a direct child of root (no second slash), open it.
-            if !s.contains('/') {
-                open_child.set(Some(s.clone()));
-            } else {
+            if s.contains('/') {
                 // Ancestor is the first path segment.
                 let anc = s.split('/').next().unwrap_or("").to_string();
-                if !anc.is_empty() { open_child.set(Some(anc)); }
+                if !anc.is_empty() {
+                    open_child.set(Some(anc));
+                }
+            } else {
+                open_child.set(Some(s.clone()));
             }
         }
     });
@@ -2572,7 +3493,9 @@ fn ColumnView(
         let mut acc = String::new();
         let mut v = vec![("⌂".to_string(), String::new())]; // root
         for seg in cp.split('/').filter(|s| !s.is_empty()) {
-            if !acc.is_empty() { acc.push('/'); }
+            if !acc.is_empty() {
+                acc.push('/');
+            }
             acc.push_str(seg);
             v.push((seg.to_string(), acc.clone()));
         }
@@ -2584,7 +3507,8 @@ fn ColumnView(
     // Right-column contents: the open child directory.
     let oc = open_child.read().clone();
     let (right_root, right_dirs, _right_base) = if let Some(ref child) = oc {
-        let right_files: Vec<FileMeta> = left_dirs.iter()
+        let right_files: Vec<FileMeta> = left_dirs
+            .iter()
             .find(|(p, _)| p == child)
             .map(|(_, f)| f.clone())
             .unwrap_or_default();
@@ -2748,5 +3672,23 @@ fn ColumnView(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bytes_read_as_sizes_a_person_recognises() {
+        assert_eq!(human_bytes(0), "0 B");
+        assert_eq!(human_bytes(999), "999 B");
+        // Binary units: 1024 is the boundary, not 1000.
+        assert_eq!(human_bytes(1023), "1023 B");
+        assert_eq!(human_bytes(1024), "1.0 KB");
+        assert_eq!(human_bytes(1024 * 1024 * 3 / 2), "1.5 MB");
+        assert_eq!(human_bytes(5 * 1024 * 1024), "5.0 MB");
+        // Stops at the largest unit it knows rather than inventing one.
+        assert!(human_bytes(u64::MAX).ends_with(" TB"));
     }
 }

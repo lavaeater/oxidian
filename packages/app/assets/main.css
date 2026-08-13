@@ -592,10 +592,29 @@ kbd {
 }
 .search-input:focus { border-color: var(--accent); }
 .search-input::placeholder { color: var(--text-muted); }
-.search-spinner { color: var(--text-muted); font-size: 0.9rem; animation: spin 1s linear infinite; }
-@keyframes spin { to { transform: rotate(360deg); } }
-.search-error { padding: 10px; color: var(--danger); font-size: 0.82rem; }
 .search-empty { padding: 10px 14px; color: var(--text-muted); font-size: 0.85rem; }
+/* Filter prefixes are invisible until someone knows they exist, so name them
+   in the empty state — as buttons, because typing `tag:` on a phone is work. */
+.search-hint {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 0 14px 10px;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+.search-hint-chip {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 6px;
+  color: var(--text-muted);
+  font-family: ui-monospace, monospace;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+.search-hint-chip:hover { border-color: var(--accent); color: var(--text); }
 .search-results { overflow-y: auto; flex: 1; }
 .search-item {
   padding: 7px 14px;
@@ -604,7 +623,23 @@ kbd {
   transition: background 80ms;
 }
 .search-item:hover { background: var(--bg3); }
-.search-item-name { font-size: 0.88rem; color: var(--text); margin-bottom: 2px; }
+.search-item-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+.search-item-name { font-size: 0.88rem; color: var(--text); }
+/* Where the match was — a title hit and a body hit look very different to a
+   reader scanning results. */
+.search-item-kind {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  flex: 0 0 auto;
+}
 .search-item-fragment {
   font-size: 0.78rem;
   color: var(--text-muted);
@@ -750,6 +785,69 @@ kbd {
 .slash-item--template:first-of-type { border-top: none; }
 .slash-name { font-size: 0.9rem; color: var(--text); min-width: 90px; }
 .slash-desc { font-size: 0.8rem; color: var(--text-muted); }
+
+/* ── Task metadata menu ── */
+/* Same fixed-centre placement as .slash-overlay/.slash-menu — see that comment. */
+.task-menu-overlay {
+  position: fixed; inset: 0; z-index: 200;
+  pointer-events: none;
+}
+.task-menu {
+  position: fixed;
+  bottom: 40%;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.45);
+  min-width: 220px;
+  pointer-events: all;
+}
+.task-menu-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 14px; cursor: pointer;
+  transition: background 80ms;
+}
+.task-menu-item:hover { background: var(--bg3); }
+.task-menu-emoji { font-size: 1rem; }
+.task-menu-name { font-size: 0.9rem; color: var(--text); }
+
+.task-menu-date-header { padding: 4px; border-bottom: 1px solid var(--border); }
+.task-menu-back {
+  background: none; border: none; cursor: pointer;
+  font-size: 0.85rem; color: var(--text-muted); padding: 6px 10px;
+}
+.task-menu-back:hover { color: var(--text); }
+
+/* dioxus-primitives calendar (see packages/ui/src/task_date_picker.rs) renders
+   plain, unclassed semantic HTML (table[role=grid], th/td, button[data-*]) —
+   style it by element/attribute, scoped under this wrapper. */
+.task-date-picker { padding: 8px 10px 10px; }
+.task-date-picker > div > div:first-child {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 8px;
+}
+.task-date-picker button {
+  background: none; border: none; color: var(--text); cursor: pointer;
+  font-size: 0.85rem; border-radius: 4px; padding: 4px 8px;
+}
+.task-date-picker button:hover { background: var(--bg3); }
+.task-date-picker table[role="grid"] { border-collapse: collapse; width: 100%; }
+.task-date-picker th {
+  font-size: 0.7rem; color: var(--text-muted); font-weight: 500; padding: 2px 4px;
+}
+.task-date-picker td { text-align: center; padding: 1px; }
+.task-date-picker td button {
+  width: 28px; height: 28px; padding: 0; font-size: 0.82rem;
+}
+.task-date-picker td button[data-month="last"],
+.task-date-picker td button[data-month="next"] { color: var(--text-muted); }
+.task-date-picker td button[data-today="true"] { border: 1px solid var(--border); }
+.task-date-picker td button[data-selected="true"] {
+  background: var(--accent, var(--bg3)); color: var(--bg1, #fff);
+}
 
 /* ── Backlinks panel ── */
 .backlinks-panel { padding: 4px 0; }
@@ -1076,13 +1174,140 @@ kbd {
 .tasks-group-header {
   display: flex;
   align-items: baseline;
+  justify-content: space-between;
   gap: 8px;
   padding: 6px 10px 3px;
+}
+/* The title is the click target for opening the note; the buttons beside it
+   must not inherit that, hence the split. */
+.tasks-group-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
   cursor: pointer;
 }
 .tasks-group-name { font-size: 0.82rem; font-weight: 600; color: var(--text); }
-.tasks-group-header:hover .tasks-group-name { color: var(--accent); }
+.tasks-group-title:hover .tasks-group-name { color: var(--accent); }
 .tasks-group-dir { font-size: 0.72rem; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.tasks-group-actions {
+  display: flex;
+  gap: 4px;
+  flex: none;
+}
+.tasks-move-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.68rem;
+  padding: 1px 6px;
+  white-space: nowrap;
+}
+.tasks-move-btn:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.tasks-move-btn:disabled { opacity: 0.5; cursor: default; }
+
+.tasks-move-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 6px 10px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  font-size: 0.76rem;
+  color: var(--text);
+  background: var(--bg3);
+  border-left: 3px solid var(--danger, #e5484d);
+}
+.tasks-move-error-dismiss {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  margin-left: auto;
+  padding: 0;
+}
+
+/* ── "Move to…" destination picker ── */
+.move-picker-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.45);
+}
+.move-picker {
+  display: flex;
+  flex-direction: column;
+  width: min(440px, 100%);
+  max-height: min(70vh, 520px);
+  border-radius: 8px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+}
+.move-picker-header {
+  padding: 10px 12px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+}
+.move-picker-input {
+  margin: 10px 12px 6px;
+  padding: 6px 8px;
+  font-size: 0.86rem;
+  color: var(--text);
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.move-picker-input:focus { outline: none; border-color: var(--accent); }
+.move-picker-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+.move-picker-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 12px;
+  cursor: pointer;
+  font-size: 0.84rem;
+  color: var(--text);
+}
+.move-picker-row:hover { background: var(--bg3); }
+.move-picker-name { font-weight: 500; }
+.move-picker-dir {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.move-picker-cancel {
+  margin: 8px 12px 12px;
+  padding: 6px;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 0.82rem;
+}
+.move-picker-cancel:hover { border-color: var(--accent); color: var(--accent); }
 
 .task-row {
   display: flex;
@@ -1119,3 +1344,96 @@ kbd {
   white-space: nowrap;
 }
 .task-due--overdue { color: var(--danger); background: rgba(248, 81, 73, 0.12); }
+
+/* ══ Dataview blocks ═══════════════════════════════════════════════════════
+   Output of a ```dataview query, rendered by `index::dql::render` inside the
+   editor. The editor owns the fold/unfold structure (`.md-render*` in
+   MarkdownArea's stylesheet); everything here is presentation. */
+.dataview {
+  font-size: 0.92em;
+  border-left: 2px solid var(--accent-dim);
+  padding: 0.35em 0 0.35em 0.75em;
+}
+
+.dataview-table {
+  border-collapse: collapse;
+  width: 100%;
+}
+.dataview-table th,
+.dataview-table td {
+  text-align: left;
+  padding: 0.25em 0.7em 0.25em 0;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+.dataview-table th {
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 0.9em;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.dataview-table tr:last-child td { border-bottom: none; }
+
+.dataview-list,
+.dataview-tasks {
+  margin: 0;
+  padding-left: 1.2em;
+}
+.dataview-tasks {
+  list-style: none;
+  padding-left: 0;
+}
+.dataview-task {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4em;
+}
+.dataview-task .md-task-checkbox {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--text-muted);
+}
+.dataview-due,
+.dataview-prio { color: var(--text-muted); font-size: 0.9em; }
+
+.dataview a { color: var(--wikilink-color); cursor: pointer; }
+.dataview a:hover { text-decoration: underline; }
+
+.dataview-empty { color: var(--text-muted); font-style: italic; }
+
+/* A query is typed live, so a broken one is a normal state — it should read as
+   feedback, not as breakage. */
+.dataview-error {
+  border-left-color: var(--danger);
+  color: var(--text-muted);
+}
+.dataview-error-label { color: var(--danger); font-weight: 600; }
+
+/* ══ Storage footer ════════════════════════════════════════════════════════
+   Sits at the bottom of the sidebar: how big the local index is and how much
+   room the platform is giving us. */
+.storage-footer {
+  border-top: 1px solid var(--border);
+  padding: 0.5em 0.75em;
+  font-size: 0.78em;
+  color: var(--text-muted);
+  flex: 0 0 auto;
+}
+.storage-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5em;
+}
+.storage-rebuild {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-muted);
+  font: inherit;
+  padding: 0.1em 0.5em;
+  cursor: pointer;
+}
+.storage-rebuild:hover:not(:disabled) { color: var(--text); border-color: var(--accent); }
+.storage-rebuild:disabled { opacity: 0.5; cursor: default; }
+.storage-detail { margin-top: 0.2em; opacity: 0.8; }

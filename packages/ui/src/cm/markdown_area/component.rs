@@ -1,7 +1,9 @@
+use std::fmt::Write as _;
+
 use dioxus::prelude::*;
 use dioxus_use_js::use_js;
 
-use super::tokenizer::{tokenize, tokenize_line, Token, TokenKind};
+use super::tokenizer::{Token, TokenKind, tokenize, tokenize_line};
 
 // ── Variant ───────────────────────────────────────────────────────────────────
 
@@ -46,39 +48,206 @@ use_js!("assets/markdown_area.js"::{
     setup_keyboard,
     setup_scroll,
     read_state,
+    read_click,
     apply_html_and_restore_cursor
 });
 
+// ── Rendered blocks ───────────────────────────────────────────────────────────
+
+/// Turns a fenced block into HTML. Called with `(language, body)`; returning an
+/// empty string means "not mine" and the block stays plain source.
+///
+/// This is a callback rather than something `ui` does itself because the
+/// renderers live above us — `dataview` needs the vault index, which this crate
+/// cannot depend on.
+///
+/// A plain `Rc<dyn Fn>` rather than a Dioxus `Callback` so that rendering stays
+/// callable from pure functions, with no Dioxus runtime in scope.
+type RenderFn = dyn Fn(&str, &str) -> String;
+
+#[derive(Clone)]
+pub struct BlockRenderer(std::rc::Rc<RenderFn>);
+
+impl BlockRenderer {
+    pub fn new(f: impl Fn(&str, &str) -> String + 'static) -> Self {
+        Self(std::rc::Rc::new(f))
+    }
+
+    fn call(&self, lang: &str, body: &str) -> String {
+        (self.0)(lang, body)
+    }
+}
+
+impl PartialEq for BlockRenderer {
+    /// Identity, so a renderer built once (`use_hook`) doesn't re-render the
+    /// editor on every pass. Building a fresh one each render would.
+    fn eq(&self, other: &Self) -> bool {
+        std::rc::Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+// ── Link resolution ───────────────────────────────────────────────────────────
+
+/// Answers "does this wikilink target exist?" for the editor.
+///
+/// Like [`BlockRenderer`], this is a callback because the answer lives above
+/// this crate: only the host knows the vault's file list and its path rules.
+/// Without one, every wikilink renders as linked — the previous behaviour.
+type ResolveFn = dyn Fn(&str) -> bool;
+
+#[derive(Clone)]
+pub struct LinkResolver(std::rc::Rc<ResolveFn>);
+
+impl LinkResolver {
+    pub fn new(f: impl Fn(&str) -> bool + 'static) -> Self {
+        Self(std::rc::Rc::new(f))
+    }
+
+    fn exists(&self, target: &str) -> bool {
+        (self.0)(target)
+    }
+}
+
+impl PartialEq for LinkResolver {
+    /// Identity, for the same reason as [`BlockRenderer`]: a resolver built once
+    /// must not re-render the editor on every pass.
+    fn eq(&self, other: &Self) -> bool {
+        std::rc::Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+/// A fenced block currently shown as rendered output instead of source.
+struct RenderedBlock {
+    /// Byte range of the whole block, opening fence line through closing fence.
+    range: std::ops::Range<usize>,
+    html: String,
+}
+
+/// Which fenced blocks render, given where the caret is.
+///
+/// A block containing the caret is left as source — that is the editor's whole
+/// premise, applied to a block instead of a line: you see the output until you
+/// go in to edit it.
+fn rendered_blocks(
+    source: &str,
+    tokens: &[Token],
+    cursor: Option<usize>,
+    renderer: Option<&BlockRenderer>,
+) -> Vec<RenderedBlock> {
+    let Some(renderer) = renderer else {
+        return Vec::new();
+    };
+    let mut blocks = Vec::new();
+    for (i, token) in tokens.iter().enumerate() {
+        let TokenKind::CodeFence { lang_range: Some(lang) } = &token.kind else {
+            continue;
+        };
+        // The matching closing fence. An unterminated block is still being
+        // typed, so it renders as nothing at all.
+        let Some(close) = tokens[i + 1..]
+            .iter()
+            .find(|t| matches!(t.kind, TokenKind::CodeFence { .. }))
+        else {
+            continue;
+        };
+        let range = token.range.start..close.range.end;
+        if cursor.is_some_and(|c| range.contains(&c) || c == range.end) {
+            continue;
+        }
+        // Body: everything between the two fence lines, without the newline
+        // that ends the opening fence.
+        let body_start = (token.range.end + 1).min(close.range.start);
+        let body = source[body_start..close.range.start].trim_end_matches('\n');
+        let html = renderer.call(source[lang.clone()].trim(), body);
+        if !html.is_empty() {
+            blocks.push(RenderedBlock { range, html });
+        }
+    }
+    blocks
+}
+
+/// The class for the `.md-line` starting at `pos`.
+///
+/// The source lines of a rendered block stay in the DOM — they are what the
+/// document model reads back — but are hidden. The block's *first* line hosts
+/// the rendered output, so only its tokens are hidden, not the line itself.
+fn line_class(blocks: &[RenderedBlock], pos: usize) -> &'static str {
+    for b in blocks {
+        if pos == b.range.start {
+            return " md-render-host";
+        }
+        if pos > b.range.start && pos < b.range.end {
+            return " md-render-hidden";
+        }
+    }
+    ""
+}
+
 // ── HTML rendering ────────────────────────────────────────────────────────────
 
-fn tokens_to_html(source: &str, tokens: &[Token]) -> String {
+/// The editor's full HTML for `source`, with fenced blocks rendered through
+/// `renderer` unless the caret (`cursor`) is inside them.
+fn render_html(
+    source: &str,
+    cursor: Option<usize>,
+    renderer: Option<&BlockRenderer>,
+    links: Option<&LinkResolver>,
+) -> String {
+    let tokens = tokenize(source);
+    let blocks = rendered_blocks(source, &tokens, cursor, renderer);
+    tokens_to_html(source, &tokens, &blocks, links)
+}
+
+fn tokens_to_html(
+    source: &str,
+    tokens: &[Token],
+    blocks: &[RenderedBlock],
+    links: Option<&LinkResolver>,
+) -> String {
     let mut out = String::with_capacity(source.len() * 3);
     let mut last_end = 0;
 
-    out.push_str("<div class=\"md-line\">");
+    let _ = write!(out, "<div class=\"md-line{}\">", line_class(blocks, 0));
 
     for token in tokens {
         if token.range.start > last_end {
-            emit_gap_html(source, last_end, token.range.start, &mut out);
+            emit_gap_html(source, last_end, token.range.start, blocks, &mut out);
         }
-        push_token_html(source, token, &mut out);
+        push_token_html(source, token, links, &mut out);
+        // The rendered output lives inside the block's first line, after the
+        // (hidden) opening fence, so it sits exactly where the block does.
+        if let Some(b) = blocks.iter().find(|b| b.range.start == token.range.start) {
+            let _ = write!(
+                out,
+                "<div class=\"md-render\" data-md-render data-edit-offset=\"{}\">{}</div>",
+                b.range.start, b.html
+            );
+        }
         last_end = token.range.end;
     }
 
     if last_end < source.len() {
-        emit_gap_html(source, last_end, source.len(), &mut out);
+        emit_gap_html(source, last_end, source.len(), blocks, &mut out);
     }
 
     out.push_str("</div>");
     out
 }
 
-fn emit_gap_html(source: &str, start: usize, end: usize, out: &mut String) {
-    for ch in source[start..end].chars() {
+fn emit_gap_html(
+    source: &str,
+    start: usize,
+    end: usize,
+    blocks: &[RenderedBlock],
+    out: &mut String,
+) {
+    for (i, ch) in source[start..end].char_indices() {
         if ch == '\n' {
             // Close the current line div and open a new one.
             // Block divs create implicit line breaks; no <br> needed.
-            out.push_str("</div><div class=\"md-line\">");
+            out.push_str("</div><div class=\"md-line");
+            out.push_str(line_class(blocks, start + i + 1));
+            out.push_str("\">");
         } else {
             push_escaped_char(ch, out);
         }
@@ -86,15 +255,26 @@ fn emit_gap_html(source: &str, start: usize, end: usize, out: &mut String) {
 }
 
 // Tokenizes a block token's content range for inline formatting, then renders each.
-fn push_inline_html(source: &str, content_range: std::ops::Range<usize>, out: &mut String) {
+fn push_inline_html(
+    source: &str,
+    content_range: std::ops::Range<usize>,
+    links: Option<&LinkResolver>,
+    out: &mut String,
+) {
     let content = &source[content_range.clone()];
     let inline_tokens = tokenize_line(content, content_range.start);
     for token in &inline_tokens {
-        push_token_html(source, token, out);
+        push_token_html(source, token, links, out);
     }
 }
 
-fn push_token_html(source: &str, token: &Token, out: &mut String) {
+#[allow(clippy::too_many_lines)]
+fn push_token_html(
+    source: &str,
+    token: &Token,
+    links: Option<&LinkResolver>,
+    out: &mut String,
+) {
     let raw = token.raw(source);
     let display = token.display(source);
 
@@ -148,9 +328,9 @@ fn push_token_html(source: &str, token: &Token, out: &mut String) {
         TokenKind::Heading(level) => {
             let prefix_len = raw.len() - display.len();
             let class = format!("md-token md-heading md-h{level}");
-            out.push_str(&format!("<span class=\"{class}\">"));
+            let _ = write!(out, "<span class=\"{class}\">");
             marker(&raw[..prefix_len], out);
-            push_inline_html(source, token.content_range.clone(), out);
+            push_inline_html(source, token.content_range.clone(), links, out);
             out.push_str("</span>");
         }
 
@@ -158,38 +338,46 @@ fn push_token_html(source: &str, token: &Token, out: &mut String) {
             let prefix_len = token.content_range.start - token.range.start;
             out.push_str("<span class=\"md-token md-blockquote\">");
             marker(&raw[..prefix_len], out);
-            push_inline_html(source, token.content_range.clone(), out);
+            push_inline_html(source, token.content_range.clone(), links, out);
             out.push_str("</span>");
         }
 
         TokenKind::ListItem { ordered, depth } => {
             let prefix_len = token.content_range.start - token.range.start;
-            let indent = format!("{}em", *depth as f32 * 1.5);
-            out.push_str(&format!(
+            let indent = format!("{}em", f32::from(*depth) * 1.5);
+            let _ = write!(
+                out,
                 "<span class=\"md-token md-list-item{}\" style=\"padding-left:{indent}\">",
-                if *ordered { " md-list-ordered" } else { " md-list-unordered" }
-            ));
+                if *ordered {
+                    " md-list-ordered"
+                } else {
+                    " md-list-unordered"
+                }
+            );
             marker(&raw[..prefix_len], out);
-            push_inline_html(source, token.content_range.clone(), out);
+            push_inline_html(source, token.content_range.clone(), links, out);
             out.push_str("</span>");
         }
 
-        TokenKind::TaskItem { checked, depth, bracket_pos } => {
+        TokenKind::TaskItem {
+            checked,
+            depth,
+            bracket_pos,
+        } => {
             let prefix_len = bracket_pos - token.range.start;
-            let indent = format!("{}em", *depth as f32 * 1.5);
+            let indent = format!("{}em", f32::from(*depth) * 1.5);
             let bracket_text = if *checked { "[x]" } else { "[ ]" };
-            out.push_str(&format!(
+            let _ = write!(
+                out,
                 "<span class=\"md-token md-task-item\" style=\"padding-left:{indent}\">"
-            ));
+            );
             marker(&raw[..prefix_len], out);
-            out.push_str(&format!(
+            let _ = write!(
+                out,
                 "<span class=\"md-task-checkbox\" \
-                 data-pos=\"{}\" data-checked=\"{}\">{} </span>",
-                bracket_pos,
-                checked,
-                bracket_text,
-            ));
-            push_inline_html(source, token.content_range.clone(), out);
+                 data-pos=\"{bracket_pos}\" data-checked=\"{checked}\">{bracket_text} </span>",
+            );
+            push_inline_html(source, token.content_range.clone(), links, out);
             out.push_str("</span>");
         }
 
@@ -202,9 +390,10 @@ fn push_token_html(source: &str, token: &Token, out: &mut String) {
         TokenKind::Link { url_range } => {
             let url = &source[url_range.clone()];
             let url_escaped = escaped_attr(url);
-            out.push_str(&format!(
+            let _ = write!(
+                out,
                 "<a class=\"md-token md-link\" href=\"{url_escaped}\" data-navigate=\"{url_escaped}\">"
-            ));
+            );
             marker("[", out);
             push_escaped(display, out);
             out.push_str("<span class=\"md-marker\">](");
@@ -213,12 +402,26 @@ fn push_token_html(source: &str, token: &Token, out: &mut String) {
             out.push_str("</a>");
         }
 
-        TokenKind::WikiLink { target_range, display_range } => {
+        TokenKind::WikiLink {
+            target_range,
+            display_range,
+        } => {
             let target = &source[target_range.clone()];
             let target_escaped = escaped_attr(target);
-            out.push_str(&format!(
-                "<span class=\"md-token md-wikilink md-wikilink--linked\" data-navigate=\"{target_escaped}\">"
-            ));
+            // Unresolved links carry no `data-navigate`: there is nothing to
+            // navigate to, and leaving it off means a click falls through to the
+            // editor's normal "show me the source" handling. The offer to create
+            // the note is an explicit button instead, so a stray click on the
+            // link text never writes to the vault.
+            let exists = links.is_none_or(|r| r.exists(target));
+            if exists {
+                let _ = write!(
+                    out,
+                    "<span class=\"md-token md-wikilink md-wikilink--linked\" data-navigate=\"{target_escaped}\">"
+                );
+            } else {
+                out.push_str("<span class=\"md-token md-wikilink md-wikilink--missing\">");
+            }
             marker("[[", out);
             if display_range.is_some() {
                 out.push_str("<span class=\"md-wikilink-target\">");
@@ -230,6 +433,15 @@ fn push_token_html(source: &str, token: &Token, out: &mut String) {
                 push_escaped(display, out);
             }
             marker("]]", out);
+            if !exists {
+                // `data-action`, the same channel the dataview blocks use: the
+                // editor doesn't know what creating a note means, the host does.
+                let _ = write!(
+                    out,
+                    "<span class=\"md-wikilink-create\" data-action=\"newnote:{target_escaped}\" \
+                     title=\"Create note\" contenteditable=\"false\">Create note</span>"
+                );
+            }
             out.push_str("</span>");
         }
 
@@ -260,7 +472,10 @@ fn push_token_html(source: &str, token: &Token, out: &mut String) {
             out.push_str("</span>");
         }
 
-        TokenKind::TableRow { cells, is_separator } => {
+        TokenKind::TableRow {
+            cells,
+            is_separator,
+        } => {
             if *is_separator {
                 // Render as an invisible line divider; raw text appears as marker when active.
                 out.push_str("<span class=\"md-token md-table-sep\">");
@@ -274,16 +489,24 @@ fn push_token_html(source: &str, token: &Token, out: &mut String) {
                     // Emit everything up to the cell (includes leading pipe + space)
                     let up_to = cell.start - base;
                     for ch in raw[consumed..up_to].chars() {
-                        if ch == '|' { marker("|", out); } else { push_escaped_char(ch, out); }
+                        if ch == '|' {
+                            marker("|", out);
+                        } else {
+                            push_escaped_char(ch, out);
+                        }
                     }
                     out.push_str("<span class=\"md-table-cell\">");
-                    push_inline_html(source, cell.clone(), out);
+                    push_inline_html(source, cell.clone(), links, out);
                     out.push_str("</span>");
                     consumed = cell.end - base;
                 }
                 // Trailing pipe(s) and whitespace
                 for ch in raw[consumed..].chars() {
-                    if ch == '|' { marker("|", out); } else { push_escaped_char(ch, out); }
+                    if ch == '|' {
+                        marker("|", out);
+                    } else {
+                        push_escaped_char(ch, out);
+                    }
                 }
                 out.push_str("</span>");
             }
@@ -326,28 +549,48 @@ pub fn MarkdownArea(
     mut content: Signal<String>,
     #[props(default)] variant: MarkdownAreaVariant,
     #[props(default)] placeholder: String,
-    /// Called with the target note/URL when a WikiLink or Link is clicked.
+    /// Called with the target note/URL when a `WikiLink` or Link is clicked.
     on_navigate: Option<EventHandler<String>>,
+    /// Called when something inside rendered output is clicked, with that
+    /// element's `data-action` payload. The editor doesn't interpret it: the
+    /// same crate that rendered the block decides what its actions mean.
+    on_block_action: Option<EventHandler<String>>,
+    /// Renders fenced code blocks (` ```dataview `, …) as output. See
+    /// [`BlockRenderer`]; without one, every fence stays plain source.
+    /// (`ReadSignal` only so it stays `Copy` — the editor's event handlers
+    /// are `FnMut` closures that each need it.)
+    render_block: ReadSignal<Option<BlockRenderer>>,
+    /// Decides which `[[wikilinks]]` point at notes that exist. Unresolved ones
+    /// render as missing and offer to create the note. See [`LinkResolver`];
+    /// without one every link renders as linked.
+    #[props(default)]
+    resolve_link: ReadSignal<Option<LinkResolver>>,
     onfocus: Option<EventHandler<FocusEvent>>,
     onblur: Option<EventHandler<FocusEvent>>,
 ) -> Element {
-    let id = use_memo(|| next_editor_id());
+    let id = use_memo(next_editor_id);
     let mut is_focused = use_signal(|| false);
 
     // rendered_html is a manually-managed signal rather than a reactive memo.
     // We only push updates when the editor is NOT focused, so that typing never
     // replaces dangerous_inner_html under the user's cursor.
-    let mut rendered_html = use_signal(|| {
-        let src = content.peek();
-        let tokens = tokenize(&src);
-        tokens_to_html(&src, &tokens)
-    });
+    let mut rendered_html =
+        use_signal(|| render_html(&content.peek(), None, render_block.read().as_ref(), resolve_link.read().as_ref()));
 
     use_effect(move || {
-        let src = content();     // subscribe to content changes
-        if !is_focused() {       // also subscribe to focus changes
-            let tokens = tokenize(&src);
-            rendered_html.set(tokens_to_html(&src, &tokens));
+        let src = content(); // subscribe to content changes
+        // Subscribing to the renderer too: a caller that swaps it in (because
+        // the data behind it changed) means the same source renders differently
+        // and the block has to be repainted.
+        let renderer = render_block();
+        // Same for the link resolver: a new one means the vault's file list
+        // changed, so a link that was missing may now resolve (and stop
+        // offering to create the note it just created).
+        let resolver = resolve_link();
+        if !is_focused() {
+            // also subscribe to focus changes
+            // No caret in the editor, so every renderable block renders.
+            rendered_html.set(render_html(&src, None, renderer.as_ref(), resolver.as_ref()));
         }
     });
 
@@ -394,18 +637,18 @@ pub fn MarkdownArea(
                 // cursor = -1 only when there is no caret in the editor; with
                 // line-deterministic offsets even empty/blank lines get a real
                 // offset, so leaving a block now re-renders on mobile too.
-                if cursor >= 0 {
-                    let tokens = tokenize(&text);
-                    let new_html = tokens_to_html(&text, &tokens);
+                if let Ok(cursor) = usize::try_from(cursor) {
+                    let new_html =
+                        render_html(&text, Some(cursor), render_block.read().as_ref(), resolve_link.read().as_ref());
                     let _: Result<(), _> =
                         apply_html_and_restore_cursor(&editor_id, &new_html, cursor).await;
                 }
             } else {
                 // Normal keystroke: update content only; rendered_html stays
                 // untouched while focused to avoid resetting the cursor.
-                let text = payload.split_once('\n')
-                    .map(|(_, t)| t)
-                    .unwrap_or(&payload)
+                let text = payload
+                    .split_once('\n')
+                    .map_or(payload.as_str(), |(_, t)| t)
                     .to_string();
                 content.set(text);
             }
@@ -415,11 +658,17 @@ pub fn MarkdownArea(
     let handle_click = move || {
         let editor_id = id();
         spawn(async move {
-            let payload: Result<String, _> = read_state(&editor_id).await;
+            // `read_click`, not `read_state`: both are destructive reads and a
+            // click arrives alongside a selectionchange, so sharing one would
+            // let this handler eat the input handler's re-render.
+            let payload: Result<String, _> = read_click(&editor_id).await;
             let Ok(payload) = payload else {
                 return;
             };
 
+            // A wikilink click is terminal; anything else falls through to the
+            // checkbox handler below. Do NOT fold this into a let-chain with
+            // `on_navigate` — a nav click with no handler must still stop here.
             if let Some(url) = payload.strip_prefix("nav:") {
                 if let Some(cb) = on_navigate {
                     cb(url.to_string());
@@ -427,35 +676,60 @@ pub fn MarkdownArea(
                 return;
             }
 
-            if let Some(rest) = payload.strip_prefix("cb:") {
-                if let Some((pos_str, was_checked_str)) = rest.split_once(':') {
-                    if let Ok(hint_pos) = pos_str.parse::<usize>() {
-                        let was_checked = was_checked_str == "1";
-                        let new_bracket = if was_checked { "[ ]" } else { "[x]" };
-                        let mut src = content.read().clone();
-                        // Re-tokenize current content to find the actual bracket
-                        // position — the hint from data-pos may be stale if the
-                        // user edited above this line while focused.
-                        let tokens = tokenize(&src);
-                        let actual_pos = tokens.iter()
-                            .filter_map(|t| match &t.kind {
-                                TokenKind::TaskItem { checked, bracket_pos, .. }
-                                    if *checked == was_checked => Some(*bracket_pos),
-                                _ => None,
-                            })
-                            .min_by_key(|&p| p.abs_diff(hint_pos));
-                        if let Some(pos) = actual_pos {
-                            if pos + 3 <= src.len() {
-                                src.replace_range(pos..pos + 3, new_bracket);
-                                // Update rendered_html immediately so the toggle
-                                // is visible without waiting for blur — the
-                                // use_effect guard skips updates while focused.
-                                let new_html = tokens_to_html(&src, &tokenize(&src));
-                                rendered_html.set(new_html);
-                                content.set(src);
-                            }
-                        }
-                    }
+            // An action inside rendered output — a dataview task checkbox,
+            // say. The editor has already flipped it optimistically; making it
+            // true is the host's job.
+            if let Some(action) = payload.strip_prefix("act:") {
+                if let Some(cb) = on_block_action {
+                    cb(action.to_string());
+                }
+                return;
+            }
+
+            // Clicking rendered output asks to edit the source behind it. The
+            // caret offset is unaffected by folding — rendered output is not
+            // part of the document model — so we can hand it straight back.
+            if let Some(offset) = payload.strip_prefix("edit:") {
+                if let Ok(offset) = offset.parse::<usize>() {
+                    let src = content.read().clone();
+                    let html = render_html(&src, Some(offset), render_block.read().as_ref(), resolve_link.read().as_ref());
+                    let _: Result<(), _> =
+                        apply_html_and_restore_cursor(&editor_id, &html, offset).await;
+                }
+                return;
+            }
+
+            if let Some(rest) = payload.strip_prefix("cb:")
+                && let Some((pos_str, was_checked_str)) = rest.split_once(':')
+                && let Ok(hint_pos) = pos_str.parse::<usize>()
+            {
+                let was_checked = was_checked_str == "1";
+                let new_bracket = if was_checked { "[ ]" } else { "[x]" };
+                let mut src = content.read().clone();
+                // Re-tokenize current content to find the actual bracket
+                // position — the hint from data-pos may be stale if the
+                // user edited above this line while focused.
+                let tokens = tokenize(&src);
+                let actual_pos = tokens
+                    .iter()
+                    .filter_map(|t| match &t.kind {
+                        TokenKind::TaskItem {
+                            checked,
+                            bracket_pos,
+                            ..
+                        } if *checked == was_checked => Some(*bracket_pos),
+                        _ => None,
+                    })
+                    .min_by_key(|&p| p.abs_diff(hint_pos));
+                if let Some(pos) = actual_pos
+                    && pos + 3 <= src.len()
+                {
+                    src.replace_range(pos..pos + 3, new_bracket);
+                    // Update rendered_html immediately so the toggle
+                    // is visible without waiting for blur — the
+                    // use_effect guard skips updates while focused.
+                    rendered_html.set(render_html(&src, None, render_block.read().as_ref(), resolve_link.read().as_ref()));
+                    content.set(src);
                 }
             }
         });
@@ -492,8 +766,18 @@ mod tests {
     /// The exact HTML the editor paints for a given markdown source — this is
     /// the rendering contract, so any drift here is a visible editor regression.
     fn html(src: &str) -> String {
-        let tokens = tokenize(src);
-        tokens_to_html(src, &tokens)
+        render_html(src, None, None, None)
+    }
+
+    /// A renderer that claims `demo` fences and shouts the body back.
+    fn demo_renderer() -> BlockRenderer {
+        BlockRenderer::new(|lang, body| {
+            if lang == "demo" {
+                format!("<b>{}</b>", body.to_uppercase())
+            } else {
+                String::new()
+            }
+        })
     }
 
     #[test]
@@ -555,6 +839,59 @@ mod tests {
         assert!(out.contains("shown"));
     }
 
+    /// Resolves only the targets it is given, so a test can say exactly which
+    /// links exist.
+    fn resolver(known: &'static [&'static str]) -> LinkResolver {
+        LinkResolver::new(move |t| known.contains(&t))
+    }
+
+    #[test]
+    fn without_a_resolver_every_wikilink_stays_linked() {
+        // The pre-existing behaviour: no host opinion means no missing links.
+        let out = html("[[Anything At All]]");
+        assert!(out.contains("md-wikilink--linked"));
+        assert!(!out.contains("md-wikilink--missing"));
+        assert!(!out.contains("newnote:"));
+    }
+
+    #[test]
+    fn a_resolved_wikilink_navigates_and_offers_nothing() {
+        let out = render_html("[[Here]]", None, None, Some(&resolver(&["Here"])));
+        assert!(out.contains("md-wikilink--linked"));
+        assert!(out.contains("data-navigate=\"Here\""));
+        assert!(!out.contains("md-wikilink-create"));
+    }
+
+    #[test]
+    fn an_unresolved_wikilink_offers_to_create_the_note() {
+        let out = render_html("[[Nowhere]]", None, None, Some(&resolver(&["Here"])));
+        assert!(out.contains("md-wikilink--missing"));
+        assert!(out.contains("data-action=\"newnote:Nowhere\""));
+        // No navigate target: a click falls through to editing the source.
+        assert!(!out.contains("data-navigate"));
+    }
+
+    #[test]
+    fn an_unresolved_labeled_wikilink_creates_the_target_not_the_label() {
+        let out = render_html("[[Nowhere|see this]]", None, None, Some(&resolver(&[])));
+        assert!(out.contains("data-action=\"newnote:Nowhere\""));
+        assert!(out.contains("see this"));
+    }
+
+    #[test]
+    fn the_create_action_target_is_escaped() {
+        let out = render_html("[[a\"b<c]]", None, None, Some(&resolver(&[])));
+        assert!(out.contains("newnote:a&quot;b&lt;c"));
+        assert!(!out.contains("newnote:a\"b<c"));
+    }
+
+    #[test]
+    fn resolution_sees_the_raw_target_including_a_heading() {
+        // The host decides what `#Section` means; the editor passes it through.
+        let out = render_html("[[Note#Section]]", None, None, Some(&resolver(&["Note#Section"])));
+        assert!(out.contains("md-wikilink--linked"));
+    }
+
     #[test]
     fn link_carries_href_and_navigate() {
         let out = html("[label](https://example.com)");
@@ -570,6 +907,66 @@ mod tests {
         assert!(checked.contains("data-checked=\"true\""));
         let unchecked = html("- [ ] todo");
         assert!(unchecked.contains("data-checked=\"false\""));
+    }
+
+    // ── Rendered blocks ──────────────────────────────────────────────────────
+
+    const DEMO: &str = "before\n```demo\nquery\n```\nafter";
+
+    #[test]
+    fn a_claimed_fence_renders_and_its_source_is_hidden_but_present() {
+        let out = render_html(DEMO, None, Some(&demo_renderer()), None);
+        assert!(out.contains("<b>QUERY</b>"), "got: {out}");
+        // The source must still be in the DOM: it is what the document model
+        // reads back, and losing it would lose the note's text.
+        assert!(out.contains("query"));
+        assert!(out.contains("md-render-host"), "the fence line hosts the output");
+        assert_eq!(out.matches("md-render-hidden").count(), 2, "body + closing fence");
+        // Lines outside the block are untouched.
+        assert!(out.contains("<div class=\"md-line\">"));
+    }
+
+    #[test]
+    fn the_caret_inside_a_block_shows_its_source_instead() {
+        // Offset 12 is inside "query" (line 3 of DEMO).
+        let out = render_html(DEMO, Some(12), Some(&demo_renderer()), None);
+        assert!(!out.contains("<b>QUERY</b>"), "editing shows source, not output");
+        assert!(!out.contains("md-render"));
+        // Leaving the block again brings the output back.
+        assert!(render_html(DEMO, Some(0), Some(&demo_renderer()), None).contains("<b>QUERY</b>"));
+    }
+
+    #[test]
+    fn line_count_is_the_same_folded_or_not() {
+        // The caret offsets the JS side computes are line-based, so folding a
+        // block must never change how many `.md-line` divs exist.
+        let folded = render_html(DEMO, None, Some(&demo_renderer()), None);
+        let source = render_html(DEMO, Some(12), Some(&demo_renderer()), None);
+        assert_eq!(
+            folded.matches("class=\"md-line").count(),
+            source.matches("class=\"md-line").count(),
+        );
+        assert_eq!(folded.matches("class=\"md-line").count(), 5);
+    }
+
+    #[test]
+    fn an_unclaimed_or_unterminated_fence_stays_source() {
+        // A language the renderer doesn't claim.
+        let rust = render_html("```rust\nfn f() {}\n```", None, Some(&demo_renderer()), None);
+        assert!(!rust.contains("md-render"));
+        // Still being typed: no closing fence yet.
+        let half = render_html("```demo\nquer", None, Some(&demo_renderer()), None);
+        assert!(!half.contains("md-render"));
+        // And with no renderer at all, nothing changes.
+        assert!(!render_html(DEMO, None, None, None).contains("md-render"));
+    }
+
+    #[test]
+    fn the_output_carries_the_offset_that_reopens_the_source() {
+        let out = render_html(DEMO, None, Some(&demo_renderer()), None);
+        // 7 = start of the ```demo line ("before\n" is 7 bytes).
+        assert!(out.contains("data-edit-offset=\"7\""), "got: {out}");
+        assert!(out.contains("data-md-render"), "excluded from the document model");
     }
 
     #[test]

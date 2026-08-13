@@ -3,6 +3,7 @@ pub mod kanban;
 mod properties;
 mod settings;
 mod slash;
+mod task_menu;
 mod toolbar;
 mod vault;
 

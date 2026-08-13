@@ -1,5 +1,6 @@
 pub mod github;
 pub mod gitlab;
+mod http;
 
 pub use github::{DeviceCodeResponse, PollOutcome, request_device_code, poll_device_token, get_username};
 
@@ -17,7 +18,7 @@ pub enum VaultError {
     Conflict,
 }
 
-/// Metadata for a file in the vault (returned by list_files).
+/// Metadata for a file in the vault (returned by `list_files`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct FileMeta {
     /// Repo-relative path, e.g. "notes/idea.md"
@@ -42,21 +43,12 @@ impl FileMeta {
     }
 }
 
-/// File content returned by read_file.
+/// File content returned by `read_file`.
 #[derive(Debug, Clone, Default)]
 pub struct FileContent {
     pub content: String,
     /// Current blob SHA — needed to write the file back.
     pub sha: String,
-}
-
-/// A single result from a code search.
-#[derive(Debug, Clone)]
-pub struct SearchResult {
-    pub path: String,
-    pub sha: String,
-    /// Best matching text fragment returned by the GitHub text-match API.
-    pub fragment: String,
 }
 
 /// A `[[WikiLink]]` extracted from a file.
@@ -84,7 +76,7 @@ impl Provider {
 
 /// Dispatch table — calls the right backend based on the config's provider.
 pub mod dispatch {
-    use super::*;
+    use super::{GithubConfig, FileMeta, VaultError, Provider, github, gitlab, FileContent};
 
     pub async fn list_files(cfg: &GithubConfig) -> Result<Vec<FileMeta>, VaultError> {
         match cfg.provider {
@@ -117,9 +109,9 @@ pub mod dispatch {
         }
     }
     pub async fn read_many(cfg: &GithubConfig, paths: &[String]) -> Vec<(String, String)> {
+        // Both providers use the same sequential pattern.
         match cfg.provider {
-            Provider::GitHub  => github::read_many(cfg, paths).await,
-            Provider::GitLab  => github::read_many(cfg, paths).await, // uses same sequential pattern
+            Provider::GitHub | Provider::GitLab => github::read_many(cfg, paths).await,
         }
     }
 
