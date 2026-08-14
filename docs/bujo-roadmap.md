@@ -1,6 +1,6 @@
 # Oxidian — Bullet Journal (US 20–22)
 
-**Status:** phases 0–1 and 3 built — entries carry a real status (`[>] [<] [-] [o]`, not just done/not-done), weekly and monthly logs sit alongside the daily note behind a period switcher, and **Review** closes a period by deciding about each unfinished entry. Phase 2 (rapid logging in the editor) is the gap: the signifiers work but you still type the brackets by hand. Then 4 (the running index).
+**Status:** phases 0–3 built — entries carry a real status (`[>] [<] [-] [o]`, not just done/not-done), the editor renders those as glyphs and cycles them on **Ctrl/⌘-Enter**, weekly and monthly logs sit alongside the daily note behind a period switcher, and **Review** closes a period by deciding about each unfinished entry. Phase 4 (the running index) is next, and is the cheap one — `packages/index` already holds everything it needs.
 **Source material:** [`bullet-journal.md`](bullet-journal.md) — the method as described by its authors, plus the notes that started this.
 **Depends on:** `packages/index` (tasks, tags, dates), `packages/app/src/dates.rs`, `template.rs`, the tasks-move machinery in `views/vault.rs`.
 
@@ -131,7 +131,7 @@ Each phase is independently shippable, and the early ones pay for themselves eve
 |---|---|---|
 | **0** ✅ | `Status` enum replacing `checked: bool`; parse and write `[>] [<] [-] [o]`; `FORMAT_VERSION` → 3; Tasks panel and DQL `TASK` show the new states. Pure `packages/index` work, fully unit-testable. `set_status_content` is the single write path, which phase 3 reuses. | — |
 | **1** ✅ | Weekly and monthly logs (absorbs the weekly/monthly half of US 3.2/3.3): `weekly_note_template` / `monthly_note_template` settings, `dates::Period` arithmetic, palette commands, and the period switcher. Useful on its own to anyone who wants weekly notes. | 0 |
-| **2** | Rapid logging in the editor: a keyboard shortcut and slash commands to cycle an entry's signifier, and glyph rendering in `MarkdownArea`. Makes the syntax pleasant instead of merely possible. | 0 |
+| **2** ✅ | Rapid logging in the editor: the tokenizer accepts every signifier and carries the raw marker (the `ui` crate can't depend on `index`, so `task_status_name` mirrors `Status`); glyphs are drawn in CSS so the raw `[m]` survives the `innerText` round trip; **Ctrl/⌘-Enter** cycles an entry's state (Shift reverses) and promotes a plain bullet to a task; slash commands for each entry type. | 0 |
 | **3** ✅ | **The migration ritual.** Review over the closing period with Done / Migrate / Schedule / Drop (`MigrationReview` + `migrate_tasks`), destination written first. Not built on the existing move: the original line is re-marked, never cut. **The first recognisably-BuJo release.** | 1 |
 | **4** | **The running Index** — collections, threads, first-seen/last-touched, as a panel. | 0 |
 | **5** | Future Log: collect `📅`-dated and `[<]` entries beyond this month; migrate them into a month when it opens. | 3 |
