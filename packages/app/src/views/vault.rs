@@ -473,6 +473,12 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
     // what "Rebuild" in the storage footer does.
     let mut index_gen = use_signal(|| 0u32);
     let mut templates: Signal<Vec<TemplateMeta>> = use_signal(Vec::new);
+    // Has the template scan actually run? `templates` starts empty and stays
+    // empty until the vault listing arrives, so without this an early reader
+    // cannot tell "no templates configured" from "not scanned yet" — and would
+    // silently fall back to a root-level daily note instead of the configured
+    // journal folder. See `templates_when_ready`.
+    let mut templates_ready = use_signal(|| false);
     let mut board_root: Signal<String> = use_signal(String::new);
     let mut board_input: Signal<String> = use_signal(String::new);
     // The "current" folder: set when a folder is clicked or derived from the
@@ -537,6 +543,10 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
     let cfg_tmpl = config.clone();
     use_effect(move || {
         let cfg = cfg_tmpl.clone();
+        // An empty `files` means one of two very different things, and only the
+        // listing flag tells them apart: a vault with no templates, or a vault
+        // we haven't listed yet.
+        let listing_done = !loading_list();
         let prefix = format!("{}/", cfg.templates_dir);
         let paths: Vec<String> = files
             .read()
@@ -547,6 +557,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
         spawn(async move {
             if paths.is_empty() {
                 templates.set(vec![]);
+                templates_ready.set(listing_done);
                 return;
             }
             let contents = vault::dispatch::read_many(&cfg, &paths).await;
@@ -556,6 +567,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                     .map(|(p, c)| template::parse_template(p, c))
                     .collect(),
             );
+            templates_ready.set(true);
         });
     });
 
@@ -648,7 +660,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                 if d.is_empty() { crate::dates::today().await } else { d }
             };
             let from_date = dates::shift_period(period, &base, -1);
-            let tmpls = templates.read().clone();
+            let tmpls = templates_when_ready(templates, templates_ready).await;
             let Some((from_path, _)) = periodic_note(&cfg, &tmpls, period, &from_date).await else {
                 load_error.set(Some(format!(
                     "No {} log template configured — set one in Settings.",
@@ -738,17 +750,18 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
             dates::Period::Week => cfg.weekly_note_template.clone(),
             dates::Period::Month => cfg.monthly_note_template.clone(),
         };
-        let tmpl = if tmpl_path.is_empty() {
-            None
-        } else {
-            templates
-                .read()
-                .iter()
-                .find(|t| t.source_path == tmpl_path)
-                .cloned()
-        };
         let open_mbx = focused_open_mbx();
         spawn(async move {
+            // Resolved *after* the scan has run, or a tap at boot would take the
+            // root fallback instead of the configured journal folder.
+            let tmpl = if tmpl_path.is_empty() {
+                None
+            } else {
+                templates_when_ready(templates, templates_ready)
+                    .await
+                    .into_iter()
+                    .find(|t| t.source_path == tmpl_path)
+            };
             if let Some(meta) = tmpl {
                 apply_template_on(&meta, &cfg, files, open_mbx, load_error, "", &date).await;
             } else if period != dates::Period::Day {
@@ -1250,6 +1263,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                                 config: config.clone(),
                                 files,
                                 templates,
+                                templates_ready,
                                 on_open: move |path: String| {
                                     open_focused(path);
                                     sidebar_open.set(false);
@@ -1569,6 +1583,30 @@ async fn write_task_toggle(
     Some(())
 }
 
+/// The template list, once the scan that fills it has actually run.
+///
+/// Templates are read from the vault, so they arrive a beat after the app does.
+/// A caller that snapshots `templates` immediately gets an empty list, which is
+/// indistinguishable from "this vault has no templates" — and periodic-note
+/// resolution treats that as "use the root-level fallback". The visible symptom
+/// was tapping "Today's note" (or Review) the instant the app opened and getting
+/// `2026-08-13.md` at the vault root instead of the configured journal folder.
+///
+/// Waiting closes the window. The cap means a vault whose listing failed still
+/// resolves — with whatever is known, exactly as before — rather than hanging.
+async fn templates_when_ready(
+    templates: Signal<Vec<TemplateMeta>>,
+    ready: Signal<bool>,
+) -> Vec<TemplateMeta> {
+    for _ in 0..100 {
+        if ready() {
+            break;
+        }
+        crate::sleep_ms(50).await;
+    }
+    templates.peek().clone()
+}
+
 /// Today's periodic note: the path it lives at, and the body to seed it with if
 /// it isn't there yet.
 ///
@@ -1576,7 +1614,8 @@ async fn write_task_toggle(
 /// journal actually lives — a dated folder tree, typically), so this resolves
 /// through the template exactly as the "Today's note" button does. Without a
 /// configured template it falls back to `YYYY-MM-DD.md` at the vault root, which
-/// is what that button does too.
+/// is what that button does too. Pass templates from [`templates_when_ready`],
+/// or an early call takes that fallback when a template does exist.
 async fn todays_note(cfg: &GithubConfig, templates: &[TemplateMeta]) -> Option<(String, String)> {
     periodic_note(cfg, templates, dates::Period::Day, "").await
 }
@@ -2934,6 +2973,9 @@ fn TasksView(
     config: GithubConfig,
     files: Signal<Vec<FileMeta>>,
     templates: Signal<Vec<TemplateMeta>>,
+    /// See `templates_when_ready`: without this, "Move to today" can't tell an
+    /// unscanned vault from a vault with no daily-note template.
+    templates_ready: Signal<bool>,
     on_open: EventHandler<String>,
 ) -> Element {
     let mut all_tasks = use_signal(Vec::<Task>::new);
@@ -2997,15 +3039,17 @@ fn TasksView(
             return;
         };
         let cfg = cfg_move.clone();
-        let tmpls = templates.peek().clone();
         moving.set(Some(source));
         move_error.set(None);
         spawn(async move {
             // `None` means today's periodic note, resolved (and seeded) through
-            // the daily-note template.
-            let target = match dest {
-                Some(p) => Some((p, String::new())),
-                None => todays_note(&cfg, &tmpls).await,
+            // the daily-note template — once the template scan has run, or an
+            // early move would land in a root-level note instead.
+            let target = if let Some(p) = dest {
+                Some((p, String::new()))
+            } else {
+                let tmpls = templates_when_ready(templates, templates_ready).await;
+                todays_note(&cfg, &tmpls).await
             };
             let Some((path, body)) = target else {
                 move_error.set(Some("Could not work out today's note.".to_string()));
