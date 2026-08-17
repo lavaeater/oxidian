@@ -309,6 +309,34 @@
   display: none;
 }
 
+/* Bullet Journal signifiers beyond open/done (docs/bujo-roadmap.md §3) draw
+   their glyph as text rather than a checkbox box — there is no "checked"
+   state to shade in, just a symbol. Click-to-toggle doesn't apply to these
+   (see the `cb:` handler in component.rs); they cycle via keyboard shortcut. */
+.md-task-checkbox[data-status="migrated"],
+.md-task-checkbox[data-status="scheduled"],
+.md-task-checkbox[data-status="dropped"],
+.md-task-checkbox[data-status="event"] {
+  cursor: default;
+}
+.md-task-checkbox[data-status="migrated"]::before,
+.md-task-checkbox[data-status="scheduled"]::before,
+.md-task-checkbox[data-status="dropped"]::before,
+.md-task-checkbox[data-status="event"]::before {
+  content: attr(data-glyph);
+  position: static;
+  width: auto;
+  height: auto;
+  border: none;
+  background: none;
+  font-size: 1rem;
+  line-height: 1;
+  color: var(--secondary-color-5, #888);
+}
+.md-task-checkbox[data-status="dropped"]::before {
+  text-decoration: line-through;
+}
+
 /* Wikilink target (the part before | in [[target|display]]) — collapses like a marker */
 .md-wikilink-target {
   font-size: 0;

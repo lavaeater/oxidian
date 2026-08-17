@@ -25,9 +25,10 @@ pub enum TokenKind {
     Blockquote,
     /// `- item` / `* item` / `1. item` — `content_range` starts after the marker.
     ListItem { ordered: bool, depth: u8 },
-    /// `- [ ] item` / `- [x] item` — `content_range` is the task text.
-    /// `bracket_pos` is the source byte position of the `[` character.
-    TaskItem { checked: bool, depth: u8, bracket_pos: usize },
+    /// `- [ ] item` / `- [x] item` / `- [>] item` / … — any Bullet Journal
+    /// signifier `index::tasks::Status` recognizes. `content_range` is the
+    /// task text. `bracket_pos` is the source byte position of the `[` character.
+    TaskItem { status: index::tasks::Status, depth: u8, bracket_pos: usize },
     /// `---` / `***` / `___`
     HorizontalRule,
     /// Opening or closing ` ``` ` fence line. `lang_range` is set on the
@@ -260,7 +261,9 @@ fn detect_table_row(line: &str, pos: usize, line_end: usize) -> Option<Token> {
 
 // ── Inline tokenizer ─────────────────────────────────────────────────────────
 
-/// Detects `- [ ] text` / `- [x] text` lines (unordered list items only).
+/// Detects `- [ ] text` / `- [x] text` / `- [>] text` / … lines (unordered
+/// list items only, one signifier char between the brackets — see
+/// `index::tasks::Status::from_marker` for which chars are recognized).
 /// Must be called before `detect_list_item` since it's more specific.
 fn detect_task_item(line: &str, pos: usize, line_end: usize) -> Option<Token> {
     let (ordered, depth, content_start) = detect_list_item(line, pos)?;
@@ -270,22 +273,24 @@ fn detect_task_item(line: &str, pos: usize, line_end: usize) -> Option<Token> {
 
     let content_offset = content_start - pos;
     let content = &line[content_offset..];
+    let bytes = content.as_bytes();
 
-    let (checked, text_start) = if content.starts_with("[ ] ") {
-        (false, content_start + 4)
-    } else if content.starts_with("[x] ") || content.starts_with("[X] ") {
-        (true, content_start + 4)
-    } else if content == "[ ]" {
-        (false, content_start + 3)
-    } else if content == "[x]" || content == "[X]" {
-        (true, content_start + 3)
+    if bytes.len() < 3 || bytes[0] != b'[' || bytes[2] != b']' {
+        return None;
+    }
+    let status = index::tasks::Status::from_marker(bytes[1] as char)?;
+    let text_start = if bytes.len() == 3 {
+        content_start + 3
+    } else if bytes.get(3) == Some(&b' ') {
+        content_start + 4
     } else {
+        // e.g. `[>]word` with no separating space — not a task marker.
         return None;
     };
 
     Some(Token {
         kind: TokenKind::TaskItem {
-            checked,
+            status,
             depth,
             bracket_pos: content_start,
         },
@@ -728,7 +733,7 @@ mod tests {
         let src = "- [ ] buy milk";
         let tokens = tokenize(src);
         assert_eq!(tokens.len(), 1);
-        let TokenKind::TaskItem { checked: false, depth: 0, bracket_pos } = tokens[0].kind else {
+        let TokenKind::TaskItem { status: index::tasks::Status::Open, depth: 0, bracket_pos } = tokens[0].kind else {
             panic!("expected unchecked TaskItem");
         };
         assert_eq!(&src[bracket_pos..bracket_pos + 3], "[ ]");
@@ -741,7 +746,7 @@ mod tests {
         let src = "- [x] done";
         let tokens = tokenize(src);
         assert_eq!(tokens.len(), 1);
-        assert!(matches!(tokens[0].kind, TokenKind::TaskItem { checked: true, .. }));
+        assert!(matches!(tokens[0].kind, TokenKind::TaskItem { status: index::tasks::Status::Done, .. }));
         assert_eq!(tokens[0].display(src), "done");
     }
 
@@ -750,7 +755,34 @@ mod tests {
         let src = "  - [ ] nested";
         let tokens = tokenize(src);
         assert_eq!(tokens.len(), 1);
-        assert!(matches!(tokens[0].kind, TokenKind::TaskItem { checked: false, depth: 1, .. }));
+        assert!(matches!(tokens[0].kind, TokenKind::TaskItem { status: index::tasks::Status::Open, depth: 1, .. }));
+    }
+
+    #[test]
+    fn task_item_recognizes_bujo_signifiers() {
+        for (marker, status) in [
+            ('>', index::tasks::Status::Migrated),
+            ('<', index::tasks::Status::Scheduled),
+            ('-', index::tasks::Status::Dropped),
+            ('o', index::tasks::Status::Event),
+        ] {
+            let src = format!("- [{marker}] entry");
+            let tokens = tokenize(&src);
+            assert_eq!(tokens.len(), 1, "marker {marker}");
+            assert!(
+                matches!(tokens[0].kind, TokenKind::TaskItem { status: s, .. } if s == status),
+                "marker {marker} did not parse as {status:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn task_item_rejects_unknown_marker() {
+        // An unrecognized bracket char stays a plain list item, per
+        // docs/bujo-roadmap.md §3: "an unknown marker is not a task".
+        let src = "- [q] not a task";
+        let tokens = tokenize(src);
+        assert!(matches!(tokens[0].kind, TokenKind::ListItem { .. }));
     }
 
     #[test]

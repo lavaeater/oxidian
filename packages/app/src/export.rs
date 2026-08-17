@@ -108,8 +108,8 @@ fn render_tokens(source: &str, tokens: &[ui::tokenizer::Token]) -> String {
                 out.push_str(&escape_html(display));
                 let _ = write!(out, "</li></{tag}>");
             }
-            TokenKind::TaskItem { checked, .. } => {
-                let check = if *checked { " checked" } else { "" };
+            TokenKind::TaskItem { status, .. } => {
+                let check = if *status == index::tasks::Status::Done { " checked" } else { "" };
                 let _ = write!(
                     out,
                     "<ul><li><input type=\"checkbox\" disabled{check}> {}",

@@ -360,22 +360,29 @@ fn push_token_html(
         }
 
         TokenKind::TaskItem {
-            checked,
+            status,
             depth,
             bracket_pos,
         } => {
             let prefix_len = bracket_pos - token.range.start;
             let indent = format!("{}em", f32::from(*depth) * 1.5);
-            let bracket_text = if *checked { "[x]" } else { "[ ]" };
+            let checked = *status == index::tasks::Status::Done;
+            let bracket_text = format!("[{}]", status.marker());
             let _ = write!(
                 out,
                 "<span class=\"md-token md-task-item\" style=\"padding-left:{indent}\">"
             );
             marker(&raw[..prefix_len], out);
+            // `data-status` drives which glyph CSS draws; `data-checked` is
+            // kept for the Open/Done click-to-toggle path, which is the only
+            // one this component still owns (see the `cb:` handler below —
+            // other signifiers are cycled via keyboard shortcut, not click).
             let _ = write!(
                 out,
-                "<span class=\"md-task-checkbox\" \
+                "<span class=\"md-task-checkbox\" data-status=\"{}\" data-glyph=\"{}\" \
                  data-pos=\"{bracket_pos}\" data-checked=\"{checked}\">{bracket_text} </span>",
+                status.label(),
+                status.glyph(),
             );
             push_inline_html(source, token.content_range.clone(), links, out);
             out.push_str("</span>");
@@ -700,31 +707,37 @@ pub fn MarkdownArea(
             }
 
             if let Some(rest) = payload.strip_prefix("cb:")
-                && let Some((pos_str, was_checked_str)) = rest.split_once(':')
+                && let Some((pos_str, _was_checked_str)) = rest.split_once(':')
                 && let Ok(hint_pos) = pos_str.parse::<usize>()
             {
-                let was_checked = was_checked_str == "1";
-                let new_bracket = if was_checked { "[ ]" } else { "[x]" };
                 let mut src = content.read().clone();
-                // Re-tokenize current content to find the actual bracket
-                // position — the hint from data-pos may be stale if the
-                // user edited above this line while focused.
+                // Re-tokenize current content and find the task nearest the
+                // clicked position — the hint from data-pos may be stale if
+                // the user edited above this line while focused. The actual
+                // (not the hinted) status decides what happens: click-to-toggle
+                // only ever moves between Open and Done, so a click landing on
+                // a migrated/scheduled/dropped/event checkbox is a no-op —
+                // those are cycled via keyboard shortcut instead, never click.
                 let tokens = tokenize(&src);
-                let actual_pos = tokens
+                let nearest = tokens
                     .iter()
                     .filter_map(|t| match &t.kind {
-                        TokenKind::TaskItem {
-                            checked,
-                            bracket_pos,
-                            ..
-                        } if *checked == was_checked => Some(*bracket_pos),
+                        TokenKind::TaskItem { status, bracket_pos, .. } => {
+                            Some((*status, *bracket_pos))
+                        }
                         _ => None,
                     })
-                    .min_by_key(|&p| p.abs_diff(hint_pos));
-                if let Some(pos) = actual_pos
+                    .min_by_key(|&(_, p)| p.abs_diff(hint_pos));
+                let new_status = match nearest {
+                    Some((index::tasks::Status::Open, _)) => Some(index::tasks::Status::Done),
+                    Some((index::tasks::Status::Done, _)) => Some(index::tasks::Status::Open),
+                    _ => None,
+                };
+                if let (Some(new_status), Some((_, pos))) = (new_status, nearest)
                     && pos + 3 <= src.len()
                 {
-                    src.replace_range(pos..pos + 3, new_bracket);
+                    let new_bracket = format!("[{}]", new_status.marker());
+                    src.replace_range(pos..pos + 3, &new_bracket);
                     // Update rendered_html immediately so the toggle
                     // is visible without waiting for blur — the
                     // use_effect guard skips updates while focused.
@@ -907,6 +920,18 @@ mod tests {
         assert!(checked.contains("data-checked=\"true\""));
         let unchecked = html("- [ ] todo");
         assert!(unchecked.contains("data-checked=\"false\""));
+    }
+
+    #[test]
+    fn bujo_signifiers_render_their_glyph_and_are_not_checked() {
+        let migrated = html("- [>] carried over");
+        assert!(migrated.contains("data-status=\"migrated\""));
+        assert!(migrated.contains("data-glyph=\"›\""));
+        assert!(migrated.contains("data-checked=\"false\""));
+
+        let event = html("- [o] standup");
+        assert!(event.contains("data-status=\"event\""));
+        assert!(event.contains("data-glyph=\"○\""));
     }
 
     // ── Rendered blocks ──────────────────────────────────────────────────────

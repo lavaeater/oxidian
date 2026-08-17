@@ -9,6 +9,9 @@ dioxus-use-js = { workspace = true }
 dioxus-primitives = { workspace = true }
 time = { workspace = true }
 log = { workspace = true }
+# Pure, no Dioxus dependency — `index::tasks::Status` is the one definition of
+# a task signifier, and the editor renders exactly what the index parses.
+index = { workspace = true }
 
 [dev-dependencies]
 # Render components to a string on the native target for tests. No SSR ships in

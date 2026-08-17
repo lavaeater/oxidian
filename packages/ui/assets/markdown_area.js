@@ -165,12 +165,38 @@ export function setup_keyboard(id) {
                 if (le < 0) le = text.length;
                 // Only at the end of a task line: mid-line, a space is just a
                 // space between words, and popping a menu there would be noise.
-                el._armTaskMenu = cursor === le && /^\s*[-*+] \[[ xX]\] /.test(text.slice(ls, le));
+                el._armTaskMenu = cursor === le && /^\s*[-*+] \[[ xX><\-o O]\] /.test(text.slice(ls, le));
             }
             return;
         }
-        // ctrl/meta+Enter may be a shortcut elsewhere; IME Enter confirms a
-        // composition rather than inserting a line.
+        // Ctrl/Cmd+Enter cycles the current line's BuJo signifier
+        // (open → done → migrated → scheduled → dropped → open) instead of
+        // inserting a line — see docs/bujo-roadmap.md §3/US 20.2. Plain
+        // Enter is the "insert a line" shortcut, so this reuses the
+        // modifier Enter already reserves ("ctrl/meta+Enter may be a
+        // shortcut elsewhere") rather than inventing a new key.
+        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.isComposing) {
+            const [text, cursor] = lineTextAndCursor(el);
+            if (cursor < 0) return;
+            const lineStart = text.lastIndexOf('\n', cursor - 1) + 1;
+            let lineEnd = text.indexOf('\n', cursor);
+            if (lineEnd < 0) lineEnd = text.length;
+            const line = text.slice(lineStart, lineEnd);
+            const m = line.match(/^(\s*[-*+] \[)([ xX><\-oO])(\].*)$/);
+            if (!m) return;
+            const CYCLE = { ' ': 'x', 'x': '>', 'X': '>', '>': '<', '<': '-', '-': ' ', 'o': ' ', 'O': ' ' };
+            const next = CYCLE[m[2]];
+            if (next === undefined) return;
+            e.preventDefault();
+            const newLine = m[1] + next + m[3];
+            el._pendingText = text.slice(0, lineStart) + newLine + text.slice(lineEnd);
+            el._pendingCursor = cursor;
+            el.dataset.lineChange = '1';
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            return;
+        }
+        // Plain ctrl/meta+Enter is the signifier-cycle shortcut above; IME
+        // Enter confirms a composition rather than inserting a line.
         if (e.key !== 'Enter' || e.ctrlKey || e.metaKey || e.isComposing) return;
         const [text, cursor] = lineTextAndCursor(el);
         if (cursor < 0) return; // no caret in the editor — let the browser handle it
@@ -185,7 +211,7 @@ export function setup_keyboard(id) {
         let marker = null;   // marker to start the continued item with
         let markerLen = 0;   // length of this line's existing marker
         if (!e.shiftKey) {
-            const taskM = line.match(/^(\s*[-*+] )\[[ xX]\] /);
+            const taskM = line.match(/^(\s*[-*+] )\[[ xX><\-oO]\] /);
             if (taskM) { markerLen = taskM[0].length; marker = taskM[1] + '[ ] '; }
             else {
                 const olM = line.match(/^(\s*)(\d+)\. /);
