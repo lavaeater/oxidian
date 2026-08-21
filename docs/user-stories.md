@@ -143,3 +143,14 @@ Since the Git/GitHub synchronization is the underlying infrastructure, this spec
 * **US 19.1:** As a user, I want to convert a standard Markdown document containing lists (e.g., `# To Do`, `# Doing`, `# Done`) into a visual Kanban board view.
 * **US 19.2:** As a user, I want to drag and drop tasks (markdown list items) between columns in the visual view, and have the underlying markdown file update automatically to reflect the move.
 * **US 19.3:** As a user, I want the different "lanes" of the KanBan board to be represented by folders in the Vault. So, ToDo is a folder, Doing is a folder, etc. The board is basically a visualisation of what is in each folder + ordering them.
+### **Epic 23: Plugins**
+
+*Optional features the user owns, not features the app imposes.*
+
+* **US 23.1:** As a user, I want a Plugins panel listing what is available with a one-line description of each, so I can see what the app can do beyond the basics without reading documentation.
+* **US 23.2:** As a user, I want to enable and disable a plugin with one click, and I want disabling it to change nothing on disk — my notes and templates are mine and must survive being turned off.
+* **US 23.3:** As a user, I want enabling a plugin to give me working defaults immediately — its settings and its templates created for me in the vault — rather than a form I have to fill in before anything happens.
+* **US 23.4:** As a user, I want to configure a plugin from the UI when its settings are simple, without hand-editing a JSON file.
+* **US 23.5:** As a user, I want a plugin's settings and templates stored in my vault so they reach my phone through git, like everything else I own.
+* **US 23.6:** As a user, I want re-enabling a plugin to pick up exactly where I left off, and never to overwrite a template I have edited.
+* **US 23.7:** *(Future — see [`plugin-architecture.md`](plugin-architecture.md) §2)* As a user, I want to install a plugin someone else wrote from a GitHub repo, and to have it appear in the same list, with the same switch and the same settings form as the built-in ones.
