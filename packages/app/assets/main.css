@@ -1627,6 +1627,12 @@ kbd {
 .plugin-toggle { min-width: 46px; }
 .plugin-toggle--on { background: var(--accent); border-color: var(--accent); color: #fff; }
 .plugin-toggle--on:hover { color: #fff; }
+/* On a phone the description needs the full width, so the switch moves under
+   it rather than squeezing the text into a narrow column. */
+@media (max-width: 600px) {
+  .plugin-row { flex-direction: column; gap: 10px; }
+  .plugin-actions { align-self: flex-end; }
+}
 .plugins-hint {
   padding: 10px 14px;
   margin: 0;
