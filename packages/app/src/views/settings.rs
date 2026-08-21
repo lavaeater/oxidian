@@ -22,8 +22,11 @@ pub fn Settings(
     let mut provider      = use_signal(|| existing.as_ref().map(|c| c.provider.clone()).unwrap_or_default());
     let mut templates_dir       = use_signal(|| existing.as_ref().map_or_else(|| ".oxidian/templates".to_string(), |c| c.templates_dir.clone()));
     let mut daily_note_template = use_signal(|| existing.as_ref().map_or_else(|| ".oxidian/templates/daily-note.md".to_string(), |c| c.daily_note_template.clone()));
-    let mut weekly_note_template  = use_signal(|| existing.as_ref().map(|c| c.weekly_note_template.clone()).unwrap_or_default());
-    let mut monthly_note_template = use_signal(|| existing.as_ref().map(|c| c.monthly_note_template.clone()).unwrap_or_default());
+    // Not edited here any more — the Bullet Journal plugin owns these (see
+    // `plugins::bujo`). They are still carried through so an existing config
+    // keeps working, and so a pre-plugin vault survives a re-save.
+    let weekly_note_template  = use_signal(|| existing.as_ref().map(|c| c.weekly_note_template.clone()).unwrap_or_default());
+    let monthly_note_template = use_signal(|| existing.as_ref().map(|c| c.monthly_note_template.clone()).unwrap_or_default());
     let mut error    = use_signal(|| None::<String>);
     let mut saving   = use_signal(|| false);
     let mut show_token  = use_signal(|| false);
@@ -268,25 +271,12 @@ pub fn Settings(
                         value: "{daily_note_template}", oninput: move |e| daily_note_template.set(e.value()),
                     }
                 }
-                label { class: "settings-label", "Weekly log template"
-                    input {
-                        class: "settings-input", placeholder: ".oxidian/templates/weekly-log.md",
-                        value: "{weekly_note_template}", oninput: move |e| weekly_note_template.set(e.value()),
-                    }
-                }
-                label { class: "settings-label", "Monthly log template"
-                    input {
-                        class: "settings-input", placeholder: ".oxidian/templates/monthly-log.md",
-                        value: "{monthly_note_template}", oninput: move |e| monthly_note_template.set(e.value()),
-                    }
-                }
                 p { class: "settings-sub",
-                    "Leave the weekly and monthly templates empty to turn those logs off. "
-                    "Each template's "
+                    "The template's "
                     code { "filepath:" }
-                    " decides where its notes land — use "
-                    code { "${{OXID_DATE_WEEK_YEAR}}-W${{OXID_DATE_WEEK}}" }
-                    " for weeks."
+                    " decides where its notes land. Weekly and monthly logs are "
+                    "configured by the Bullet Journal plugin — enable it from the "
+                    "Plugins button in the sidebar once your vault is connected."
                 }
 
                 if let Some(err) = error() {

@@ -81,7 +81,11 @@ test("a reload reads the stored index instead of the vault", async ({ page }) =>
   let reads = 0;
   await mockGitHub(page, VAULT);
   await page.route(/api\.github\.com\/repos\/[^/]+\/[^/]+\/contents\/(.+)/, (route, request) => {
-    if (request.method() === "GET") reads++;
+    // Only notes count. Plugin state (`.oxidian/plugins.json` and each
+    // plugin's settings) is read once per boot by design — it lives in the
+    // vault, not the index, and is not what this test is about.
+    const path = new URL(request.url()).pathname;
+    if (request.method() === "GET" && !path.includes("/contents/.oxidian/")) reads++;
     route.fallback();
   });
   await seedConfig(page);
@@ -129,7 +133,11 @@ test("an index left as a single blob by an older build is adopted, not rebuilt",
   // blob must cost *zero* reads, where starting cold re-downloads the vault.
   let reads = 0;
   await page.route(/api\.github\.com\/repos\/[^/]+\/[^/]+\/contents\/(.+)/, (route, request) => {
-    if (request.method() === "GET") reads++;
+    // Only notes count. Plugin state (`.oxidian/plugins.json` and each
+    // plugin's settings) is read once per boot by design — it lives in the
+    // vault, not the index, and is not what this test is about.
+    const path = new URL(request.url()).pathname;
+    if (request.method() === "GET" && !path.includes("/contents/.oxidian/")) reads++;
     route.fallback();
   });
 
@@ -189,7 +197,11 @@ test("Rebuild discards the index and reads the vault again", async ({ page }) =>
   // assumed — the note count alone would be identical before and after.
   let reads = 0;
   await page.route(/api\.github\.com\/repos\/[^/]+\/[^/]+\/contents\/(.+)/, (route, request) => {
-    if (request.method() === "GET") reads++;
+    // Only notes count. Plugin state (`.oxidian/plugins.json` and each
+    // plugin's settings) is read once per boot by design — it lives in the
+    // vault, not the index, and is not what this test is about.
+    const path = new URL(request.url()).pathname;
+    if (request.method() === "GET" && !path.includes("/contents/.oxidian/")) reads++;
     route.fallback();
   });
 

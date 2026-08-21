@@ -2,7 +2,7 @@ use crate::icons::{
     IcoBookmark, IcoBookmarkCheck, IcoCalendar, IcoChevronDown, IcoChevronLeft, IcoChevronRight,
     IcoDownload, IcoFilePlus, IcoFileText, IcoFolderClosed, IcoFolderKanban, IcoFolderOpen,
     IcoFolderPlus, IcoFolderTree, IcoLayoutList, IcoLink2, IcoListChecks, IcoNetwork, IcoSearch,
-    IcoSettings, IcoTrash2, IcoX,
+    IcoPlug, IcoSettings, IcoTrash2, IcoX,
 };
 use index::Index;
 use index::tasks::{self, Status, Task};
@@ -13,6 +13,7 @@ use vault::{FileMeta, GithubConfig};
 use super::graph::GraphView;
 use super::kanban::KanbanBoard;
 use super::properties::PropertiesPanel;
+use super::plugins::PluginsModal;
 use super::slash::SlashMenu;
 use super::task_menu::TaskMenu;
 use super::toolbar::FormattingToolbar;
@@ -20,6 +21,7 @@ use crate::console_log;
 use crate::dates;
 use crate::export;
 use crate::js;
+use crate::plugins::{self, PluginStore};
 use crate::state;
 use crate::template::{self, TemplateMeta};
 use crate::wikilink_index::WikiLinkIndex;
@@ -260,6 +262,7 @@ enum Cmd {
     GoBookmarks,
     GoKanban,
     GoTasks,
+    Plugins,
 }
 
 impl Cmd {
@@ -280,6 +283,7 @@ impl Cmd {
         Cmd::GoBookmarks,
         Cmd::GoKanban,
         Cmd::GoTasks,
+        Cmd::Plugins,
     ];
 
     fn title(self) -> &'static str {
@@ -300,6 +304,7 @@ impl Cmd {
             Cmd::GoBookmarks => "Show: Bookmarks",
             Cmd::GoKanban => "Show: Kanban",
             Cmd::GoTasks => "Show: Tasks",
+            Cmd::Plugins => "Manage plugins",
         }
     }
 
@@ -330,6 +335,7 @@ impl Cmd {
             Cmd::GoBookmarks => "saved pinned",
             Cmd::GoKanban => "board",
             Cmd::GoTasks => "todo checklist due priority overview",
+            Cmd::Plugins => "plugin extension enable disable configure settings bujo",
         }
     }
 }
@@ -479,6 +485,11 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
     // silently fall back to a root-level daily note instead of the configured
     // journal folder. See `templates_when_ready`.
     let mut templates_ready = use_signal(|| false);
+    // Which plugins are installed, on, and how they are configured. Lives in
+    // the vault (`.oxidian/plugins.json`), so it arrives asynchronously like
+    // the file list — `PluginStore::loaded` tells "none" from "not yet".
+    let mut plugin_store = use_signal(PluginStore::default);
+    let mut show_plugins = use_signal(|| false);
     let mut board_root: Signal<String> = use_signal(String::new);
     let mut board_input: Signal<String> = use_signal(String::new);
     // The "current" folder: set when a folder is clicked or derived from the
@@ -551,7 +562,10 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
         let paths: Vec<String> = files
             .read()
             .iter()
-            .filter(|f| f.path.starts_with(&prefix))
+            // Plugins keep their templates in their own folder, so the scan
+            // has to look there too or a plugin's template would be installed
+            // and then never found by the resolver that needs it.
+            .filter(|f| f.path.starts_with(&prefix) || plugins::is_plugin_template(&f.path))
             .map(|f| f.path.clone())
             .collect();
         spawn(async move {
@@ -568,6 +582,15 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                     .collect(),
             );
             templates_ready.set(true);
+        });
+    });
+
+    // Load plugin state once on mount.
+    let cfg_plugins = config.clone();
+    use_effect(move || {
+        let cfg = cfg_plugins.clone();
+        spawn(async move {
+            plugin_store.set(PluginStore::load(&cfg).await);
         });
     });
 
@@ -637,8 +660,15 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
     // The switcher is only meaningful once there is somewhere for a week or a
     // month to go; with neither configured it would be three buttons that
     // report an error.
-    let has_periodic_logs =
-        !config.weekly_note_template.is_empty() || !config.monthly_note_template.is_empty();
+    // ...and only while the Bullet Journal plugin is on, since it is the thing
+    // that gives a week or a month somewhere to go.
+    let has_periodic_logs = {
+        let store = plugin_store.read();
+        plugins::bujo::active(&store, &config)
+            && [dates::Period::Week, dates::Period::Month].iter().any(|p| {
+                !plugins::bujo::template_for(&store, &config, *p).is_empty()
+            })
+    };
 
     // ── Migration review ──────────────────────────────────────────────────────
     // `None` = closed. Open holds the closing period's open entries plus the
@@ -661,14 +691,15 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
             };
             let from_date = dates::shift_period(period, &base, -1);
             let tmpls = templates_when_ready(templates, templates_ready).await;
-            let Some((from_path, _)) = periodic_note(&cfg, &tmpls, period, &from_date).await else {
+            let store = plugin_store.peek().clone();
+            let Some((from_path, _)) = periodic_note(&cfg, &store, &tmpls, period, &from_date).await else {
                 load_error.set(Some(format!(
                     "No {} log template configured — set one in Settings.",
                     period.label().to_lowercase()
                 )));
                 return;
             };
-            let Some((to_path, to_body)) = periodic_note(&cfg, &tmpls, period, &base).await else {
+            let Some((to_path, to_body)) = periodic_note(&cfg, &store, &tmpls, period, &base).await else {
                 return;
             };
             // Read the closing log from the vault, not the index: the index may
@@ -745,11 +776,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
     // Shared by the sidebar buttons, the period switcher, and the palette.
     let run_periodic = use_callback(move |(period, date): (dates::Period, String)| {
         let cfg = cfg_daily.clone();
-        let tmpl_path = match period {
-            dates::Period::Day => cfg.daily_note_template.clone(),
-            dates::Period::Week => cfg.weekly_note_template.clone(),
-            dates::Period::Month => cfg.monthly_note_template.clone(),
-        };
+        let tmpl_path = plugins::bujo::template_for(&plugin_store.peek(), &cfg, period);
         let open_mbx = focused_open_mbx();
         spawn(async move {
             // Resolved *after* the scan has run, or a tap at boot would take the
@@ -837,6 +864,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
             Cmd::ExportHtml => run_export.call(()),
             Cmd::ToggleSidebar => sidebar_open.set(!sidebar_open()),
             Cmd::ToggleSplit => split.set(!split()),
+            Cmd::Plugins => show_plugins.set(true),
             Cmd::GoFiles => panel.set(Panel::Files),
             Cmd::GoSearch => panel.set(Panel::Search),
             Cmd::GoBacklinks => panel.set(Panel::Backlinks),
@@ -1041,6 +1069,12 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                                 },
                                 IcoLink2 { size: 16 }
                             }
+                        }
+                        button {
+                            class: "sidebar-icon-btn",
+                            title: "Plugins",
+                            onclick: move |_| show_plugins.set(true),
+                            IcoPlug { size: 16 }
                         }
                         button {
                             class: "sidebar-icon-btn",
@@ -1264,6 +1298,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                                 files,
                                 templates,
                                 templates_ready,
+                                plugin_store,
                                 on_open: move |path: String| {
                                     open_focused(path);
                                     sidebar_open.set(false);
@@ -1425,6 +1460,15 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                         PaletteAction::Template(t) => run_template.call(t),
                     },
                     on_close: move |()| show_palette.set(false),
+                }
+            }
+
+            // ── Plugins ──────────────────────────────────────────────────────
+            if show_plugins() {
+                PluginsModal {
+                    config: config.clone(),
+                    store: plugin_store,
+                    on_close: move |()| show_plugins.set(false),
                 }
             }
 
@@ -1616,8 +1660,12 @@ async fn templates_when_ready(
 /// configured template it falls back to `YYYY-MM-DD.md` at the vault root, which
 /// is what that button does too. Pass templates from [`templates_when_ready`],
 /// or an early call takes that fallback when a template does exist.
-async fn todays_note(cfg: &GithubConfig, templates: &[TemplateMeta]) -> Option<(String, String)> {
-    periodic_note(cfg, templates, dates::Period::Day, "").await
+async fn todays_note(
+    cfg: &GithubConfig,
+    store: &PluginStore,
+    templates: &[TemplateMeta],
+) -> Option<(String, String)> {
+    periodic_note(cfg, store, templates, dates::Period::Day, "").await
 }
 
 /// The log note for `period` on `date` (`""` = today): where it lives, and the
@@ -1626,6 +1674,7 @@ async fn todays_note(cfg: &GithubConfig, templates: &[TemplateMeta]) -> Option<(
 /// closing period's log before deciding whether there is anything to do.
 async fn periodic_note(
     cfg: &GithubConfig,
+    store: &PluginStore,
     templates: &[TemplateMeta],
     period: dates::Period,
     date: &str,
@@ -1639,15 +1688,13 @@ async fn periodic_note(
     if vars.year.is_empty() || vars.month.is_empty() || vars.date.is_empty() {
         return None;
     }
-    let tmpl_path = match period {
-        dates::Period::Day => &cfg.daily_note_template,
-        dates::Period::Week => &cfg.weekly_note_template,
-        dates::Period::Month => &cfg.monthly_note_template,
-    };
+    // The Bullet Journal plugin owns these paths once it is enabled; before
+    // that they come from the pre-plugin config. See `plugins::bujo`.
+    let tmpl_path = plugins::bujo::template_for(store, cfg, period);
     let tmpl = if tmpl_path.is_empty() {
         None
     } else {
-        templates.iter().find(|t| &t.source_path == tmpl_path)
+        templates.iter().find(|t| t.source_path == tmpl_path)
     };
     if let Some((t, fp)) = tmpl.and_then(|t| t.filepath.as_ref().map(|fp| (t, fp))) {
         let path = template::substitute_vars(fp, &vars)
@@ -2976,6 +3023,9 @@ fn TasksView(
     /// See `templates_when_ready`: without this, "Move to today" can't tell an
     /// unscanned vault from a vault with no daily-note template.
     templates_ready: Signal<bool>,
+    /// Needed because "Move to today" resolves through the daily-log template,
+    /// which the Bullet Journal plugin owns once it is enabled.
+    plugin_store: Signal<PluginStore>,
     on_open: EventHandler<String>,
 ) -> Element {
     let mut all_tasks = use_signal(Vec::<Task>::new);
@@ -3049,7 +3099,10 @@ fn TasksView(
                 Some((p, String::new()))
             } else {
                 let tmpls = templates_when_ready(templates, templates_ready).await;
-                todays_note(&cfg, &tmpls).await
+                // Cloned out before the await: a signal borrow must never be
+                // held across one (see clippy.toml).
+                let store = plugin_store.peek().clone();
+                todays_note(&cfg, &store, &tmpls).await
             };
             let Some((path, body)) = target else {
                 move_error.set(Some("Could not work out today's note.".to_string()));

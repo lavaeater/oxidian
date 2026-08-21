@@ -1570,3 +1570,83 @@ kbd {
 .storage-rebuild:hover:not(:disabled) { color: var(--text); border-color: var(--accent); }
 .storage-rebuild:disabled { opacity: 0.5; cursor: default; }
 .storage-detail { margin-top: 0.2em; opacity: 0.8; }
+
+/* ── Plugins panel ─────────────────────────────────────────────────────────── */
+
+.plugins-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(560px, 100%);
+  max-height: min(80vh, 640px);
+  border-radius: 8px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+}
+.plugins-back {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 1.1rem;
+  cursor: pointer;
+  padding: 0 8px 0 0;
+}
+.plugins-back:hover { color: var(--text); }
+.plugins-list { overflow-y: auto; flex: 1; }
+.plugin-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.plugin-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.plugin-name { font-size: 0.92rem; font-weight: 600; color: var(--text); }
+.plugin-desc { font-size: 0.78rem; color: var(--text-muted); line-height: 1.45; }
+.plugin-path {
+  font-family: ui-monospace, monospace;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  opacity: 0.7;
+}
+.plugin-actions { display: flex; gap: 6px; flex-shrink: 0; align-items: center; }
+.plugin-configure,
+.plugin-toggle {
+  font-size: 0.78rem;
+  padding: 4px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: none;
+  color: var(--text-muted);
+}
+.plugin-configure:hover:not(:disabled),
+.plugin-toggle:hover:not(:disabled) { color: var(--text); border-color: var(--accent); }
+.plugin-configure:disabled { opacity: 0.4; cursor: not-allowed; }
+.plugin-toggle { min-width: 46px; }
+.plugin-toggle--on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.plugin-toggle--on:hover { color: #fff; }
+.plugins-hint {
+  padding: 10px 14px;
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+.plugins-form { overflow-y: auto; flex: 1; padding: 12px 14px; }
+.plugins-form .settings-label {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin-bottom: 5px;
+}
+/* The label wraps its input (as on the connect screen), so the control needs
+   its own line and the full width to show a long vault path. */
+.plugins-form .settings-input {
+  display: block;
+  width: 100%;
+  margin-top: 5px;
+}
+.plugins-form input[type="checkbox"] { margin-top: 6px; }
+.plugins-form .settings-sub { margin: 0 0 16px; }
