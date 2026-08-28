@@ -161,6 +161,49 @@ test("scheduling requires a date, and writes it onto the carried copy", async ({
   expect(source.body).toContain("- [<] draft the proposal");
 });
 
+test("the log is resolved through the template, not the root fallback", async ({ page }) => {
+  // Regression: templates are read from the vault, so they arrive a beat after
+  // the app does. Acting immediately used to snapshot an empty template list —
+  // indistinguishable from "no template configured" — and resolve the log to
+  // `YYYY-MM-DD.md` at the vault root, silently ignoring the journal folder.
+  const template = [
+    "---",
+    "oxid_template:",
+    "  filepath: journal/${OXID_DATE_YEAR}-${OXID_DATE_MONTH}-${OXID_DATE_DATE}.md",
+    "---",
+    "# ${OXID_DATE_YEAR}-${OXID_DATE_MONTH}-${OXID_DATE_DATE}",
+    "",
+  ].join("\n");
+
+  const writes = trackWrites(page);
+  await mockGitHub(page, {
+    ".oxidian/templates/daily-note.md": template,
+    [`journal/${YESTERDAY}.md`]: YESTERDAY_LOG,
+    // A decoy at the root: if resolution falls back, the review finds this
+    // instead and the test would pass for the wrong reason. It must not.
+    [`${YESTERDAY}.md`]: `# ${YESTERDAY}\n\n- [ ] the wrong note\n`,
+  });
+  await seedConfig(page, { weekly_note_template: ".oxidian/templates/weekly.md" });
+  await page.goto("/");
+  await expect(page.getByText("Oxidian", { exact: true })).toBeVisible();
+  // No settling wait — acting at once is the whole point of the test.
+  await page.getByRole("button", { name: "Review" }).click();
+  await expect(page.locator(".review-modal")).toBeVisible();
+
+  await expect(page.locator(".review-modal")).toContainText("call the plumber");
+  await expect(page.locator(".review-modal")).not.toContainText("the wrong note");
+
+  await page.locator(".review-row", { hasText: "call the plumber" })
+    .getByRole("button", { name: "Migrate" }).click();
+  await page.getByRole("button", { name: "Apply" }).click();
+
+  await expect.poll(() => writes.length).toBeGreaterThanOrEqual(2);
+  // Both sides land in the journal folder the template names.
+  expect(writes[0].path).toBe(`journal/${TODAY}.md`);
+  expect(writes.some((w) => w.path === `journal/${YESTERDAY}.md`)).toBe(true);
+  expect(writes.some((w) => w.path === `${TODAY}.md`)).toBe(false);
+});
+
 test("a period with nothing open says so instead of offering busywork", async ({ page }) => {
   await openReview(page, {
     ...VAULT,

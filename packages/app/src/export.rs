@@ -108,11 +108,21 @@ fn render_tokens(source: &str, tokens: &[ui::tokenizer::Token]) -> String {
                 out.push_str(&escape_html(display));
                 let _ = write!(out, "</li></{tag}>");
             }
-            TokenKind::TaskItem { status, .. } => {
-                let check = if *status == index::tasks::Status::Done { " checked" } else { "" };
+            TokenKind::TaskItem { marker, .. } => {
+                let check = if matches!(marker, 'x' | 'X') { " checked" } else { "" };
+                // An exported entry that was migrated or dropped is neither
+                // ticked nor plain-unticked, so the signifier goes in beside
+                // the box rather than being flattened away.
+                let signifier = match marker {
+                    '>' => " <span class=\"bujo\">›</span>",
+                    '<' => " <span class=\"bujo\">‹</span>",
+                    '-' => " <span class=\"bujo\">–</span>",
+                    'o' | 'O' => " <span class=\"bujo\">○</span>",
+                    _ => "",
+                };
                 let _ = write!(
                     out,
-                    "<ul><li><input type=\"checkbox\" disabled{check}> {}",
+                    "<ul><li><input type=\"checkbox\" disabled{check}>{signifier} {}",
                     escape_html(display)
                 );
                 out.push_str("</li></ul>");

@@ -295,6 +295,41 @@
   transform: rotate(40deg) translate(-1px, -2px);
 }
 
+/* Bullet Journal signifiers. Open and done keep the familiar checkbox; the
+   others are drawn as their glyph, because a half-ticked box can't say
+   "migrated". The raw `[m]` text stays in the DOM either way — `innerText` is
+   the document model — so this is presentation only. */
+.md-task-checkbox[data-status="migrated"]::before { content: '›'; }
+.md-task-checkbox[data-status="scheduled"]::before { content: '‹'; }
+.md-task-checkbox[data-status="dropped"]::before { content: '–'; }
+.md-task-checkbox[data-status="event"]::before { content: '○'; }
+.md-task-checkbox[data-status="migrated"]::before,
+.md-task-checkbox[data-status="scheduled"]::before,
+.md-task-checkbox[data-status="dropped"]::before,
+.md-task-checkbox[data-status="event"]::before {
+  position: static;
+  width: auto;
+  height: auto;
+  border: none;
+  border-radius: 0;
+  background: none;
+  font-size: 0.95rem;
+  line-height: 1;
+  color: var(--secondary-color-5, #888);
+}
+.md-task-checkbox[data-status="migrated"]::before,
+.md-task-checkbox[data-status="scheduled"]::before {
+  color: var(--accent-color, #4a9eff);
+}
+/* A dropped entry is abandoned, not finished: struck through, never ticked. */
+.md-task-item:has(.md-task-checkbox[data-status="dropped"]) {
+  text-decoration: line-through;
+  opacity: 0.6;
+}
+.md-task-item:has(.md-task-checkbox[data-status="event"]) {
+  font-style: italic;
+}
+
 /* On the active line, show raw [ ] / [x] text and hide the visual checkbox. */
 .md-line--active .md-task-checkbox {
   font-size: 1em;
@@ -304,9 +339,21 @@
   height: auto;
   cursor: text;
 }
+/* The signifier rules above are attribute-qualified and so out-specify a bare
+   descendant selector; name the attribute here too, or the glyph would sit on
+   top of the raw text you are trying to edit. */
 .md-line--active .md-task-checkbox::before,
-.md-line--active .md-task-checkbox::after {
+.md-line--active .md-task-checkbox::after,
+.md-line--active .md-task-checkbox[data-status]::before,
+.md-line--active .md-task-checkbox[data-status]::after {
   display: none;
+}
+/* An entry being edited shows its source, so no decoration on the text either.
+   Matched with the same `:has()` shape so it out-specifies the rules above. */
+.md-line--active .md-task-item:has(.md-task-checkbox[data-status]) {
+  text-decoration: none;
+  font-style: normal;
+  opacity: 1;
 }
 
 /* Bullet Journal signifiers beyond open/done (docs/bujo-roadmap.md §3) draw

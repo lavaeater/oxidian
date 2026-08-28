@@ -1,5 +1,6 @@
 mod graph;
 pub mod kanban;
+mod plugins;
 mod properties;
 mod settings;
 mod slash;

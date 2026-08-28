@@ -164,3 +164,10 @@ icon!(IcoTrash2,
     path { d: "M3 6h18" }
     path { d: "M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" }
 );
+
+icon!(IcoPlug,
+    path { d: "M12 22v-5" }
+    path { d: "M9 8V2" }
+    path { d: "M15 8V2" }
+    path { d: "M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z" }
+);

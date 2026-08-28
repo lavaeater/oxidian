@@ -62,7 +62,8 @@ Listed roughly by priority / dependency order. Filtered to the web + Android foc
 | US 15.1 / 15.2 | **Templates** — folder setting + insert via slash/palette (*engine + daily-note done; general insertion remaining*) | Small–Medium |
 | US 14.1 / 14.2 | **Tags pane** — collects all `#tags`, click to search. Downgraded from Medium: the index already collects tags (`tag_counts` / `pages_with_tag`, nested tags kept whole) and search already understands `tag:`, so only the panel is left | Small |
 | US 3.2 / 3.3 | Weekly/Monthly notes; natural-language date parsing (`@today`, `@next friday`) | Medium — *the weekly/monthly half is absorbed by BuJo phase 1, below* |
-| US 20–22 | **Bullet Journal** — rapid logging, daily/weekly/monthly logs, the migration ritual, and a running index of collections. Planned in [`bujo-roadmap.md`](bujo-roadmap.md), phased 0→7; built in core rather than as a plugin (there is no plugin host, and the feature needs editor and index access — see that doc §2) | Large |
+| US 20–22 | **Bullet Journal** — rapid logging, daily/weekly/monthly logs, the migration ritual, and a running index of collections. Planned in [`bujo-roadmap.md`](bujo-roadmap.md), phased 0→7; *phases 0–3 built*. Implemented in core Rust but **listed, toggled, and configured as a plugin** through the registry below — the compromise that kept editor and index access while giving the plugin surface a real first customer | Large |
+| — | **Plugin registry** ✅ — plugins as *registry entries* rather than necessarily JS files: `PluginDef` + declarative `Field`s, one generic settings form, state in the vault under `.oxidian/plugins/<id>/`, enable/disable that scaffolds without ever clobbering. See [`plugin-architecture.md`](plugin-architecture.md) §1. External JS plugins are §2 and still unbuilt | Medium |
 
 ### Medium priority — knowledge graph completeness
 

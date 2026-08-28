@@ -1,10 +1,10 @@
 # Oxidian — Bullet Journal (US 20–22)
 
-**Status:** phases 0–3 built — entries carry a real status (`[>] [<] [-] [o]`, not just done/not-done), weekly and monthly logs sit alongside the daily note behind a period switcher, **Review** closes a period by deciding about each unfinished entry, and the editor itself now renders and cycles signifiers instead of making you type brackets by hand. Next up: 4 (the running index).
+**Status:** phases 0–3 built, and BuJo now ships **as a plugin** (see §2) — entries carry a real status (`[>] [<] [-] [o]`, not just done/not-done), the editor renders those as glyphs and cycles them on **Ctrl/⌘-Enter**, weekly and monthly logs sit alongside the daily note behind a period switcher, and **Review** closes a period by deciding about each unfinished entry. Phase 4 (the running index) is next, and is the cheap one — `packages/index` already holds everything it needs.
 **Source material:** [`bullet-journal.md`](bullet-journal.md) — the method as described by its authors, plus the notes that started this.
 **Depends on:** `packages/index` (tasks, tags, dates), `packages/app/src/dates.rs`, `template.rs`, the tasks-move machinery in `views/vault.rs`.
 
-> The ask was "BuJo as a plugin". §2 argues it should be core instead, and says what would have to exist first if you'd rather it were a plugin. Everything from §3 onward is the same work either way — the data model and the index queries don't care which vehicle carries them.
+> The ask was "BuJo as a plugin". §2 argued for core and was half right: the *implementation* is core Rust, but a plugin registry has since been built and BuJo is listed, toggled, and configured through it. Everything from §3 onward was the same work either way — the data model and the index queries don't care which vehicle carries them.
 
 ---
 
@@ -39,7 +39,23 @@ Two honest observations. First, **the index half of this is essentially done** �
 
 **If you want it as a plugin anyway**, the honest sequencing is: build phases 0–1 below in core regardless (the parser and the periodic logs are shared infrastructure), then build the plugin host as its own project, then express only phases 3–4 (the migration ritual and the index page) as plugin code. You would be writing the interesting parts twice. The one real argument for it — that it proves the plugin system with a serious first customer — is a good argument, but it's an argument for building the plugin system, not for delaying BuJo behind it.
 
-**Middle path, and what this plan assumes:** build in core, but keep the BuJo logic in its own module (`packages/index/src/bujo.rs` + `packages/app/src/views/bujo.rs`) with no reach into unrelated view state, so that if the plugin host later lands, the seam is already there. Phase 7 covers that.
+**Middle path, and what this plan assumes:** build in core, but keep the BuJo logic in its own module with no reach into unrelated view state, so that if the plugin host later lands, the seam is already there. Phase 7 covers that.
+
+### What actually happened
+
+The middle path, further than planned. Rather than a JS host, the answer was to
+notice that "plugin" was doing two jobs: *how a feature is implemented* and *how
+a user relates to it*. Only the second one mattered here. So a registry landed
+that describes a plugin as data — `PluginDef` + declarative `Field`s, state in
+`.oxidian/plugins/<id>/`, one generic settings form — and BuJo is its first
+entry ([`plugin-architecture.md`](plugin-architecture.md) §1).
+
+The implementation is still core Rust with full editor, index, and SHA-checked
+save access, so none of the three objections above were traded away. But the
+user can list it, switch it off, and configure it, which is what the original
+ask was actually about. And the plugin surface got the serious first customer
+that §2 said was the one good argument — before, not after, it had to carry a
+stranger's code.
 
 ---
 
@@ -131,12 +147,12 @@ Each phase is independently shippable, and the early ones pay for themselves eve
 |---|---|---|
 | **0** ✅ | `Status` enum replacing `checked: bool`; parse and write `[>] [<] [-] [o]`; `FORMAT_VERSION` → 3; Tasks panel and DQL `TASK` show the new states. Pure `packages/index` work, fully unit-testable. `set_status_content` is the single write path, which phase 3 reuses. | — |
 | **1** ✅ | Weekly and monthly logs (absorbs the weekly/monthly half of US 3.2/3.3): `weekly_note_template` / `monthly_note_template` settings, `dates::Period` arithmetic, palette commands, and the period switcher. Useful on its own to anyone who wants weekly notes. | 0 |
-| **2** ✅ | Rapid logging in the editor: a keyboard shortcut and slash commands to cycle an entry's signifier, and glyph rendering in `MarkdownArea`. Makes the syntax pleasant instead of merely possible. | 0 |
+| **2** ✅ | Rapid logging in the editor: the tokenizer accepts every signifier and carries the raw marker (the `ui` crate can't depend on `index`, so `task_status_name` mirrors `Status`); glyphs are drawn in CSS so the raw `[m]` survives the `innerText` round trip; **Ctrl/⌘-Enter** cycles an entry's state (Shift reverses) and promotes a plain bullet to a task; slash commands for each entry type. | 0 |
 | **3** ✅ | **The migration ritual.** Review over the closing period with Done / Migrate / Schedule / Drop (`MigrationReview` + `migrate_tasks`), destination written first. Not built on the existing move: the original line is re-marked, never cut. **The first recognisably-BuJo release.** | 1 |
 | **4** | **The running Index** — collections, threads, first-seen/last-touched, as a panel. | 0 |
 | **5** | Future Log: collect `📅`-dated and `[<]` entries beyond this month; migrate them into a month when it opens. | 3 |
 | **6** | Reflection: per-period statistics — completed vs migrated vs dropped, and repeat-migration nagging. The "review what got done" half of the original ask. | 3 |
-| **7** | *(Optional)* Expose the module through the plugin host, once one exists (§2). | plugin host |
+| **7** ✅ | Expose the module as a plugin — listed, toggled, and configured through the registry; its templates and settings scaffolded into `.oxidian/plugins/bujo/` on enable, with the pre-plugin config seeded in and kept as a fallback (§2). | — |
 
 Phases 0–1 are worth doing regardless of whether BuJo ever ships: richer task states improve the Tasks panel and Dataview immediately, and weekly/monthly notes are an outstanding user story in their own right.
 
@@ -186,16 +202,3 @@ Continuing the numbering in [`user-stories.md`](user-stories.md), which ends at 
 * **US 22.3:** As a user, I want a new project I start mentioning to show up in the Index by itself so that I never have to maintain the table of contents by hand.
 * **US 22.4:** As a user, I want to click a collection in the Index to see its entries so that the Index is a way in, not just a summary.
 * **US 22.5:** As a user, I want a per-period summary of what I completed, migrated, and dropped so that reflection is based on what actually happened.
-
----
-
-## 10. Phase 2: what actually shipped
-
-`index::tasks::Status` was already the one true signifier table (§3); phase 2's job was making the editor speak it instead of only reading `[ ]`/`[x]`. `packages/ui` took a dependency on `packages/index` for this — safe, since `index` has no Dioxus dependency, and it means the editor can never drift from what the parser and the migration review agree a signifier means.
-
-- **Tokenizer** (`ui::cm::markdown_area::tokenizer`): `TaskItem` now carries a `Status` instead of a `checked: bool`, recognizing all six markers (`Status::from_marker`). An unrecognized bracket char (`- [q] …`) still falls through to a plain `ListItem`, per the open-question-1 decision in §3.
-- **Rendering** (`component.rs`): the checkbox span carries `data-status` and `data-glyph`; CSS draws the existing box+check for open/done and the raw glyph (`› ‹ – ○`) as text for the other four, since there is no "checked" shading to apply to a signifier that isn't a boolean.
-- **Click-to-toggle stays Open⇄Done only.** Clicking a migrated/scheduled/dropped/event checkbox is a no-op — those don't have an obvious single click action, and reusing the old boolean toggle on them would have silently downgraded a migrated task back to a plain open one. The handler resolves the *actual* status of the nearest task token rather than trusting the click's cached checked-flag, so a stray click can't accidentally flip an unrelated task elsewhere in the note (see the comment at the `cb:` handler).
-- **Cycling** is `Ctrl`/`Cmd`+`Enter` on the current line: open → done → migrated → scheduled → dropped → open. Plain `Enter` was already spoken for (new line / continue list); this reuses the modifier-Enter slot the code already reserved. Event (`[o]`) isn't part of the cycle — it's a distinct entry type, reached via slash command, not a state a task passes through.
-- **Slash commands**: `Event`, `Migrated`, `Scheduled`, `Dropped` alongside the existing `Task`, inserting the matching bracket.
-- **Not changed:** the task-metadata menu's arm-on-space regex and the Enter-continuation regex both now accept any of the eight bracket chars (so migrated/dropped lines still continue as a new `[ ]` line on Enter), but no new UI was added for due dates/priority on non-open signifiers — that machinery was already signifier-agnostic.

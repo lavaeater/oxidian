@@ -16,13 +16,13 @@ const COMMANDS: &[(&str, &str, &str)] = &[
     ("Bullet",     "- Bullet list",       "- "),
     ("Numbered",   "1. Numbered list",    "1. "),
     ("Task",       "- [ ] Task item",     "- [ ] "),
-    // Bullet Journal signifiers (docs/bujo-roadmap.md §3) — same checkbox
-    // syntax as Task above, just a different marker char, so the line still
-    // reads as a normal checkbox to Obsidian or any plain-text reader.
-    ("Event",     "- [o] BuJo event",      "- [o] "),
-    ("Migrated",  "- [>] BuJo migrated",   "- [>] "),
-    ("Scheduled", "- [<] BuJo scheduled",  "- [<] "),
-    ("Dropped",   "- [-] BuJo dropped",    "- [-] "),
+    // Bullet Journal signifiers (docs/bujo-roadmap.md §3). Ctrl/⌘-Enter cycles
+    // these on an existing line; these are for starting one outright.
+    ("Event",      "- [o] Something that happened", "- [o] "),
+    ("Note",       "- A note, not a task",          "- "),
+    ("Migrated",   "- [>] Moved to the next log",   "- [>] "),
+    ("Scheduled",  "- [<] Deferred to a date",      "- [<] "),
+    ("Dropped",    "- [-] Consciously abandoned",   "- [-] "),
     ("Quote",      "> Blockquote",        "> "),
     ("Code block", "``` code fence",      "```\n\n```"),
     ("Table",      "Markdown table",      "| Col 1 | Col 2 |\n| --- | --- |\n| | |"),
