@@ -681,6 +681,12 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
 
     // Open the review for the period *before* the one being browsed: closing a
     // log is something you do to the one that just ended.
+    //
+    // For a Day review this walks every day from the start of the current
+    // week up to (but not including) the one being opened, not just the
+    // single day before it — skip the Wednesday review, open Thursday, and
+    // Monday and Tuesday's stragglers still need to be seen, not silently
+    // skipped. Week/Month reviews still cover just the one period before.
     let open_review = use_callback(move |(): ()| {
         let cfg = cfg_review.clone();
         let period = log_period();
@@ -689,32 +695,34 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                 let d = log_date.read().clone();
                 if d.is_empty() { crate::dates::today().await } else { d }
             };
-            let from_date = dates::shift_period(period, &base, -1);
+            let from_dates = review_from_dates(period, &base);
             let tmpls = templates_when_ready(templates, templates_ready).await;
             let store = plugin_store.peek().clone();
-            let Some((from_path, _)) = periodic_note(&cfg, &store, &tmpls, period, &from_date).await else {
-                load_error.set(Some(format!(
-                    "No {} log template configured — set one in Settings.",
-                    period.label().to_lowercase()
-                )));
-                return;
-            };
             let Some((to_path, to_body)) = periodic_note(&cfg, &store, &tmpls, period, &base).await else {
                 return;
             };
-            // Read the closing log from the vault, not the index: the index may
-            // be a refresh behind, and this is about to write to that file.
-            let entries: Vec<Task> = match vault::dispatch::read_file(&cfg, &from_path).await {
-                Ok(fc) => tasks::parse_file(&from_path, &fc.content)
-                    .into_iter()
-                    .filter(Task::is_open)
-                    .collect(),
-                // A log that was never written has nothing open in it, which is
-                // a legitimate (and common) answer, not an error.
-                Err(_) => Vec::new(),
-            };
+            let mut entries: Vec<Task> = Vec::new();
+            for from_date in &from_dates {
+                let Some((from_path, _)) = periodic_note(&cfg, &store, &tmpls, period, from_date).await else {
+                    load_error.set(Some(format!(
+                        "No {} log template configured — set one in Settings.",
+                        period.label().to_lowercase()
+                    )));
+                    return;
+                };
+                // Read the closing log from the vault, not the index: the index
+                // may be a refresh behind, and this is about to write to it.
+                match vault::dispatch::read_file(&cfg, &from_path).await {
+                    Ok(fc) => entries.extend(
+                        tasks::parse_file(&from_path, &fc.content).into_iter().filter(Task::is_open),
+                    ),
+                    // A log that was never written has nothing open in it,
+                    // which is a legitimate (and common) answer, not an error.
+                    Err(_) => {}
+                }
+            }
             review.set(Some(ReviewState {
-                from_label: dates::period_key(period, &from_date),
+                from_label: review_from_label(period, &from_dates),
                 to_label: dates::period_key(period, &base),
                 to_path,
                 to_body,
@@ -1649,6 +1657,48 @@ async fn templates_when_ready(
         crate::sleep_ms(50).await;
     }
     templates.peek().clone()
+}
+
+/// Which dates a migration review should pull open tasks from, for the period
+/// just before `base`.
+///
+/// For `Day` this is every day from the start of the current week up to (but
+/// not including) `base`, not just the single day before it — skip the
+/// Wednesday review, open Thursday, and Monday and Tuesday's stragglers still
+/// need to be seen, not silently carried past. `Week`/`Month` still cover just
+/// the one period before, since there's no equivalent "skipped a week inside
+/// a month" scenario the switcher exposes. Always returns at least one date.
+fn review_from_dates(period: dates::Period, base: &str) -> Vec<String> {
+    if period != dates::Period::Day {
+        return vec![dates::shift_period(period, base, -1)];
+    }
+    let week_start = dates::period_start(dates::Period::Week, base);
+    let mut d = week_start;
+    let mut days = Vec::new();
+    while d.as_str() < base {
+        days.push(d.clone());
+        d = dates::shift_days(&d, 1);
+    }
+    // Monday reviewing itself has no earlier day this week — fall back to the
+    // single day before, same as it always has.
+    if days.is_empty() {
+        days.push(dates::shift_days(base, -1));
+    }
+    days
+}
+
+/// The label shown for the source side of a review, e.g. `2026-08-25` for one
+/// day or `2026-08-24 – 2026-08-26` for a run of skipped days.
+fn review_from_label(period: dates::Period, from_dates: &[String]) -> String {
+    match from_dates {
+        [only] => dates::period_key(period, only),
+        [first, .., last] => format!(
+            "{} – {}",
+            dates::period_key(dates::Period::Day, first),
+            dates::period_key(dates::Period::Day, last)
+        ),
+        [] => unreachable!("review_from_dates never returns an empty list"),
+    }
 }
 
 /// Today's periodic note: the path it lives at, and the body to seed it with if
@@ -4305,5 +4355,52 @@ mod tests {
         assert_eq!(human_bytes(5 * 1024 * 1024), "5.0 MB");
         // Stops at the largest unit it knows rather than inventing one.
         assert!(human_bytes(u64::MAX).ends_with(" TB"));
+    }
+
+    // 2026-08-24 is a Monday, so 2026-08-27 (Thursday) has two skipped days
+    // (Tue, Wed) sitting behind the one directly before it.
+    #[test]
+    fn day_review_covers_every_skipped_day_this_week() {
+        assert_eq!(
+            review_from_dates(dates::Period::Day, "2026-08-27"),
+            vec!["2026-08-24", "2026-08-25", "2026-08-26"]
+        );
+    }
+
+    #[test]
+    fn day_review_the_morning_after_still_covers_just_that_day() {
+        assert_eq!(
+            review_from_dates(dates::Period::Day, "2026-08-25"),
+            vec!["2026-08-24"]
+        );
+    }
+
+    #[test]
+    fn day_review_on_monday_falls_back_to_the_prior_sunday() {
+        // Nothing earlier in *this* week to walk, so it reaches back across
+        // the week boundary rather than reviewing nothing.
+        assert_eq!(review_from_dates(dates::Period::Day, "2026-08-24"), vec!["2026-08-23"]);
+    }
+
+    #[test]
+    fn week_and_month_reviews_still_cover_only_the_one_period_before() {
+        assert_eq!(review_from_dates(dates::Period::Week, "2026-08-27"), vec!["2026-08-17"]);
+        assert_eq!(review_from_dates(dates::Period::Month, "2026-08-27"), vec!["2026-07-01"]);
+    }
+
+    #[test]
+    fn from_label_is_a_single_key_for_one_day_and_a_range_for_several() {
+        assert_eq!(
+            review_from_label(dates::Period::Day, &["2026-08-24".to_string()]),
+            "2026-08-24"
+        );
+        assert_eq!(
+            review_from_label(
+                dates::Period::Day,
+                &["2026-08-24".to_string(), "2026-08-25".to_string(), "2026-08-26".to_string()]
+            ),
+            "2026-08-24 – 2026-08-26"
+        );
+        assert_eq!(review_from_label(dates::Period::Week, &["2026-08-17".to_string()]), "2026-W34");
     }
 }
