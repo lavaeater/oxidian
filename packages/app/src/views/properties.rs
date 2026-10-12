@@ -25,9 +25,10 @@ pub fn PropertiesPanel(mut content: Signal<String>) -> Element {
                 button {
                     class: "props-add-btn",
                     onclick: move |_| {
-                        content.with_mut(|c| {
-                            *c = format!("---\n\n---\n\n{c}");
-                        });
+                        content
+                            .with_mut(|c| {
+                                *c = format!("---\n\n---\n\n{c}");
+                            });
                     },
                     "+ Add properties"
                 }
@@ -44,7 +45,13 @@ pub fn PropertiesPanel(mut content: Signal<String>) -> Element {
                 class: "props-header",
                 onclick: move |_| collapsed.with_mut(|c| *c = !*c),
                 span { class: "props-title", "Properties" }
-                span { class: "props-toggle", if collapsed() { "▸" } else { "▾" } }
+                span { class: "props-toggle",
+                    if collapsed() {
+                        "▸"
+                    } else {
+                        "▾"
+                    }
+                }
             }
             if !collapsed() {
                 div { class: "props-body",
@@ -79,7 +86,8 @@ pub fn PropertiesPanel(mut content: Signal<String>) -> Element {
                                         class: "props-del",
                                         title: "Remove property",
                                         onclick: move |_| {
-                                            let updated: Vec<_> = pairs_del.iter()
+                                            let updated: Vec<_> = pairs_del
+                                                .iter()
                                                 .filter(|(k, _)| k != &key)
                                                 .cloned()
                                                 .collect();
@@ -109,14 +117,19 @@ pub fn PropertiesPanel(mut content: Signal<String>) -> Element {
                                     value: "{new_val}",
                                     oninput: move |e| new_val.set(e.value()),
                                     onkeydown: move |e| {
-                                        if e.key() != Key::Enter { return; }
+                                        if e.key() != Key::Enter {
+                                            return;
+                                        }
                                         let k = new_key.read().trim().to_string();
                                         let v = new_val.read().trim().to_string();
-                                        if k.is_empty() { return; }
+                                        if k.is_empty() {
+                                            return;
+                                        }
                                         let mut p = pairs_add1.clone();
                                         p.push((k, v));
                                         content.with_mut(|c| *c = set_frontmatter(c, &p));
-                                        new_key.set(String::new()); new_val.set(String::new());
+                                        new_key.set(String::new());
+                                        new_val.set(String::new());
                                     },
                                 }
                                 button {
@@ -125,11 +138,14 @@ pub fn PropertiesPanel(mut content: Signal<String>) -> Element {
                                     onclick: move |_| {
                                         let k = new_key.read().trim().to_string();
                                         let v = new_val.read().trim().to_string();
-                                        if k.is_empty() { return; }
+                                        if k.is_empty() {
+                                            return;
+                                        }
                                         let mut p = pairs_add2.clone();
                                         p.push((k, v));
                                         content.with_mut(|c| *c = set_frontmatter(c, &p));
-                                        new_key.set(String::new()); new_val.set(String::new());
+                                        new_key.set(String::new());
+                                        new_val.set(String::new());
                                     },
                                     "+"
                                 }

@@ -29,7 +29,9 @@ fn renders_signal_derived_content() {
     fn app() -> Element {
         let count = use_signal(|| 41);
         let next = count() + 1;
-        rsx! { span { "count is {next}" } }
+        rsx! {
+            span { "count is {next}" }
+        }
     }
     assert!(render(app).contains("count is 42"));
 }

@@ -36,12 +36,8 @@ pub fn TaskMenu(on_select: EventHandler<String>, on_close: EventHandler<()>) -> 
     let mut view = use_signal(|| MenuView::Options);
 
     rsx! {
-        div {
-            class: "task-menu-overlay",
-            onclick: move |_| on_close(()),
-            div {
-                class: "task-menu",
-                onclick: move |e| e.stop_propagation(),
+        div { class: "task-menu-overlay", onclick: move |_| on_close(()),
+            div { class: "task-menu", onclick: move |e| e.stop_propagation(),
                 match view() {
                     MenuView::Options => rsx! {
                         div {

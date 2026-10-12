@@ -237,7 +237,9 @@ pub fn KanbanBoard(
     };
 
     if loading() {
-        return rsx! { div { class: "kanban-empty", "Loading board…" } };
+        return rsx! {
+            div { class: "kanban-empty", "Loading board…" }
+        };
     }
 
     let cols_now = columns();
@@ -250,7 +252,11 @@ pub fn KanbanBoard(
             if let Some(ref err) = error() {
                 div { class: "kanban-error",
                     "{err}"
-                    button { class: "kanban-error-close", onclick: move |_| error.set(None), "✕" }
+                    button {
+                        class: "kanban-error-close",
+                        onclick: move |_| error.set(None),
+                        "✕"
+                    }
                 }
             }
             div { class: "kanban-columns",
@@ -278,7 +284,9 @@ pub fn KanbanBoard(
                                 },
                                 on_add_card: move |title: String| {
                                     let title = title.trim().to_string();
-                                    if title.is_empty() { return; }
+                                    if title.is_empty() {
+                                        return;
+                                    }
                                     let cfg = cfg_add.clone();
                                     let bp = bp_add.clone();
                                     let path = join(&dir_add, &format!("{col_add}/{title}.md"));
@@ -287,15 +295,21 @@ pub fn KanbanBoard(
                                     error.set(None);
                                     spawn(async move {
                                         match vault::dispatch::create_file(
-                                            &cfg, &path, &format!("# {title}\n\n"),
-                                            &format!("Add {title} to {col_add}"),
-                                        ).await {
+                                                &cfg,
+                                                &path,
+                                                &format!("# {title}\n\n"),
+                                                &format!("Add {title} to {col_add}"),
+                                            )
+                                            .await
+                                        {
                                             Ok(_) => {
-                                                columns.with_mut(|cols| {
-                                                    if let Some(c) = cols.iter_mut().find(|(n, _)| *n == col_add) {
-                                                        c.1.push(title.clone());
-                                                    }
-                                                });
+                                                columns
+                                                    .with_mut(|cols| {
+                                                        if let Some(c) = cols.iter_mut().find(|(n, _)| *n == col_add) // Move the underlying note between column folders.
+                                                        {
+                                                            c.1.push(title.clone());
+                                                        }
+                                                    });
                                                 persist(cfg.clone(), bp).await;
                                                 if let Ok(mut l) = vault::dispatch::list_files(&cfg).await {
                                                     l.sort_by(|a, b| a.path.cmp(&b.path));
@@ -308,7 +322,9 @@ pub fn KanbanBoard(
                                     });
                                 },
                                 on_drop: move |(src_col, title): (String, String)| {
-                                    if src_col == col_drop { return; }
+                                    if src_col == col_drop {
+                                        return;
+                                    }
                                     let cfg = cfg_drop.clone();
                                     let bp = bp_drop.clone();
                                     let dir = dir_drop.clone();
@@ -319,21 +335,28 @@ pub fn KanbanBoard(
                                         let src_path = join(&dir, &format!("{src_col}/{title}.md"));
                                         let dst_path = join(&dir, &format!("{dst}/{title}.md"));
                                         console_log(&format!("[kanban] move {src_path} → {dst_path}"));
-                                        // Move the underlying note between column folders.
                                         match vault::dispatch::read_file(&cfg, &src_path).await {
                                             Ok(fc) => {
                                                 if let Err(e) = vault::dispatch::create_file(
-                                                    &cfg, &dst_path, &fc.content,
-                                                    &format!("Move {title} to {dst}"),
-                                                ).await {
+                                                        &cfg,
+                                                        &dst_path,
+                                                        &fc.content, // Update board ordering: remove from src, append to dst.
+                                                        &format!("Move {title} to {dst}"),
+                                                    )
+                                                    .await
+                                                {
                                                     error.set(Some(format!("Create failed: {e}")));
                                                     busy.set(false);
                                                     return;
                                                 }
                                                 if let Err(e) = vault::dispatch::delete_file(
-                                                    &cfg, &src_path, &fc.sha,
-                                                    &format!("Move {title} to {dst}"),
-                                                ).await {
+                                                        &cfg,
+                                                        &src_path,
+                                                        &fc.sha,
+                                                        &format!("Move {title} to {dst}"),
+                                                    )
+                                                    .await
+                                                {
                                                     error.set(Some(format!("Delete failed: {e}")));
                                                     busy.set(false);
                                                     return;
@@ -345,13 +368,17 @@ pub fn KanbanBoard(
                                                 return;
                                             }
                                         }
-                                        // Update board ordering: remove from src, append to dst.
-                                        columns.with_mut(|cols| {
-                                            if let Some(c) = cols.iter_mut().find(|(n, _)| *n == src_col) {
-                                                c.1.retain(|t| t != &title);
-                                            }
-                                            if let Some(c) = cols.iter_mut().find(|(n, _)| *n == dst) && !c.1.contains(&title) { c.1.push(title.clone()); }
-                                        });
+                                        columns
+                                            .with_mut(|cols| {
+                                                if let Some(c) = cols.iter_mut().find(|(n, _)| *n == src_col) {
+                                                    c.1.retain(|t| t != &title);
+                                                }
+                                                if let Some(c) = cols.iter_mut().find(|(n, _)| *n == dst)
+                                                    && !c.1.contains(&title)
+                                                {
+                                                    c.1.push(title.clone());
+                                                }
+                                            });
                                         persist(cfg.clone(), bp).await;
                                         if let Ok(mut l) = vault::dispatch::list_files(&cfg).await {
                                             l.sort_by(|a, b| a.path.cmp(&b.path));
@@ -388,7 +415,9 @@ pub fn KanbanBoard(
                                             }
                                             if e.key() == Key::Enter {
                                                 let name = new_col_name.read().trim().to_string();
-                                                if name.is_empty() { return; }
+                                                if name.is_empty() {
+                                                    return;
+                                                }
                                                 if columns.read().iter().any(|(n, _)| n == &name) {
                                                     error.set(Some(format!("Column \"{name}\" already exists.")));
                                                     return;
@@ -401,12 +430,14 @@ pub fn KanbanBoard(
                                                 error.set(None);
                                                 busy.set(true);
                                                 spawn(async move {
-                                                    // Add the column to the board model + a .gitkeep so
-                                                    // the (otherwise empty) folder exists in git.
                                                     columns.with_mut(|cols| cols.push((name.clone(), vec![])));
                                                     let _ = vault::dispatch::create_file(
-                                                        &cfg, &keep, "", &format!("Create column {name}"),
-                                                    ).await;
+                                                            &cfg,
+                                                            &keep,
+                                                            "",
+                                                            &format!("Create column {name}"),
+                                                        )
+                                                        .await;
                                                     persist(cfg.clone(), bp).await;
                                                     if let Ok(mut l) = vault::dispatch::list_files(&cfg).await {
                                                         l.sort_by(|a, b| a.path.cmp(&b.path));
@@ -451,7 +482,10 @@ fn KanbanColumn(
     rsx! {
         div {
             class: if drag_over() { "kanban-col kanban-col--over" } else { "kanban-col" },
-            ondragover: move |e| { e.prevent_default(); drag_over.set(true); },
+            ondragover: move |e| {
+                e.prevent_default();
+                drag_over.set(true);
+            },
             ondragleave: move |_| drag_over.set(false),
             ondrop: move |e| {
                 e.prevent_default();
@@ -459,8 +493,9 @@ fn KanbanColumn(
                 spawn(async move {
                     let data = crate::js::get_drag_data().await;
                     crate::js::clear_drag_data();
-                    if data.is_empty() { return; }
-                    // data = "src_col\x1ecard_title"
+                    if data.is_empty() {
+                        return;
+                    }
                     if let Some((src, title)) = data.split_once('\x1e') {
                         on_drop((src.to_string(), title.to_string()));
                     }
@@ -497,10 +532,15 @@ fn KanbanColumn(
                         value: "{new_card}",
                         oninput: move |e| new_card.set(e.value()),
                         onkeydown: move |e| {
-                            if e.key() == Key::Escape { adding.set(false); new_card.set(String::new()); }
+                            if e.key() == Key::Escape {
+                                adding.set(false);
+                                new_card.set(String::new());
+                            }
                             if e.key() == Key::Enter {
                                 let t = new_card.read().trim().to_string();
-                                if !t.is_empty() { on_add_card(t); }
+                                if !t.is_empty() {
+                                    on_add_card(t);
+                                }
                                 adding.set(false);
                                 new_card.set(String::new());
                             }

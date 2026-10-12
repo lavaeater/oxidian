@@ -63,15 +63,13 @@ pub fn SlashMenu(
         .take(5)
         .collect();
 
-    if cmds.is_empty() && tmpls.is_empty() { return rsx! { div {} }; }
+    if cmds.is_empty() && tmpls.is_empty() { return rsx! {
+        div {}
+    }; }
 
     rsx! {
-        div {
-            class: "slash-overlay",
-            onclick: move |_| on_close(()),
-            div {
-                class: "slash-menu",
-                onclick: move |e| e.stop_propagation(),
+        div { class: "slash-overlay", onclick: move |_| on_close(()),
+            div { class: "slash-menu", onclick: move |e| e.stop_propagation(),
                 for (name, desc, insert) in cmds {
                     div {
                         class: "slash-item",

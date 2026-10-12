@@ -758,11 +758,15 @@ pub fn MarkdownArea(
             onclick: move |_: Event<MouseData>| handle_click(),
             onfocus: move |e| {
                 is_focused.set(true);
-                if let Some(cb) = onfocus { cb(e); }
+                if let Some(cb) = onfocus {
+                    cb(e);
+                }
             },
             onblur: move |e| {
                 is_focused.set(false);
-                if let Some(cb) = onblur { cb(e); }
+                if let Some(cb) = onblur {
+                    cb(e);
+                }
             },
         }
     }

@@ -73,7 +73,6 @@ pub fn PluginsModal(
             div {
                 class: "plugins-modal",
                 onclick: move |e: Event<MouseData>| e.stop_propagation(),
-
                 if let Some(def) = open {
                     div { class: "move-picker-header",
                         button {
@@ -120,7 +119,12 @@ pub fn PluginsModal(
                                                 "aria-pressed": "{on}",
                                                 "aria-label": if on { "Disable {def.name}" } else { "Enable {def.name}" },
                                                 onclick: move |_| toggle.call(def),
-                                                if on { "On" } else { "Off" }
+                                                if on {
+                                                    "On"
+                                                }
+                                                }
+                                                    "Off"
+                                                }
                                             }
                                         }
                                     }
@@ -155,7 +159,9 @@ fn PluginSettingsForm(
 ) -> Element {
     let mut values = use_signal(|| initial.clone());
     let Some(def) = plugins::find(def_id) else {
-        return rsx! { div {} };
+        return rsx! {
+            div {}
+        };
     };
 
     rsx! {
@@ -170,7 +176,8 @@ fn PluginSettingsForm(
                     // `null` or `true` in a text box.
                     let text = current.as_str().unwrap_or("").to_string();
                     rsx! {
-                        label { key: "{key}", class: "settings-label", "{label}"
+                        label { key: "{key}", class: "settings-label",
+                            "{label}"
                             match field {
                                 Field::Bool { .. } => rsx! {
                                     input {
@@ -228,7 +235,11 @@ fn PluginSettingsForm(
                     class: "review-apply",
                     disabled: busy,
                     onclick: move |_| on_save(values.read().clone()),
-                    if busy { "Saving…" } else { "Save" }
+                    if busy {
+                        "Saving…"
+                    } else {
+                        "Save"
+                    }
                 }
             }
         }
