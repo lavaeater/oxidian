@@ -23,6 +23,9 @@ pub struct TemplateVars {
     pub date: String,
     pub day_name: String,
     pub week: String,
+    /// The ISO *week*-year, which differs from `year` at the turn of the year —
+    /// a weekly log path must use this one. See `dates::period_key`.
+    pub week_year: String,
     pub title: String,
     pub title_safe: String,
     pub current_dir: String,
@@ -39,8 +42,16 @@ impl TemplateVars {
             #[serde(default)] date: String,
             #[serde(rename = "dayName", default)] day_name: String,
             #[serde(default)] week: String,
+            #[serde(rename = "weekYear", default)] week_year: String,
         }
         let parts: DateParts = serde_json::from_str(json).unwrap_or_default();
+        // Falling back to the calendar year keeps older callers (and the JS
+        // `date_vars()` shim) working: the two agree except at year's end.
+        let week_year = if parts.week_year.is_empty() {
+            parts.year.clone()
+        } else {
+            parts.week_year.clone()
+        };
         let title_safe = title
             .chars()
             .map(|c| if c.is_alphanumeric() || c == '-' { c.to_ascii_lowercase() } else { '-' })
@@ -57,6 +68,7 @@ impl TemplateVars {
             date: parts.date,
             day_name: parts.day_name,
             week: parts.week,
+            week_year,
             title: title.to_string(),
             title_safe,
             current_dir: current_dir.to_string(),
@@ -76,6 +88,7 @@ pub fn substitute_vars(content: &str, v: &TemplateVars) -> String {
         .replace("${OXID_DATE_DATE}",       &v.date)
         .replace("${OXID_DATE_DAY_NAME}",   &v.day_name)
         .replace("${OXID_DATE_WEEK}",       &v.week)
+        .replace("${OXID_DATE_WEEK_YEAR}",  &v.week_year)
         // Oxidian path/title vars (brace and bare forms)
         .replace("${OXID_TITLE}",           &v.title)
         .replace("${OXID_TITLE_SAFE}",      &v.title_safe)
@@ -205,6 +218,7 @@ mod tests {
             date: "2026-07-21".into(),
             day_name: "Tuesday".into(),
             week: "30".into(),
+            week_year: "2026".into(),
             title: "My Note".into(),
             title_safe: "my-note".into(),
             current_dir: "notes".into(),

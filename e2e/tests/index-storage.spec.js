@@ -8,6 +8,8 @@ const { test, expect } = require("@playwright/test");
 const { openFile, seedConfig, mockGitHub } = require("./helpers");
 
 const INDEX_KEY = "oxidian_index_v1";
+/** Tracks `index::FORMAT_VERSION` in packages/index/src/lib.rs — bump together. */
+const FORMAT_VERSION = 3;
 
 /** Read from one of the app's IndexedDB stores, in the page. */
 function readStore(page, store) {
@@ -79,7 +81,11 @@ test("a reload reads the stored index instead of the vault", async ({ page }) =>
   let reads = 0;
   await mockGitHub(page, VAULT);
   await page.route(/api\.github\.com\/repos\/[^/]+\/[^/]+\/contents\/(.+)/, (route, request) => {
-    if (request.method() === "GET") reads++;
+    // Only notes count. Plugin state (`.oxidian/plugins.json` and each
+    // plugin's settings) is read once per boot by design — it lives in the
+    // vault, not the index, and is not what this test is about.
+    const path = new URL(request.url()).pathname;
+    if (request.method() === "GET" && !path.includes("/contents/.oxidian/")) reads++;
     route.fallback();
   });
   await seedConfig(page);
@@ -127,7 +133,11 @@ test("an index left as a single blob by an older build is adopted, not rebuilt",
   // blob must cost *zero* reads, where starting cold re-downloads the vault.
   let reads = 0;
   await page.route(/api\.github\.com\/repos\/[^/]+\/[^/]+\/contents\/(.+)/, (route, request) => {
-    if (request.method() === "GET") reads++;
+    // Only notes count. Plugin state (`.oxidian/plugins.json` and each
+    // plugin's settings) is read once per boot by design — it lives in the
+    // vault, not the index, and is not what this test is about.
+    const path = new URL(request.url()).pathname;
+    if (request.method() === "GET" && !path.includes("/contents/.oxidian/")) reads++;
     route.fallback();
   });
 
@@ -138,7 +148,7 @@ test("an index left as a single blob by an older build is adopted, not rebuilt",
   // blob, with no per-note records. Built from what the app itself wrote, so
   // the payload is faithful rather than hand-rolled.
   await page.evaluate(
-    (key) =>
+    ({ key, version }) =>
       new Promise((resolve) => {
         const req = indexedDB.open("oxidian", 2);
         req.onsuccess = () => {
@@ -152,13 +162,16 @@ test("an index left as a single blob by an older build is adopted, not rebuilt",
             keys.result.forEach((k, i) => (pages[k] = JSON.parse(vals.result[i])));
             const t = db.transaction(["pages", "blobs"], "readwrite");
             t.objectStore("pages").clear();
-            t.objectStore("blobs").put(JSON.stringify({ version: 2, pages }), key);
+            // Must track `index::FORMAT_VERSION` (packages/index/src/lib.rs):
+            // the point of this test is a blob of the *current* format written
+            // by a previous build, not an outdated one, which is discarded.
+            t.objectStore("blobs").put(JSON.stringify({ version, pages }), key);
             t.oncomplete = () => { db.close(); resolve(); };
           };
         };
         req.onerror = () => resolve();
       }),
-    INDEX_KEY
+    { key: INDEX_KEY, version: FORMAT_VERSION }
   );
 
   const readsBefore = reads;
@@ -184,7 +197,11 @@ test("Rebuild discards the index and reads the vault again", async ({ page }) =>
   // assumed — the note count alone would be identical before and after.
   let reads = 0;
   await page.route(/api\.github\.com\/repos\/[^/]+\/[^/]+\/contents\/(.+)/, (route, request) => {
-    if (request.method() === "GET") reads++;
+    // Only notes count. Plugin state (`.oxidian/plugins.json` and each
+    // plugin's settings) is read once per boot by design — it lives in the
+    // vault, not the index, and is not what this test is about.
+    const path = new URL(request.url()).pathname;
+    if (request.method() === "GET" && !path.includes("/contents/.oxidian/")) reads++;
     route.fallback();
   });
 

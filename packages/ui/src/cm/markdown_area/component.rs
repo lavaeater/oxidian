@@ -3,7 +3,7 @@ use std::fmt::Write as _;
 use dioxus::prelude::*;
 use dioxus_use_js::use_js;
 
-use super::tokenizer::{Token, TokenKind, tokenize, tokenize_line};
+use super::tokenizer::{Token, TokenKind, task_status_name, tokenize, tokenize_line};
 
 // ── Variant ───────────────────────────────────────────────────────────────────
 
@@ -360,13 +360,17 @@ fn push_token_html(
         }
 
         TokenKind::TaskItem {
-            checked,
+            marker: task_marker,
             depth,
             bracket_pos,
         } => {
             let prefix_len = bracket_pos - token.range.start;
             let indent = format!("{}em", f32::from(*depth) * 1.5);
-            let bracket_text = if *checked { "[x]" } else { "[ ]" };
+            // The raw `[m]` stays in the DOM — `innerText` is the document
+            // model, so removing it would lose the character on the next
+            // round trip. The stylesheet hides it and draws the signifier.
+            let checked = matches!(task_marker, 'x' | 'X');
+            let status = task_status_name(*task_marker).unwrap_or("open");
             let _ = write!(
                 out,
                 "<span class=\"md-token md-task-item\" style=\"padding-left:{indent}\">"
@@ -375,7 +379,8 @@ fn push_token_html(
             let _ = write!(
                 out,
                 "<span class=\"md-task-checkbox\" \
-                 data-pos=\"{bracket_pos}\" data-checked=\"{checked}\">{bracket_text} </span>",
+                 data-pos=\"{bracket_pos}\" data-checked=\"{checked}\" \
+                 data-status=\"{status}\">[{task_marker}] </span>",
             );
             push_inline_html(source, token.content_range.clone(), links, out);
             out.push_str("</span>");
@@ -704,6 +709,10 @@ pub fn MarkdownArea(
                 && let Ok(hint_pos) = pos_str.parse::<usize>()
             {
                 let was_checked = was_checked_str == "1";
+                // Clicking means "done", whatever the entry was — unless it
+                // already is, which means "not after all". Same rule as the
+                // Tasks panel (`index::tasks::toggled_content`), so a migrated
+                // or dropped entry can be completed from either place.
                 let new_bracket = if was_checked { "[ ]" } else { "[x]" };
                 let mut src = content.read().clone();
                 // Re-tokenize current content to find the actual bracket
@@ -714,10 +723,10 @@ pub fn MarkdownArea(
                     .iter()
                     .filter_map(|t| match &t.kind {
                         TokenKind::TaskItem {
-                            checked,
+                            marker,
                             bracket_pos,
                             ..
-                        } if *checked == was_checked => Some(*bracket_pos),
+                        } if matches!(marker, 'x' | 'X') == was_checked => Some(*bracket_pos),
                         _ => None,
                     })
                     .min_by_key(|&p| p.abs_diff(hint_pos));
@@ -907,6 +916,24 @@ mod tests {
         assert!(checked.contains("data-checked=\"true\""));
         let unchecked = html("- [ ] todo");
         assert!(unchecked.contains("data-checked=\"false\""));
+    }
+
+    #[test]
+    fn signifiers_carry_a_status_and_keep_their_raw_marker() {
+        for (src, status, marker) in [
+            ("- [>] moved", "migrated", "[>]"),
+            ("- [<] later", "scheduled", "[<]"),
+            ("- [-] dropped", "dropped", "[-]"),
+            ("- [o] happened", "event", "[o]"),
+        ] {
+            let out = html(src);
+            assert!(out.contains(&format!("data-status=\"{status}\"")), "{src}: {out}");
+            // The raw bracket text must survive: `innerText` is the document
+            // model, and the glyph is drawn by CSS on top of it.
+            assert!(out.contains(marker), "{src}: {out}");
+            // None of these is "done" — the editor must not flatten them.
+            assert!(out.contains("data-checked=\"false\""), "{src}: {out}");
+        }
     }
 
     // ── Rendered blocks ──────────────────────────────────────────────────────

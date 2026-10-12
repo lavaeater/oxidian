@@ -542,6 +542,37 @@ kbd {
 .tb-sep { width: 1px; height: 16px; background: var(--border); margin: 0 3px; }
 
 /* ── Panel tabs ── */
+/* Period switcher: Day / Week / Month, with a step either side. Sits above the
+   panel tabs because moving between scales is a journal action, not a view. */
+.period-switcher {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.period-btn,
+.period-step {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 0.78rem;
+  padding: 3px 0;
+  cursor: pointer;
+}
+.period-btn { flex: 1; }
+.period-step { width: 26px; font-size: 0.95rem; line-height: 1; }
+.period-btn:hover,
+.period-step:hover { background: var(--bg3); color: var(--text); }
+.period-btn--active {
+  background: var(--bg3);
+  border-color: var(--border);
+  color: var(--text);
+}
+
 .panel-tabs {
   display: flex;
   border-bottom: 1px solid var(--border);
@@ -1257,6 +1288,105 @@ kbd {
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
   overflow: hidden;
 }
+/* Migration review — one row per unfinished entry, four ways out. Shares the
+   move-picker's backdrop and header. */
+.review-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(560px, 100%);
+  max-height: min(80vh, 640px);
+  border-radius: 8px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+}
+.review-list { overflow-y: auto; flex: 1; }
+.review-empty,
+.review-hint {
+  padding: 14px 12px;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+.review-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+/* A decided row recedes, so what is left to do stays obvious. */
+.review-row--decided { opacity: 0.55; }
+.review-entry { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 6px; }
+.review-text {
+  font-size: 0.88rem;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.review-due { font-size: 0.75rem; color: var(--text-muted); white-space: nowrap; }
+.review-actions { display: flex; gap: 3px; flex-shrink: 0; }
+.review-btn {
+  width: 28px;
+  height: 26px;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.review-btn:hover { color: var(--text); border-color: var(--accent); }
+.review-btn--on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.review-date {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+.review-date input {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: inherit;
+  padding: 4px 6px;
+}
+.review-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+}
+.review-count { flex: 1; font-size: 0.78rem; color: var(--text-muted); }
+.review-cancel,
+.review-apply {
+  border-radius: 5px;
+  padding: 6px 12px;
+  font-family: inherit;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+.review-cancel { background: none; border: 1px solid var(--border); color: var(--text-muted); }
+.review-apply { background: var(--accent); border: 1px solid var(--accent); color: #fff; }
+.review-apply:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.period-review {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 0.78rem;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+.period-review:hover { background: var(--bg3); color: var(--text); }
+
 .move-picker-header {
   padding: 10px 12px;
   font-size: 0.82rem;
@@ -1320,6 +1450,9 @@ kbd {
 .task-row:hover { background: var(--bg3); }
 .task-row--done { color: var(--text-muted); }
 .task-row--done .task-text { text-decoration: line-through; }
+/* Migrated, scheduled, dropped, events: resolved, so dimmed — but not struck
+   through. You are meant to be able to read your own churn back. */
+.task-row--closed { color: var(--text-muted); }
 
 .task-check {
   background: none;
@@ -1437,3 +1570,89 @@ kbd {
 .storage-rebuild:hover:not(:disabled) { color: var(--text); border-color: var(--accent); }
 .storage-rebuild:disabled { opacity: 0.5; cursor: default; }
 .storage-detail { margin-top: 0.2em; opacity: 0.8; }
+
+/* ── Plugins panel ─────────────────────────────────────────────────────────── */
+
+.plugins-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(560px, 100%);
+  max-height: min(80vh, 640px);
+  border-radius: 8px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+}
+.plugins-back {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 1.1rem;
+  cursor: pointer;
+  padding: 0 8px 0 0;
+}
+.plugins-back:hover { color: var(--text); }
+.plugins-list { overflow-y: auto; flex: 1; }
+.plugin-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.plugin-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.plugin-name { font-size: 0.92rem; font-weight: 600; color: var(--text); }
+.plugin-desc { font-size: 0.78rem; color: var(--text-muted); line-height: 1.45; }
+.plugin-path {
+  font-family: ui-monospace, monospace;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  opacity: 0.7;
+}
+.plugin-actions { display: flex; gap: 6px; flex-shrink: 0; align-items: center; }
+.plugin-configure,
+.plugin-toggle {
+  font-size: 0.78rem;
+  padding: 4px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: none;
+  color: var(--text-muted);
+}
+.plugin-configure:hover:not(:disabled),
+.plugin-toggle:hover:not(:disabled) { color: var(--text); border-color: var(--accent); }
+.plugin-configure:disabled { opacity: 0.4; cursor: not-allowed; }
+.plugin-toggle { min-width: 46px; }
+.plugin-toggle--on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.plugin-toggle--on:hover { color: #fff; }
+/* On a phone the description needs the full width, so the switch moves under
+   it rather than squeezing the text into a narrow column. */
+@media (max-width: 600px) {
+  .plugin-row { flex-direction: column; gap: 10px; }
+  .plugin-actions { align-self: flex-end; }
+}
+.plugins-hint {
+  padding: 10px 14px;
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+.plugins-form { overflow-y: auto; flex: 1; padding: 12px 14px; }
+.plugins-form .settings-label {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin-bottom: 5px;
+}
+/* The label wraps its input (as on the connect screen), so the control needs
+   its own line and the full width to show a long vault path. */
+.plugins-form .settings-input {
+  display: block;
+  width: 100%;
+  margin-top: 5px;
+}
+.plugins-form input[type="checkbox"] { margin-top: 6px; }
+.plugins-form .settings-sub { margin: 0 0 16px; }

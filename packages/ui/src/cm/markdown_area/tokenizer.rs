@@ -25,9 +25,14 @@ pub enum TokenKind {
     Blockquote,
     /// `- item` / `* item` / `1. item` — `content_range` starts after the marker.
     ListItem { ordered: bool, depth: u8 },
-    /// `- [ ] item` / `- [x] item` — `content_range` is the task text.
-    /// `bracket_pos` is the source byte position of the `[` character.
-    TaskItem { checked: bool, depth: u8, bracket_pos: usize },
+    /// `- [ ] item` / `- [x] item` / `- [>] item` … — `content_range` is the
+    /// task text, `bracket_pos` the source byte position of the `[`.
+    ///
+    /// `marker` is the raw character between the brackets rather than a status
+    /// enum: the Bullet Journal signifiers live in `index::tasks::Status`, and
+    /// this crate cannot depend on `index`. Keep [`task_status_name`] in step
+    /// with that enum.
+    TaskItem { marker: char, depth: u8, bracket_pos: usize },
     /// `---` / `***` / `___`
     HorizontalRule,
     /// Opening or closing ` ``` ` fence line. `lang_range` is set on the
@@ -260,8 +265,24 @@ fn detect_table_row(line: &str, pos: usize, line_end: usize) -> Option<Token> {
 
 // ── Inline tokenizer ─────────────────────────────────────────────────────────
 
-/// Detects `- [ ] text` / `- [x] text` lines (unordered list items only).
-/// Must be called before `detect_list_item` since it's more specific.
+/// The CSS-facing name for a checkbox marker, mirroring `index::tasks::Status`.
+/// `None` for anything unrecognised, which is what keeps `- [q] x` an ordinary
+/// list item here and a non-task there.
+pub fn task_status_name(marker: char) -> Option<&'static str> {
+    match marker {
+        ' ' => Some("open"),
+        'x' | 'X' => Some("done"),
+        '>' => Some("migrated"),
+        '<' => Some("scheduled"),
+        '-' => Some("dropped"),
+        'o' | 'O' => Some("event"),
+        _ => None,
+    }
+}
+
+/// Detects `- [ ] text` / `- [x] text` / `- [>] text` … lines (unordered list
+/// items only). Must be called before `detect_list_item` since it's more
+/// specific.
 fn detect_task_item(line: &str, pos: usize, line_end: usize) -> Option<Token> {
     let (ordered, depth, content_start) = detect_list_item(line, pos)?;
     if ordered {
@@ -271,21 +292,26 @@ fn detect_task_item(line: &str, pos: usize, line_end: usize) -> Option<Token> {
     let content_offset = content_start - pos;
     let content = &line[content_offset..];
 
-    let (checked, text_start) = if content.starts_with("[ ] ") {
-        (false, content_start + 4)
-    } else if content.starts_with("[x] ") || content.starts_with("[X] ") {
-        (true, content_start + 4)
-    } else if content == "[ ]" {
-        (false, content_start + 3)
-    } else if content == "[x]" || content == "[X]" {
-        (true, content_start + 3)
-    } else {
+    // `[m]` optionally followed by a space. Every accepted marker is ASCII, so
+    // the bracket run is exactly three bytes.
+    let mut chars = content.chars();
+    if chars.next() != Some('[') {
         return None;
+    }
+    let marker = chars.next()?;
+    task_status_name(marker)?;
+    if chars.next() != Some(']') {
+        return None;
+    }
+    let text_start = match chars.next() {
+        Some(' ') => content_start + 4,
+        None => content_start + 3,
+        Some(_) => return None,
     };
 
     Some(Token {
         kind: TokenKind::TaskItem {
-            checked,
+            marker,
             depth,
             bracket_pos: content_start,
         },
@@ -728,7 +754,7 @@ mod tests {
         let src = "- [ ] buy milk";
         let tokens = tokenize(src);
         assert_eq!(tokens.len(), 1);
-        let TokenKind::TaskItem { checked: false, depth: 0, bracket_pos } = tokens[0].kind else {
+        let TokenKind::TaskItem { marker: ' ', depth: 0, bracket_pos } = tokens[0].kind else {
             panic!("expected unchecked TaskItem");
         };
         assert_eq!(&src[bracket_pos..bracket_pos + 3], "[ ]");
@@ -741,7 +767,7 @@ mod tests {
         let src = "- [x] done";
         let tokens = tokenize(src);
         assert_eq!(tokens.len(), 1);
-        assert!(matches!(tokens[0].kind, TokenKind::TaskItem { checked: true, .. }));
+        assert!(matches!(tokens[0].kind, TokenKind::TaskItem { marker: 'x', .. }));
         assert_eq!(tokens[0].display(src), "done");
     }
 
@@ -750,7 +776,39 @@ mod tests {
         let src = "  - [ ] nested";
         let tokens = tokenize(src);
         assert_eq!(tokens.len(), 1);
-        assert!(matches!(tokens[0].kind, TokenKind::TaskItem { checked: false, depth: 1, .. }));
+        assert!(matches!(tokens[0].kind, TokenKind::TaskItem { marker: ' ', depth: 1, .. }));
+    }
+
+    #[test]
+    fn task_item_accepts_every_bullet_journal_signifier() {
+        // Mirrors `index::tasks::Status`; the editor has to render what that
+        // parser accepts, or a migrated entry looks like plain text here.
+        for (src, marker, status) in [
+            ("- [ ] a", ' ', "open"),
+            ("- [x] a", 'x', "done"),
+            ("- [>] a", '>', "migrated"),
+            ("- [<] a", '<', "scheduled"),
+            ("- [-] a", '-', "dropped"),
+            ("- [o] a", 'o', "event"),
+        ] {
+            let tokens = tokenize(src);
+            assert_eq!(tokens.len(), 1, "{src}");
+            let TokenKind::TaskItem { marker: got, .. } = tokens[0].kind else {
+                panic!("expected TaskItem for {src}");
+            };
+            assert_eq!(got, marker, "{src}");
+            assert_eq!(task_status_name(got), Some(status), "{src}");
+            assert_eq!(tokens[0].display(src), "a", "{src}");
+        }
+    }
+
+    #[test]
+    fn an_unknown_marker_is_a_plain_list_item_not_a_task() {
+        // `- [-] x` is a dropped entry, but `- [q] x` is just a bullet whose
+        // text happens to start with a bracket. Same rule as the index parser.
+        let tokens = tokenize("- [q] mystery");
+        assert!(matches!(tokens[0].kind, TokenKind::ListItem { .. }));
+        assert_eq!(task_status_name('q'), None);
     }
 
     #[test]

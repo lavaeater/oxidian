@@ -44,7 +44,12 @@ pub use tasks::{Priority, Task};
 // written by an older build lacks it and is discarded rather than half-usable:
 // `from_json` returns an empty index on a version mismatch and the next refresh
 // rebuilds it.
-pub const FORMAT_VERSION: u32 = 2;
+// 3 replaces `Task::checked` (a bool) with `Task::status`, so an entry can be
+// migrated or dropped rather than only done — the Bullet Journal signifiers,
+// see `docs/bujo-roadmap.md` §3. Records written by an older build would
+// deserialise into the wrong shape, so they are discarded like any other
+// version bump.
+pub const FORMAT_VERSION: u32 = 3;
 
 /// What an [`Index::apply`] changed, so the caller can persist just that.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]

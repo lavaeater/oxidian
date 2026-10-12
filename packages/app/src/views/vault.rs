@@ -2,10 +2,10 @@ use crate::icons::{
     IcoBookmark, IcoBookmarkCheck, IcoCalendar, IcoChevronDown, IcoChevronLeft, IcoChevronRight,
     IcoDownload, IcoFilePlus, IcoFileText, IcoFolderClosed, IcoFolderKanban, IcoFolderOpen,
     IcoFolderPlus, IcoFolderTree, IcoLayoutList, IcoLink2, IcoListChecks, IcoNetwork, IcoSearch,
-    IcoSettings, IcoTrash2, IcoX,
+    IcoPlug, IcoSettings, IcoTrash2, IcoX,
 };
 use index::Index;
-use index::tasks::{self, Task};
+use index::tasks::{self, Status, Task};
 use dioxus::prelude::*;
 use ui::{MarkdownArea, MarkdownAreaVariant};
 use vault::{FileMeta, GithubConfig};
@@ -13,6 +13,7 @@ use vault::{FileMeta, GithubConfig};
 use super::graph::GraphView;
 use super::kanban::KanbanBoard;
 use super::properties::PropertiesPanel;
+use super::plugins::PluginsModal;
 use super::slash::SlashMenu;
 use super::task_menu::TaskMenu;
 use super::toolbar::FormattingToolbar;
@@ -20,6 +21,7 @@ use crate::console_log;
 use crate::dates;
 use crate::export;
 use crate::js;
+use crate::plugins::{self, PluginStore};
 use crate::state;
 use crate::template::{self, TemplateMeta};
 use crate::wikilink_index::WikiLinkIndex;
@@ -31,13 +33,35 @@ use crate::wikilink_index::WikiLinkIndex;
 async fn apply_template(
     meta: &TemplateMeta,
     cfg: &GithubConfig,
-    mut files: Signal<Vec<FileMeta>>,
+    files: Signal<Vec<FileMeta>>,
     // Open mailbox of the target pane: setting it makes that pane open the path.
+    open: Signal<Option<String>>,
+    load_error: Signal<Option<String>>,
+    current_dir: &str,
+) {
+    apply_template_on(meta, cfg, files, open, load_error, current_dir, "").await;
+}
+
+/// [`apply_template`] with the date variables pinned to `date` (`YYYY-MM-DD`),
+/// or today when it is empty.
+///
+/// The weekly and monthly logs need this: you plan next week during *this* one,
+/// so the note being created is routinely for a period that doesn't contain
+/// today, and `${OXID_DATE_*}` has to resolve accordingly.
+async fn apply_template_on(
+    meta: &TemplateMeta,
+    cfg: &GithubConfig,
+    mut files: Signal<Vec<FileMeta>>,
     mut open: Signal<Option<String>>,
     mut load_error: Signal<Option<String>>,
     current_dir: &str,
+    date: &str,
 ) {
-    let date_json = crate::dates::date_vars_json().await;
+    let date_json = if date.is_empty() {
+        crate::dates::date_vars_json().await
+    } else {
+        crate::dates::date_vars_json_for(date)
+    };
     let vars = template::TemplateVars::from_json(&date_json, "", current_dir);
 
     if vars.year.is_empty() || vars.month.is_empty() || vars.date.is_empty() {
@@ -226,6 +250,8 @@ enum Cmd {
     NewFile,
     NewFolder,
     DailyNote,
+    WeeklyLog,
+    MonthlyLog,
     ExportHtml,
     ToggleSidebar,
     ToggleSplit,
@@ -236,6 +262,7 @@ enum Cmd {
     GoBookmarks,
     GoKanban,
     GoTasks,
+    Plugins,
 }
 
 impl Cmd {
@@ -244,6 +271,8 @@ impl Cmd {
         Cmd::NewFile,
         Cmd::NewFolder,
         Cmd::DailyNote,
+        Cmd::WeeklyLog,
+        Cmd::MonthlyLog,
         Cmd::ExportHtml,
         Cmd::ToggleSidebar,
         Cmd::ToggleSplit,
@@ -254,6 +283,7 @@ impl Cmd {
         Cmd::GoBookmarks,
         Cmd::GoKanban,
         Cmd::GoTasks,
+        Cmd::Plugins,
     ];
 
     fn title(self) -> &'static str {
@@ -262,6 +292,8 @@ impl Cmd {
             Cmd::NewFile => "New note",
             Cmd::NewFolder => "New folder",
             Cmd::DailyNote => "Open today's daily note",
+            Cmd::WeeklyLog => "Open this week's log",
+            Cmd::MonthlyLog => "Open this month's log",
             Cmd::ExportHtml => "Export current note as HTML",
             Cmd::ToggleSidebar => "Toggle sidebar",
             Cmd::ToggleSplit => "Toggle editor split",
@@ -272,6 +304,7 @@ impl Cmd {
             Cmd::GoBookmarks => "Show: Bookmarks",
             Cmd::GoKanban => "Show: Kanban",
             Cmd::GoTasks => "Show: Tasks",
+            Cmd::Plugins => "Manage plugins",
         }
     }
 
@@ -290,6 +323,8 @@ impl Cmd {
             Cmd::NewFile => "create page",
             Cmd::NewFolder => "create directory",
             Cmd::DailyNote => "today journal calendar",
+            Cmd::WeeklyLog => "week weekly log journal bujo periodic",
+            Cmd::MonthlyLog => "month monthly log journal bujo periodic",
             Cmd::ExportHtml => "download save html",
             Cmd::ToggleSidebar => "hide show panel",
             Cmd::ToggleSplit => "pane two columns",
@@ -300,6 +335,7 @@ impl Cmd {
             Cmd::GoBookmarks => "saved pinned",
             Cmd::GoKanban => "board",
             Cmd::GoTasks => "todo checklist due priority overview",
+            Cmd::Plugins => "plugin extension enable disable configure settings bujo",
         }
     }
 }
@@ -443,6 +479,17 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
     // what "Rebuild" in the storage footer does.
     let mut index_gen = use_signal(|| 0u32);
     let mut templates: Signal<Vec<TemplateMeta>> = use_signal(Vec::new);
+    // Has the template scan actually run? `templates` starts empty and stays
+    // empty until the vault listing arrives, so without this an early reader
+    // cannot tell "no templates configured" from "not scanned yet" — and would
+    // silently fall back to a root-level daily note instead of the configured
+    // journal folder. See `templates_when_ready`.
+    let mut templates_ready = use_signal(|| false);
+    // Which plugins are installed, on, and how they are configured. Lives in
+    // the vault (`.oxidian/plugins.json`), so it arrives asynchronously like
+    // the file list — `PluginStore::loaded` tells "none" from "not yet".
+    let mut plugin_store = use_signal(PluginStore::default);
+    let mut show_plugins = use_signal(|| false);
     let mut board_root: Signal<String> = use_signal(String::new);
     let mut board_input: Signal<String> = use_signal(String::new);
     // The "current" folder: set when a folder is clicked or derived from the
@@ -507,16 +554,24 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
     let cfg_tmpl = config.clone();
     use_effect(move || {
         let cfg = cfg_tmpl.clone();
+        // An empty `files` means one of two very different things, and only the
+        // listing flag tells them apart: a vault with no templates, or a vault
+        // we haven't listed yet.
+        let listing_done = !loading_list();
         let prefix = format!("{}/", cfg.templates_dir);
         let paths: Vec<String> = files
             .read()
             .iter()
-            .filter(|f| f.path.starts_with(&prefix))
+            // Plugins keep their templates in their own folder, so the scan
+            // has to look there too or a plugin's template would be installed
+            // and then never found by the resolver that needs it.
+            .filter(|f| f.path.starts_with(&prefix) || plugins::is_plugin_template(&f.path))
             .map(|f| f.path.clone())
             .collect();
         spawn(async move {
             if paths.is_empty() {
                 templates.set(vec![]);
+                templates_ready.set(listing_done);
                 return;
             }
             let contents = vault::dispatch::read_many(&cfg, &paths).await;
@@ -526,6 +581,16 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                     .map(|(p, c)| template::parse_template(p, c))
                     .collect(),
             );
+            templates_ready.set(true);
+        });
+    });
+
+    // Load plugin state once on mount.
+    let cfg_plugins = config.clone();
+    use_effect(move || {
+        let cfg = cfg_plugins.clone();
+        spawn(async move {
+            plugin_store.set(PluginStore::load(&cfg).await);
         });
     });
 
@@ -579,26 +644,171 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
     let cfg_tmpl_run = config.clone();
     let cfg_link = config.clone();
 
+    // Which log scale the switcher is on, and the date it is browsing. The date
+    // is remembered so stepping is cumulative — ‹ ‹ ‹ walks back three weeks
+    // rather than bouncing off "last week" each time. Empty until the first
+    // step, which means "today".
+    let mut log_period = use_signal(|| dates::Period::Day);
+    let mut log_date = use_signal(String::new);
+    use_effect(move || {
+        spawn(async move {
+            if log_date.read().is_empty() {
+                log_date.set(crate::dates::today().await);
+            }
+        });
+    });
+    // The switcher is only meaningful once there is somewhere for a week or a
+    // month to go; with neither configured it would be three buttons that
+    // report an error.
+    // ...and only while the Bullet Journal plugin is on, since it is the thing
+    // that gives a week or a month somewhere to go.
+    let has_periodic_logs = {
+        let store = plugin_store.read();
+        plugins::bujo::active(&store, &config)
+            && [dates::Period::Week, dates::Period::Month].iter().any(|p| {
+                !plugins::bujo::template_for(&store, &config, *p).is_empty()
+            })
+    };
+
+    // ── Migration review ──────────────────────────────────────────────────────
+    // `None` = closed. Open holds the closing period's open entries plus the
+    // labels and paths the writes need, resolved once when the review opens so
+    // the modal itself stays a pure function of what it was given.
+    let mut review = use_signal(|| None::<ReviewState>);
+    let mut review_busy = use_signal(|| false);
+    let cfg_review = config.clone();
+    let cfg_review_apply = config.clone();
+
+    // Open the review for the period *before* the one being browsed: closing a
+    // log is something you do to the one that just ended.
+    //
+    // For a Day review this walks every day from the start of the current
+    // week up to (but not including) the one being opened, not just the
+    // single day before it — skip the Wednesday review, open Thursday, and
+    // Monday and Tuesday's stragglers still need to be seen, not silently
+    // skipped. Week/Month reviews still cover just the one period before.
+    let open_review = use_callback(move |(): ()| {
+        let cfg = cfg_review.clone();
+        let period = log_period();
+        spawn(async move {
+            let base = {
+                let d = log_date.read().clone();
+                if d.is_empty() { crate::dates::today().await } else { d }
+            };
+            let from_dates = review_from_dates(period, &base);
+            let tmpls = templates_when_ready(templates, templates_ready).await;
+            let store = plugin_store.peek().clone();
+            let Some((to_path, to_body)) = periodic_note(&cfg, &store, &tmpls, period, &base).await else {
+                return;
+            };
+            let mut entries: Vec<Task> = Vec::new();
+            for from_date in &from_dates {
+                let Some((from_path, _)) = periodic_note(&cfg, &store, &tmpls, period, from_date).await else {
+                    load_error.set(Some(format!(
+                        "No {} log template configured — set one in Settings.",
+                        period.label().to_lowercase()
+                    )));
+                    return;
+                };
+                // Read the closing log from the vault, not the index: the index
+                // may be a refresh behind, and this is about to write to it.
+                match vault::dispatch::read_file(&cfg, &from_path).await {
+                    Ok(fc) => entries.extend(
+                        tasks::parse_file(&from_path, &fc.content).into_iter().filter(Task::is_open),
+                    ),
+                    // A log that was never written has nothing open in it,
+                    // which is a legitimate (and common) answer, not an error.
+                    Err(_) => {}
+                }
+            }
+            review.set(Some(ReviewState {
+                from_label: review_from_label(period, &from_dates),
+                to_label: dates::period_key(period, &base),
+                to_path,
+                to_body,
+                entries,
+            }));
+        });
+    });
+
+    // Carry out the decisions: one destination write, then one rewrite per
+    // source file. See `migrate_tasks` for why that order.
+    let apply_review = use_callback(move |picked: Vec<(Task, Decision, Option<String>)>| {
+        let cfg = cfg_review_apply.clone();
+        let Some(state) = review.read().clone() else { return };
+        spawn(async move {
+            review_busy.set(true);
+            let carried: Vec<(Task, Option<String>)> = picked
+                .iter()
+                .filter(|(_, d, _)| matches!(d, Decision::Carry | Decision::Schedule))
+                .map(|(t, _, due)| (t.clone(), due.clone()))
+                .collect();
+            let resolved: Vec<(Task, Status)> = picked
+                .iter()
+                .filter_map(|(t, d, _)| match d {
+                    Decision::Done => Some((t.clone(), Status::Done)),
+                    Decision::Drop => Some((t.clone(), Status::Dropped)),
+                    _ => None,
+                })
+                .collect();
+            let today_now = crate::dates::today().await;
+            let result = migrate_tasks(
+                vault_idx,
+                &cfg,
+                &carried,
+                &resolved,
+                &state.to_path,
+                &state.to_body,
+                &today_now,
+            )
+            .await;
+            review_busy.set(false);
+            match result {
+                Ok(()) => {
+                    review.set(None);
+                    if let Ok(mut list) = vault::dispatch::list_files(&cfg).await {
+                        list.sort_by(|a, b| a.path.cmp(&b.path));
+                        files.set(list);
+                    }
+                }
+                Err(e) => load_error.set(Some(e)),
+            }
+        });
+    });
+
     // ── Command actions ───────────────────────────────────────────────────────
     // Shared, Copy callbacks so the same logic runs from a toolbar button, the
     // command palette, and a keyboard shortcut.
 
-    // Open (or create) today's daily note. Extracted from the sidebar button so
-    // the palette can trigger it too.
-    let run_daily = use_callback(move |(): ()| {
+    // Open (or create) the log for a period, on a given date ("" = today).
+    // Shared by the sidebar buttons, the period switcher, and the palette.
+    let run_periodic = use_callback(move |(period, date): (dates::Period, String)| {
         let cfg = cfg_daily.clone();
-        let tmpl_path = cfg.daily_note_template.clone();
-        let tmpl = templates
-            .read()
-            .iter()
-            .find(|t| t.source_path == tmpl_path)
-            .cloned();
+        let tmpl_path = plugins::bujo::template_for(&plugin_store.peek(), &cfg, period);
         let open_mbx = focused_open_mbx();
         spawn(async move {
-            if let Some(meta) = tmpl {
-                apply_template(&meta, &cfg, files, open_mbx, load_error, "").await;
+            // Resolved *after* the scan has run, or a tap at boot would take the
+            // root fallback instead of the configured journal folder.
+            let tmpl = if tmpl_path.is_empty() {
+                None
             } else {
-                let date = crate::dates::today().await;
+                templates_when_ready(templates, templates_ready)
+                    .await
+                    .into_iter()
+                    .find(|t| t.source_path == tmpl_path)
+            };
+            if let Some(meta) = tmpl {
+                apply_template_on(&meta, &cfg, files, open_mbx, load_error, "", &date).await;
+            } else if period != dates::Period::Day {
+                // Only the daily note has a sensible fallback path. Guessing one
+                // for a week would scatter notes into a folder the user never
+                // chose, so say what's missing instead.
+                load_error.set(Some(format!(
+                    "No {} log template configured — set one in Settings.",
+                    period.label().to_lowercase()
+                )));
+            } else {
+                let date = if date.is_empty() { crate::dates::today().await } else { date };
                 if date.is_empty() {
                     return;
                 }
@@ -656,10 +866,13 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
             Cmd::QuickSwitcher => show_switcher.set(true),
             Cmd::NewFile => show_new_file.set(true),
             Cmd::NewFolder => show_new_folder.set(true),
-            Cmd::DailyNote => run_daily.call(()),
+            Cmd::DailyNote => run_periodic.call((dates::Period::Day, String::new())),
+            Cmd::WeeklyLog => run_periodic.call((dates::Period::Week, String::new())),
+            Cmd::MonthlyLog => run_periodic.call((dates::Period::Month, String::new())),
             Cmd::ExportHtml => run_export.call(()),
             Cmd::ToggleSidebar => sidebar_open.set(!sidebar_open()),
             Cmd::ToggleSplit => split.set(!split()),
+            Cmd::Plugins => show_plugins.set(true),
             Cmd::GoFiles => panel.set(Panel::Files),
             Cmd::GoSearch => panel.set(Panel::Search),
             Cmd::GoBacklinks => panel.set(Panel::Backlinks),
@@ -836,7 +1049,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                         button {
                             class: "sidebar-icon-btn",
                             title: "Today's note",
-                            onclick: move |_| run_daily.call(()),
+                            onclick: move |_| run_periodic.call((dates::Period::Day, String::new())),
                             IcoCalendar { size: 16 }
                         }
                         // Sign-in link is a web-only affordance: it carries the
@@ -867,6 +1080,12 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                         }
                         button {
                             class: "sidebar-icon-btn",
+                            title: "Plugins",
+                            onclick: move |_| show_plugins.set(true),
+                            IcoPlug { size: 16 }
+                        }
+                        button {
+                            class: "sidebar-icon-btn",
                             title: "Disconnect vault",
                             onclick: move |_| { state::clear_config(); on_logout(()); },
                             IcoSettings { size: 16 }
@@ -877,6 +1096,54 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                             title: "Close",
                             onclick: move |_| sidebar_open.set(false),
                             IcoX { size: 16 }
+                        }
+                    }
+                }
+
+                // Period switcher. The method's value comes from moving between
+                // scales, so "up" and "next" are always one tap away — and the
+                // date being browsed persists, so ‹ ‹ walks back through weeks.
+                if has_periodic_logs {
+                    div { class: "period-switcher",
+                        button {
+                            class: "period-step",
+                            title: "Previous",
+                            "aria-label": "Previous period",
+                            onclick: move |_| {
+                                let d = dates::shift_period(log_period(), &log_date(), -1);
+                                log_date.set(d.clone());
+                                run_periodic.call((log_period(), d));
+                            },
+                            "‹"
+                        }
+                        for p in [dates::Period::Day, dates::Period::Week, dates::Period::Month] {
+                            button {
+                                key: "{p:?}",
+                                class: if log_period() == p { "period-btn period-btn--active" } else { "period-btn" },
+                                title: "{dates::period_key(p, &log_date())}",
+                                onclick: move |_| {
+                                    log_period.set(p);
+                                    run_periodic.call((p, log_date()));
+                                },
+                                "{p.label()}"
+                            }
+                        }
+                        button {
+                            class: "period-review",
+                            title: "Review the previous period and migrate what's left",
+                            onclick: move |_| open_review.call(()),
+                            "Review"
+                        }
+                        button {
+                            class: "period-step",
+                            title: "Next",
+                            "aria-label": "Next period",
+                            onclick: move |_| {
+                                let d = dates::shift_period(log_period(), &log_date(), 1);
+                                log_date.set(d.clone());
+                                run_periodic.call((log_period(), d));
+                            },
+                            "›"
                         }
                     }
                 }
@@ -1038,6 +1305,8 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                                 config: config.clone(),
                                 files,
                                 templates,
+                                templates_ready,
+                                plugin_store,
                                 on_open: move |path: String| {
                                     open_focused(path);
                                     sidebar_open.set(false);
@@ -1202,6 +1471,27 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                 }
             }
 
+            // ── Plugins ──────────────────────────────────────────────────────
+            if show_plugins() {
+                PluginsModal {
+                    config: config.clone(),
+                    store: plugin_store,
+                    on_close: move |()| show_plugins.set(false),
+                }
+            }
+
+            // ── Migration review ─────────────────────────────────────────────
+            if let Some(state) = review() {
+                MigrationReview {
+                    from_label: state.from_label.clone(),
+                    to_label: state.to_label.clone(),
+                    entries: state.entries.clone(),
+                    busy: review_busy(),
+                    on_apply: move |picked| apply_review.call(picked),
+                    on_cancel: move |()| review.set(None),
+                }
+            }
+
             // (Slash command menu now lives inside each `EditorPane`.)
 
             // ── New file modal ───────────────────────────────────────────────
@@ -1345,6 +1635,72 @@ async fn write_task_toggle(
     Some(())
 }
 
+/// The template list, once the scan that fills it has actually run.
+///
+/// Templates are read from the vault, so they arrive a beat after the app does.
+/// A caller that snapshots `templates` immediately gets an empty list, which is
+/// indistinguishable from "this vault has no templates" — and periodic-note
+/// resolution treats that as "use the root-level fallback". The visible symptom
+/// was tapping "Today's note" (or Review) the instant the app opened and getting
+/// `2026-08-13.md` at the vault root instead of the configured journal folder.
+///
+/// Waiting closes the window. The cap means a vault whose listing failed still
+/// resolves — with whatever is known, exactly as before — rather than hanging.
+async fn templates_when_ready(
+    templates: Signal<Vec<TemplateMeta>>,
+    ready: Signal<bool>,
+) -> Vec<TemplateMeta> {
+    for _ in 0..100 {
+        if ready() {
+            break;
+        }
+        crate::sleep_ms(50).await;
+    }
+    templates.peek().clone()
+}
+
+/// Which dates a migration review should pull open tasks from, for the period
+/// just before `base`.
+///
+/// For `Day` this is every day from the start of the current week up to (but
+/// not including) `base`, not just the single day before it — skip the
+/// Wednesday review, open Thursday, and Monday and Tuesday's stragglers still
+/// need to be seen, not silently carried past. `Week`/`Month` still cover just
+/// the one period before, since there's no equivalent "skipped a week inside
+/// a month" scenario the switcher exposes. Always returns at least one date.
+fn review_from_dates(period: dates::Period, base: &str) -> Vec<String> {
+    if period != dates::Period::Day {
+        return vec![dates::shift_period(period, base, -1)];
+    }
+    let week_start = dates::period_start(dates::Period::Week, base);
+    let mut d = week_start;
+    let mut days = Vec::new();
+    while d.as_str() < base {
+        days.push(d.clone());
+        d = dates::shift_days(&d, 1);
+    }
+    // Monday reviewing itself has no earlier day this week — fall back to the
+    // single day before, same as it always has.
+    if days.is_empty() {
+        days.push(dates::shift_days(base, -1));
+    }
+    days
+}
+
+/// The label shown for the source side of a review, e.g. `2026-08-25` for one
+/// day or `2026-08-24 – 2026-08-26` for a run of skipped days.
+fn review_from_label(period: dates::Period, from_dates: &[String]) -> String {
+    match from_dates {
+        [only] => dates::period_key(period, only),
+        [first, .., last] => format!(
+            "{} – {}",
+            dates::period_key(dates::Period::Day, first),
+            dates::period_key(dates::Period::Day, last)
+        ),
+        [] => unreachable!("review_from_dates never returns an empty list"),
+    }
+}
+
 /// Today's periodic note: the path it lives at, and the body to seed it with if
 /// it isn't there yet.
 ///
@@ -1352,29 +1708,160 @@ async fn write_task_toggle(
 /// journal actually lives — a dated folder tree, typically), so this resolves
 /// through the template exactly as the "Today's note" button does. Without a
 /// configured template it falls back to `YYYY-MM-DD.md` at the vault root, which
-/// is what that button does too.
-async fn todays_note(cfg: &GithubConfig, templates: &[TemplateMeta]) -> Option<(String, String)> {
-    let date_json = crate::dates::date_vars_json().await;
-    let vars = template::TemplateVars::from_json(&date_json, "", "");
+/// is what that button does too. Pass templates from [`templates_when_ready`],
+/// or an early call takes that fallback when a template does exist.
+async fn todays_note(
+    cfg: &GithubConfig,
+    store: &PluginStore,
+    templates: &[TemplateMeta],
+) -> Option<(String, String)> {
+    periodic_note(cfg, store, templates, dates::Period::Day, "").await
+}
+
+/// The log note for `period` on `date` (`""` = today): where it lives, and the
+/// body to seed it with if it isn't there yet. Resolves without writing
+/// anything, which is what the migration review needs — it has to *read* the
+/// closing period's log before deciding whether there is anything to do.
+async fn periodic_note(
+    cfg: &GithubConfig,
+    store: &PluginStore,
+    templates: &[TemplateMeta],
+    period: dates::Period,
+    date: &str,
+) -> Option<(String, String)> {
+    let date = if date.is_empty() {
+        crate::dates::today().await
+    } else {
+        date.to_string()
+    };
+    let vars = template::TemplateVars::from_json(&crate::dates::date_vars_json_for(&date), "", "");
     if vars.year.is_empty() || vars.month.is_empty() || vars.date.is_empty() {
         return None;
     }
-    let tmpl = templates
-        .iter()
-        .find(|t| t.source_path == cfg.daily_note_template);
+    // The Bullet Journal plugin owns these paths once it is enabled; before
+    // that they come from the pre-plugin config. See `plugins::bujo`.
+    let tmpl_path = plugins::bujo::template_for(store, cfg, period);
+    let tmpl = if tmpl_path.is_empty() {
+        None
+    } else {
+        templates.iter().find(|t| t.source_path == tmpl_path)
+    };
     if let Some((t, fp)) = tmpl.and_then(|t| t.filepath.as_ref().map(|fp| (t, fp))) {
         let path = template::substitute_vars(fp, &vars)
             .trim_start_matches('/')
             .to_string();
         let body = template::strip_tabstops(&template::substitute_vars(&t.body, &vars));
         Some((path, body))
-    } else {
-        let date = crate::dates::today().await;
+    } else if period == dates::Period::Day {
+        // Same root-level fallback the "Today's note" button uses. Only the
+        // daily note has one; a week has no obvious home.
         if date.is_empty() {
             return None;
         }
         Some((format!("{date}.md"), format!("# {date}\n\n")))
+    } else {
+        None
     }
+}
+
+/// Resolve a period's open entries: re-mark each one where it stands, and — for
+/// the ones being carried forward — write a fresh open copy into `dest`.
+///
+/// This is *not* [`move_tasks`]. Migration never deletes the original line; it
+/// re-marks it, so the closing log keeps an honest record of what was on it and
+/// what became of each entry (`docs/bujo-roadmap.md` §5).
+///
+/// `carried` are the entries going forward (with an optional due date each, for
+/// scheduling); `resolved` are the ones being marked done or dropped in place.
+/// The destination is written **first**, for the same reason as `move_tasks`: a
+/// failure between the writes shows the entry in both logs, which is visible and
+/// fixable, rather than losing it.
+async fn migrate_tasks(
+    idx: Signal<Index>,
+    cfg: &GithubConfig,
+    carried: &[(Task, Option<String>)],
+    resolved: &[(Task, Status)],
+    dest: &str,
+    dest_body: &str,
+    today: &str,
+) -> Result<(), String> {
+    if carried.is_empty() && resolved.is_empty() {
+        return Err("Nothing to review.".to_string());
+    }
+
+    // Destination first, and only if something is actually going forward.
+    if !carried.is_empty() {
+        let lines: Vec<String> = carried
+            .iter()
+            .map(|(t, due)| tasks::carried_line(t, due.as_deref()))
+            .collect();
+        let dest_name = dest.rsplit('/').next().unwrap_or(dest);
+        let msg = format!("Migrate {} entr(y/ies) to {dest_name}", lines.len());
+        let (content, sha) = match vault::dispatch::read_file(cfg, dest).await {
+            Ok(fc) => (tasks::append_lines(&fc.content, &lines), Some(fc.sha)),
+            Err(_) => (tasks::append_lines(dest_body, &lines), None),
+        };
+        let new_sha = match sha {
+            Some(sha) => vault::dispatch::write_file(cfg, dest, &content, &sha, &msg)
+                .await
+                .map_err(|e| format!("Could not write {dest}: {e}"))?,
+            None => vault::dispatch::create_file(cfg, dest, &content, &msg)
+                .await
+                .map_err(|e| format!("Could not create {dest}: {e}"))?,
+        };
+        crate::vault_index::update_page(idx, dest, &new_sha, &content).await;
+    }
+
+    // Then re-mark the sources, one rewrite per file per status.
+    let mut by_file: std::collections::BTreeMap<String, Vec<(Task, Status)>> =
+        std::collections::BTreeMap::default();
+    for (t, due) in carried {
+        // Carrying forward with a date is scheduling; without one it's a plain
+        // migration. The marker records which, so the log reads back honestly.
+        let status = if due.is_some() { Status::Scheduled } else { Status::Migrated };
+        by_file.entry(t.path.clone()).or_default().push((t.clone(), status));
+    }
+    for (t, status) in resolved {
+        by_file.entry(t.path.clone()).or_default().push((t.clone(), *status));
+    }
+
+    for (path, items) in &by_file {
+        let fc = vault::dispatch::read_file(cfg, path)
+            .await
+            .map_err(|e| format!("Could not read {path}: {e}"))?;
+        let mut content = fc.content;
+        for status in [
+            Status::Migrated,
+            Status::Scheduled,
+            Status::Done,
+            Status::Dropped,
+        ] {
+            let batch: Vec<Task> = items
+                .iter()
+                .filter(|(_, s)| *s == status)
+                .map(|(t, _)| t.clone())
+                .collect();
+            if !batch.is_empty() {
+                content = tasks::set_status_many(&content, &batch, status, today);
+            }
+        }
+        let msg = format!(
+            "Review {}",
+            path.rsplit('/').next().unwrap_or(path)
+        );
+        match vault::dispatch::write_file(cfg, path, &content, &fc.sha, &msg).await {
+            Ok(new_sha) => {
+                crate::vault_index::update_page(idx, path, &new_sha, &content).await;
+            }
+            Err(e) => {
+                return Err(format!(
+                    "Carried forward, but could not update {path} ({e}) — \
+                     those entries are now open in both logs."
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Moves `tasks` out of the notes holding them and appends them to `dest`,
@@ -2583,6 +3070,12 @@ fn TasksView(
     config: GithubConfig,
     files: Signal<Vec<FileMeta>>,
     templates: Signal<Vec<TemplateMeta>>,
+    /// See `templates_when_ready`: without this, "Move to today" can't tell an
+    /// unscanned vault from a vault with no daily-note template.
+    templates_ready: Signal<bool>,
+    /// Needed because "Move to today" resolves through the daily-log template,
+    /// which the Bullet Journal plugin owns once it is enabled.
+    plugin_store: Signal<PluginStore>,
     on_open: EventHandler<String>,
 ) -> Element {
     let mut all_tasks = use_signal(Vec::<Task>::new);
@@ -2626,7 +3119,9 @@ fn TasksView(
                 .iter_mut()
                 .find(|t| t.path == task.path && t.line == task.line)
             {
-                t.checked = !t.checked;
+                // Mirrors `tasks::toggled_content`: a click means "done",
+                // unless it already was, which means "not after all".
+                t.status = if t.is_done() { Status::Open } else { Status::Done };
             }
         });
         let cfg = cfg_toggle.clone();
@@ -2644,15 +3139,20 @@ fn TasksView(
             return;
         };
         let cfg = cfg_move.clone();
-        let tmpls = templates.peek().clone();
         moving.set(Some(source));
         move_error.set(None);
         spawn(async move {
             // `None` means today's periodic note, resolved (and seeded) through
-            // the daily-note template.
-            let target = match dest {
-                Some(p) => Some((p, String::new())),
-                None => todays_note(&cfg, &tmpls).await,
+            // the daily-note template — once the template scan has run, or an
+            // early move would land in a root-level note instead.
+            let target = if let Some(p) = dest {
+                Some((p, String::new()))
+            } else {
+                let tmpls = templates_when_ready(templates, templates_ready).await;
+                // Cloned out before the await: a signal borrow must never be
+                // held across one (see clippy.toml).
+                let store = plugin_store.peek().clone();
+                todays_note(&cfg, &store, &tmpls).await
             };
             let Some((path, body)) = target else {
                 move_error.set(Some("Could not work out today's note.".to_string()));
@@ -2683,7 +3183,7 @@ fn TasksView(
     let mut groups: Vec<(String, Vec<Task>)> = {
         let mut by_file: std::collections::BTreeMap<String, Vec<Task>> = std::collections::BTreeMap::default();
         for t in all_tasks.read().iter() {
-            if hide && t.checked {
+            if hide && t.is_done() {
                 continue;
             }
             by_file.entry(t.path.clone()).or_default().push(t.clone());
@@ -2693,7 +3193,9 @@ fn TasksView(
     for (_, items) in &mut groups {
         items.sort_by(tasks::cmp);
     }
-    let total_open = all_tasks.read().iter().filter(|t| !t.checked).count();
+    // Open means "still awaiting a decision" — a migrated, dropped, or done
+    // entry is resolved, and an event was never a thing to do.
+    let total_open = all_tasks.read().iter().filter(|t| t.is_open()).count();
     let is_empty = groups.is_empty();
     let first_load = loading() && all_tasks.read().is_empty();
 
@@ -2750,11 +3252,12 @@ fn TasksView(
                             let name = path.rsplit('/').next().unwrap_or(&path)
                                 .trim_end_matches(".md").to_string();
                             let dir = path.rfind('/').map(|i| path[..i].to_string()).unwrap_or_default();
-                            // Only open tasks move: a completed one is a record of
-                            // what happened in the note it happened in, and
-                            // dragging it forward would falsify that.
+                            // Only open tasks move: a resolved one — done,
+                            // already migrated, dropped, or an event — is a
+                            // record of what happened in the note it happened
+                            // in, and dragging it forward would falsify that.
                             let open_items: Vec<Task> =
-                                items.iter().filter(|t| !t.checked).cloned().collect();
+                                items.iter().filter(|t| t.is_open()).cloned().collect();
                             let has_open = !open_items.is_empty();
                             let busy = moving() == Some(path.clone());
                             let for_today = open_items.clone();
@@ -2798,17 +3301,29 @@ fn TasksView(
                                         {
                                             let t_toggle = t.clone();
                                             let p_jump = t.path.clone();
-                                            let overdue = !t.checked
+                                            let overdue = t.is_open()
                                                 && !today_str.is_empty()
                                                 && t.due.as_deref().is_some_and(|d| d < today_str.as_str());
                                             let due_class = if overdue { "task-due task-due--overdue" } else { "task-due" };
-                                            let row_class = if t.checked { "task-row task-row--done" } else { "task-row" };
+                                            // Done is struck through; migrated and dropped are
+                                            // dimmed but legible — seeing your own churn is the
+                                            // point of keeping them (bujo-roadmap.md §5).
+                                            let row_class = match t.status {
+                                                Status::Open => "task-row",
+                                                Status::Done => "task-row task-row--done",
+                                                _ => "task-row task-row--closed",
+                                            };
                                             rsx! {
                                                 div { class: "{row_class}",
                                                     button {
                                                         class: "task-check",
+                                                        title: "{t.status.label()}",
                                                         onclick: move |_| toggle.call(t_toggle.clone()),
-                                                        if t.checked { "☑" } else { "☐" }
+                                                        match t.status {
+                                                            Status::Open => "☐",
+                                                            Status::Done => "☑",
+                                                            other => other.glyph(),
+                                                        }
                                                     }
                                                     span {
                                                         class: "task-text",
@@ -2828,6 +3343,156 @@ fn TasksView(
                                 }
                             }
                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Everything the migration review needs, resolved once when it opens.
+#[derive(Clone, PartialEq)]
+struct ReviewState {
+    from_label: String,
+    to_label: String,
+    to_path: String,
+    to_body: String,
+    entries: Vec<Task>,
+}
+
+/// What the reviewer decided about one entry. `Carry` is a plain migration;
+/// `Schedule` carries it with a date, which is the same act aimed further out.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Decision {
+    Undecided,
+    Carry,
+    Schedule,
+    Done,
+    Drop,
+}
+
+/// The migration review: every open entry from the closing period, one row
+/// each, four ways out.
+///
+/// The friction is the feature. The method's claim is that touching each
+/// unfinished thing and deciding about it — rather than letting it roll over
+/// silently — is what keeps a list honest, so there is no "carry everything"
+/// default and nothing happens until Apply.
+#[component]
+fn MigrationReview(
+    /// The log being closed, e.g. `2026-W32`.
+    from_label: String,
+    /// The log entries are carried into, e.g. `2026-W33`.
+    to_label: String,
+    entries: Vec<Task>,
+    busy: bool,
+    on_apply: EventHandler<Vec<(Task, Decision, Option<String>)>>,
+    on_cancel: EventHandler<()>,
+) -> Element {
+    let mut decisions = use_signal(|| vec![Decision::Undecided; entries.len()]);
+    // One shared date for everything scheduled in this pass: in practice you
+    // push a batch of things to the same "not now, then".
+    let mut schedule_date = use_signal(String::new);
+
+    let decided = decisions.read().iter().filter(|d| **d != Decision::Undecided).count();
+    let scheduling = decisions.read().contains(&Decision::Schedule);
+    let date_missing = scheduling && schedule_date.read().trim().is_empty();
+    let entries_for_apply = entries.clone();
+
+    rsx! {
+        div { class: "move-picker-backdrop", onclick: move |_| on_cancel(()),
+            div {
+                class: "review-modal",
+                onclick: move |e: Event<MouseData>| e.stop_propagation(),
+                div { class: "move-picker-header",
+                    "Review {from_label} → {to_label}"
+                }
+                if entries.is_empty() {
+                    div { class: "review-empty",
+                        "Nothing left open in {from_label}. That is the good outcome."
+                    }
+                } else {
+                    div { class: "review-list",
+                        for (i, t) in entries.iter().enumerate() {
+                            {
+                                let current = decisions.read()[i];
+                                let text = t.text.clone();
+                                let due = t.due.clone();
+                                rsx! {
+                                    div {
+                                        key: "{t.path}:{t.line}",
+                                        class: if current == Decision::Undecided { "review-row" } else { "review-row review-row--decided" },
+                                        div { class: "review-entry",
+                                            span { class: "review-text", "{text}" }
+                                            if let Some(d) = due {
+                                                span { class: "review-due", "📅 {d}" }
+                                            }
+                                        }
+                                        div { class: "review-actions",
+                                            for (decision, label, title) in [
+                                                (Decision::Done, "✗", "Done"),
+                                                (Decision::Carry, "›", "Migrate"),
+                                                (Decision::Schedule, "‹", "Schedule"),
+                                                (Decision::Drop, "–", "Drop"),
+                                            ] {
+                                                button {
+                                                    key: "{title}",
+                                                    class: if current == decision { "review-btn review-btn--on" } else { "review-btn" },
+                                                    title: "{title}",
+                                                    // The face of the button is a glyph, so without
+                                                    // this its accessible name would be "›".
+                                                    "aria-label": "{title}",
+                                                    onclick: move |_| {
+                                                        decisions.with_mut(|d| {
+                                                            // Clicking the chosen one again undoes it,
+                                                            // so a misclick isn't a commitment.
+                                                            d[i] = if d[i] == decision { Decision::Undecided } else { decision };
+                                                        });
+                                                    },
+                                                    "{label}"
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if scheduling {
+                        label { class: "review-date",
+                            "Scheduled for"
+                            input {
+                                r#type: "date",
+                                value: "{schedule_date}",
+                                oninput: move |e| schedule_date.set(e.value()),
+                            }
+                        }
+                    }
+                    div { class: "review-footer",
+                        span { class: "review-count", "{decided} of {entries.len()} decided" }
+                        button { class: "review-cancel", onclick: move |_| on_cancel(()), "Cancel" }
+                        button {
+                            class: "review-apply",
+                            disabled: busy || decided == 0 || date_missing,
+                            onclick: move |_| {
+                                let date = schedule_date.read().trim().to_string();
+                                let ds = decisions.read().clone();
+                                let picked: Vec<(Task, Decision, Option<String>)> = entries_for_apply
+                                    .iter()
+                                    .zip(ds)
+                                    .filter(|(_, d)| *d != Decision::Undecided)
+                                    .map(|(t, d)| {
+                                        let due = if d == Decision::Schedule { Some(date.clone()) } else { None };
+                                        (t.clone(), d, due)
+                                    })
+                                    .collect();
+                                on_apply(picked);
+                            },
+                            if busy { "Applying…" } else { "Apply" }
+                        }
+                    }
+                    if date_missing {
+                        div { class: "review-hint", "Pick a date for the scheduled entries." }
                     }
                 }
             }
@@ -3690,5 +4355,52 @@ mod tests {
         assert_eq!(human_bytes(5 * 1024 * 1024), "5.0 MB");
         // Stops at the largest unit it knows rather than inventing one.
         assert!(human_bytes(u64::MAX).ends_with(" TB"));
+    }
+
+    // 2026-08-24 is a Monday, so 2026-08-27 (Thursday) has two skipped days
+    // (Tue, Wed) sitting behind the one directly before it.
+    #[test]
+    fn day_review_covers_every_skipped_day_this_week() {
+        assert_eq!(
+            review_from_dates(dates::Period::Day, "2026-08-27"),
+            vec!["2026-08-24", "2026-08-25", "2026-08-26"]
+        );
+    }
+
+    #[test]
+    fn day_review_the_morning_after_still_covers_just_that_day() {
+        assert_eq!(
+            review_from_dates(dates::Period::Day, "2026-08-25"),
+            vec!["2026-08-24"]
+        );
+    }
+
+    #[test]
+    fn day_review_on_monday_falls_back_to_the_prior_sunday() {
+        // Nothing earlier in *this* week to walk, so it reaches back across
+        // the week boundary rather than reviewing nothing.
+        assert_eq!(review_from_dates(dates::Period::Day, "2026-08-24"), vec!["2026-08-23"]);
+    }
+
+    #[test]
+    fn week_and_month_reviews_still_cover_only_the_one_period_before() {
+        assert_eq!(review_from_dates(dates::Period::Week, "2026-08-27"), vec!["2026-08-17"]);
+        assert_eq!(review_from_dates(dates::Period::Month, "2026-08-27"), vec!["2026-07-01"]);
+    }
+
+    #[test]
+    fn from_label_is_a_single_key_for_one_day_and_a_range_for_several() {
+        assert_eq!(
+            review_from_label(dates::Period::Day, &["2026-08-24".to_string()]),
+            "2026-08-24"
+        );
+        assert_eq!(
+            review_from_label(
+                dates::Period::Day,
+                &["2026-08-24".to_string(), "2026-08-25".to_string(), "2026-08-26".to_string()]
+            ),
+            "2026-08-24 – 2026-08-26"
+        );
+        assert_eq!(review_from_label(dates::Period::Week, &["2026-08-17".to_string()]), "2026-W34");
     }
 }

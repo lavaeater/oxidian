@@ -162,6 +162,13 @@ pub struct GithubConfig {
     pub templates_dir: String,
     #[serde(default = "default_daily_note_template")]
     pub daily_note_template: String,
+    /// Templates for the weekly and monthly logs. Empty means "not configured",
+    /// which is the honest default: unlike the daily note there is no sensible
+    /// fallback path for a week, and guessing one would scatter notes.
+    #[serde(default)]
+    pub weekly_note_template: String,
+    #[serde(default)]
+    pub monthly_note_template: String,
 }
 
 fn default_branch() -> String { "main".to_string() }
@@ -218,6 +225,8 @@ mod tests {
             provider: Provider::GitLab,
             templates_dir: "tpl".into(),
             daily_note_template: "tpl/daily.md".into(),
+            weekly_note_template: "tpl/weekly.md".into(),
+            monthly_note_template: String::new(),
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let back: GithubConfig = serde_json::from_str(&json).unwrap();

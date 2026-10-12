@@ -128,6 +128,14 @@ export function setup_selection(id) {
     });
 }
 
+// The Bullet Journal signifiers, in cycle order: task → done → migrated →
+// scheduled → dropped → event. Mirrors `index::tasks::Status` (which is the
+// parser of record) and `tokenizer::task_status_name` (which renders them).
+const BUJO_MARKERS = [' ', 'x', '>', '<', '-', 'o'];
+// A `- [m] ` line. The trailing `-` in the class is literal.
+const TASK_LINE_RE = /^\s*[-*+] \[[ xX><oO-]\] /;
+const TASK_LINE_CAPTURE_RE = /^(\s*[-*+] )\[[ xX><oO-]\] /;
+
 // Handles Enter inside the editor entirely in the text model:
 //   • list/task line with content → continue the list (newline + next marker)
 //   • empty list/task line         → exit the list (remove the marker, no new line)
@@ -165,11 +173,47 @@ export function setup_keyboard(id) {
                 if (le < 0) le = text.length;
                 // Only at the end of a task line: mid-line, a space is just a
                 // space between words, and popping a menu there would be noise.
-                el._armTaskMenu = cursor === le && /^\s*[-*+] \[[ xX]\] /.test(text.slice(ls, le));
+                el._armTaskMenu = cursor === le && TASK_LINE_RE.test(text.slice(ls, le));
             }
             return;
         }
-        // ctrl/meta+Enter may be a shortcut elsewhere; IME Enter confirms a
+
+        // Ctrl/⌘-Enter cycles the entry's Bullet Journal signifier, and turns a
+        // plain bullet into a task. Rapid logging means never reaching for the
+        // bracket characters: you write the line, then say what it is.
+        // Shift reverses, because six states is a long way round.
+        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.isComposing) {
+            const [text, cursor] = lineTextAndCursor(el);
+            if (cursor < 0) return;
+            const ls = text.lastIndexOf('\n', cursor - 1) + 1;
+            let le = text.indexOf('\n', cursor);
+            if (le < 0) le = text.length;
+            const line = text.slice(ls, le);
+
+            let newLine = null;
+            const taskM = line.match(/^(\s*[-*+] )\[([ xX><o\-])\] /);
+            if (taskM) {
+                const cur = taskM[2] === 'X' ? 'x' : (taskM[2] === 'O' ? 'o' : taskM[2]);
+                const i = BUJO_MARKERS.indexOf(cur);
+                const step = e.shiftKey ? -1 : 1;
+                const next = BUJO_MARKERS[(i + step + BUJO_MARKERS.length) % BUJO_MARKERS.length];
+                newLine = taskM[1] + '[' + next + '] ' + line.slice(taskM[0].length);
+            } else {
+                const ulM = line.match(/^(\s*[-*+] )/);
+                if (ulM) newLine = ulM[1] + '[ ] ' + line.slice(ulM[0].length);
+            }
+            if (newLine === null) return;
+
+            e.preventDefault();
+            const delta = newLine.length - line.length;
+            el._pendingText = text.slice(0, ls) + newLine + text.slice(le);
+            el._pendingCursor = Math.max(ls, cursor + delta);
+            el.dataset.lineChange = '1';
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            return;
+        }
+
+        // ctrl/meta+Enter is the signifier cycle above; IME Enter confirms a
         // composition rather than inserting a line.
         if (e.key !== 'Enter' || e.ctrlKey || e.metaKey || e.isComposing) return;
         const [text, cursor] = lineTextAndCursor(el);
@@ -185,7 +229,9 @@ export function setup_keyboard(id) {
         let marker = null;   // marker to start the continued item with
         let markerLen = 0;   // length of this line's existing marker
         if (!e.shiftKey) {
-            const taskM = line.match(/^(\s*[-*+] )\[[ xX]\] /);
+            // A continued entry always starts open, whatever the one above was:
+            // migrating or dropping something says nothing about the next line.
+            const taskM = line.match(TASK_LINE_CAPTURE_RE);
             if (taskM) { markerLen = taskM[0].length; marker = taskM[1] + '[ ] '; }
             else {
                 const olM = line.match(/^(\s*)(\d+)\. /);

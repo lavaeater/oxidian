@@ -104,7 +104,8 @@ fn tasks_html(tasks: &[Task]) -> String {
         return empty_html("tasks");
     }
     let lis = tasks.iter().fold(String::new(), |mut out, t| {
-        let checked = if t.checked { "true" } else { "false" };
+        let checked = if t.is_done() { "true" } else { "false" };
+        let status = t.status.label();
         let due = match &t.due {
             Some(d) => format!(" <span class=\"dataview-due\">📅 {}</span>", escape(d)),
             None => String::new(),
@@ -119,13 +120,14 @@ fn tasks_html(tasks: &[Task]) -> String {
         // first so the path, which may contain anything, can be the tail.
         let _ = write!(
             out,
-            "<li class=\"dataview-task\" data-path=\"{0}\" data-line=\"{1}\">\
+            "<li class=\"dataview-task\" data-path=\"{0}\" data-line=\"{1}\" \
+             data-status=\"{status}\">\
              <span class=\"md-task-checkbox\" data-checked=\"{checked}\" \
-             data-action=\"task:{1}:{0}\">{2}</span>\
+             data-action=\"task:{1}:{0}\">[{2}]</span>\
              <span class=\"dataview-task-text\">{3}</span>{prio}{due}</li>",
             escape(&t.path),
             t.line,
-            if t.checked { "[x]" } else { "[ ]" },
+            t.status.marker(),
             escape(&t.text),
         );
         out
@@ -186,7 +188,7 @@ mod tests {
         let t = Task {
             path: "games/Deus Ex.md".into(),
             line: 7,
-            checked: false,
+            status: crate::tasks::Status::Open,
             text: "replay".into(),
             raw: "- [ ] replay".into(),
             due: Some("2026-09-01".into()),
