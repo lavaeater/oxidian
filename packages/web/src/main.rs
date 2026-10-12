@@ -35,11 +35,17 @@ fn App() -> Element {
         document::Link { rel: "stylesheet", href: MAIN_CSS }
 
         if !booted() {
-
+            // Blank while checking localStorage — avoids a settings flash.
         } else if let Some(cfg) = config() {
-            VaultBrowser { config: cfg, on_logout: move |()| config.set(None) }
+            VaultBrowser {
+                config: cfg,
+                on_logout: move |()| config.set(None),
+            }
         } else {
-            Settings { existing: None, on_save: move |cfg| config.set(Some(cfg)) }
+            Settings {
+                existing: None,
+                on_save: move |cfg| config.set(Some(cfg)),
+            }
         }
     }
 }

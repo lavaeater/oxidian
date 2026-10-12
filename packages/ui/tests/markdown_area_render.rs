@@ -22,9 +22,7 @@ fn render(app: fn() -> Element) -> String {
 fn renders_contenteditable_with_formatted_markdown() {
     fn app() -> Element {
         let content = use_signal(|| "# Heading\nsome **bold** text".to_string());
-        rsx! {
-            MarkdownArea { content }
-        }
+        rsx! { MarkdownArea { content } }
     }
     let html = render(app);
 
@@ -59,9 +57,7 @@ fn applies_variant_and_placeholder_attributes() {
 fn empty_content_still_renders_editable_surface() {
     fn app() -> Element {
         let content = use_signal(String::new);
-        rsx! {
-            MarkdownArea { content }
-        }
+        rsx! { MarkdownArea { content } }
     }
     let html = render(app);
     assert!(html.contains("contenteditable=\"true\""), "got: {html}");

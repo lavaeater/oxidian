@@ -146,10 +146,7 @@ pub fn Settings(
                             rsx! {
                                 button {
                                     class: if is_active { "provider-btn provider-btn--active" } else { "provider-btn" },
-                                    onclick: move |_| {
-                                        provider.set(p.clone());
-                                        oauth_phase.set(OAuthPhase::Idle);
-                                    },
+                                    onclick: move |_| { provider.set(p.clone()); oauth_phase.set(OAuthPhase::Idle); },
                                     "{label}"
                                 }
                             }
@@ -214,8 +211,7 @@ pub fn Settings(
 
                 // Token field — hidden while OAuth is pending
                 if !is_awaiting {
-                    label { class: "settings-label",
-                        "Token"
+                    label { class: "settings-label", "Token"
                         div { class: "settings-input-row",
                             input {
                                 class: "settings-input",
@@ -229,11 +225,7 @@ pub fn Settings(
                                 r#type: "button",
                                 title: if show_token() { "Hide token" } else { "Show token" },
                                 onclick: move |_| show_token.set(!show_token()),
-                                if show_token() {
-                                    "🙈"
-                                } else {
-                                    "👁"
-                                }
+                                if show_token() { "🙈" } else { "👁" }
                             }
                         }
                     }
@@ -243,60 +235,40 @@ pub fn Settings(
                             "Generate a Personal Access Token with "
                             code { "api" }
                             " scope at "
-                            a {
-                                href: "{token_url}",
-                                target: "_blank",
-                                rel: "noopener noreferrer",
-                                "{token_url}"
-                            }
+                            a { href: "{token_url}", target: "_blank", rel: "noopener noreferrer", "{token_url}" }
                             "."
                         }
                     }
                 }
 
-                label { class: "settings-label",
-                    "Owner (user or namespace)"
+                label { class: "settings-label", "Owner (user or namespace)"
                     input {
-                        class: "settings-input",
-                        placeholder: "octocat",
-                        value: "{owner}",
-                        oninput: move |e| owner.set(e.value()),
+                        class: "settings-input", placeholder: "octocat",
+                        value: "{owner}", oninput: move |e| owner.set(e.value()),
                     }
                 }
-                label { class: "settings-label",
-                    "Repository"
+                label { class: "settings-label", "Repository"
                     input {
-                        class: "settings-input",
-                        placeholder: "my-notes",
-                        value: "{repo}",
-                        oninput: move |e| repo.set(e.value()),
+                        class: "settings-input", placeholder: "my-notes",
+                        value: "{repo}", oninput: move |e| repo.set(e.value()),
                     }
                 }
-                label { class: "settings-label",
-                    "Branch"
+                label { class: "settings-label", "Branch"
                     input {
-                        class: "settings-input",
-                        placeholder: "main",
-                        value: "{branch}",
-                        oninput: move |e| branch.set(e.value()),
+                        class: "settings-input", placeholder: "main",
+                        value: "{branch}", oninput: move |e| branch.set(e.value()),
                     }
                 }
-                label { class: "settings-label",
-                    "Templates folder"
+                label { class: "settings-label", "Templates folder"
                     input {
-                        class: "settings-input",
-                        placeholder: ".oxidian/templates",
-                        value: "{templates_dir}",
-                        oninput: move |e| templates_dir.set(e.value()),
+                        class: "settings-input", placeholder: ".oxidian/templates",
+                        value: "{templates_dir}", oninput: move |e| templates_dir.set(e.value()),
                     }
                 }
-                label { class: "settings-label",
-                    "Daily note template"
+                label { class: "settings-label", "Daily note template"
                     input {
-                        class: "settings-input",
-                        placeholder: ".oxidian/templates/daily-note.md",
-                        value: "{daily_note_template}",
-                        oninput: move |e| daily_note_template.set(e.value()),
+                        class: "settings-input", placeholder: ".oxidian/templates/daily-note.md",
+                        value: "{daily_note_template}", oninput: move |e| daily_note_template.set(e.value()),
                     }
                 }
                 p { class: "settings-sub",
@@ -313,14 +285,9 @@ pub fn Settings(
 
                 if !is_awaiting {
                     button {
-                        class: "settings-btn",
-                        disabled: saving(),
+                        class: "settings-btn", disabled: saving(),
                         onclick: handle_save,
-                        if saving() {
-                            "Connecting…"
-                        } else {
-                            "Connect vault"
-                        }
+                        if saving() { "Connecting…" } else { "Connect vault" }
                     }
                 }
             }

@@ -703,25 +703,26 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
             };
             let mut entries: Vec<Task> = Vec::new();
             for from_date in &from_dates {
-              let Some((from_path, _)) = periodic_note(&cfg, &store, &tmpls, period, from_date).await else {
-                load_error.set(Some(format!(
-                  "No {} log template configured — set one in Settings.",
-                  period.label().to_lowercase()
-                )));
-                return;
-              };
-              // Read the closing log from the vault, not the index: the index
-              // may be a refresh behind, and this is about to write to it.
-              if let Ok(fc) = vault::dispatch::read_file(&cfg, &from_path).await {
-                entries.extend(
-                  tasks::parse_file(&from_path, &fc.content).into_iter().filter(Task::is_open),
-                );
-                // A log that was never written has nothing open in it,
-                // which is a legitimate (and common) answer, not an error.
-              }
+                let Some((from_path, _)) = periodic_note(&cfg, &store, &tmpls, period, from_date).await else {
+                    load_error.set(Some(format!(
+                        "No {} log template configured — set one in Settings.",
+                        period.label().to_lowercase()
+                    )));
+                    return;
+                };
+                // Read the closing log from the vault, not the index: the index
+                // may be a refresh behind, and this is about to write to it.
+                match vault::dispatch::read_file(&cfg, &from_path).await {
+                    Ok(fc) => entries.extend(
+                        tasks::parse_file(&from_path, &fc.content).into_iter().filter(Task::is_open),
+                    ),
+                    // A log that was never written has nothing open in it,
+                    // which is a legitimate (and common) answer, not an error.
+                    Err(_) => {}
+                }
             }
-          review.set(Some(ReviewState {
-            from_label: review_from_label(period, &from_dates),
+            review.set(Some(ReviewState {
+                from_label: review_from_label(period, &from_dates),
                 to_label: dates::period_key(period, &base),
                 to_path,
                 to_body,
@@ -1058,12 +1059,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                         if cfg!(target_arch = "wasm32") {
                             button {
                                 class: "sidebar-icon-btn",
-                                title:
-                                if link_copied() {
-                                    "Sign-in link copied!"
-                                } else {
-                                    "Copy sign-in link"
-                                },
+                                title: if link_copied() { "Sign-in link copied!" } else { "Copy sign-in link" },
                                 onclick: {
                                     let cfg_link = cfg_link.clone();
                                     move |_| {
@@ -1091,10 +1087,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                         button {
                             class: "sidebar-icon-btn",
                             title: "Disconnect vault",
-                            onclick: move |_| {
-                                state::clear_config();
-                                on_logout(());
-                            },
+                            onclick: move |_| { state::clear_config(); on_logout(()); },
                             IcoSettings { size: 16 }
                         }
                         // Close button — hidden on desktop via web CSS, visible on mobile
@@ -1126,12 +1119,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                         for p in [dates::Period::Day, dates::Period::Week, dates::Period::Month] {
                             button {
                                 key: "{p:?}",
-                                class:
-                                if log_period() == p {
-                                    "period-btn period-btn--active"
-                                } else {
-                                    "period-btn"
-                                },
+                                class: if log_period() == p { "period-btn period-btn--active" } else { "period-btn" },
                                 title: "{dates::period_key(p, &log_date())}",
                                 onclick: move |_| {
                                     log_period.set(p);
@@ -1161,83 +1149,13 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                 }
 
                 div { class: "panel-tabs",
-                    button {
-                        class:
-                        if panel() == Panel::Files {
-                            "panel-tab panel-tab--active"
-                        } else {
-                            "panel-tab"
-                        },
-                        onclick: move |_| panel.set(Panel::Files),
-                        title: "Files",
-                        IcoFolderTree { size: 15 }
-                    }
-                    button {
-                        class:
-                        if panel() == Panel::Search {
-                            "panel-tab panel-tab--active"
-                        } else {
-                            "panel-tab"
-                        },
-                        onclick: move |_| panel.set(Panel::Search),
-                        title: "Search",
-                        IcoSearch { size: 15 }
-                    }
-                    button {
-                        class:
-                        if panel() == Panel::Backlinks {
-                            "panel-tab panel-tab--active"
-                        } else {
-                            "panel-tab"
-                        },
-                        onclick: move |_| panel.set(Panel::Backlinks),
-                        title: "Backlinks",
-                        IcoLink2 { size: 15 }
-                    }
-                    button {
-                        class:
-                        if panel() == Panel::Graph {
-                            "panel-tab panel-tab--active"
-                        } else {
-                            "panel-tab"
-                        },
-                        onclick: move |_| panel.set(Panel::Graph),
-                        title: "Graph",
-                        IcoNetwork { size: 15 }
-                    }
-                    button {
-                        class:
-                        if panel() == Panel::Bookmarks {
-                            "panel-tab panel-tab--active"
-                        } else {
-                            "panel-tab"
-                        },
-                        onclick: move |_| panel.set(Panel::Bookmarks),
-                        title: "Bookmarks",
-                        IcoBookmark { size: 15 }
-                    }
-                    button {
-                        class:
-                        if panel() == Panel::Kanban {
-                            "panel-tab panel-tab--active"
-                        } else {
-                            "panel-tab"
-                        },
-                        onclick: move |_| panel.set(Panel::Kanban),
-                        title: "Kanban",
-                        IcoFolderKanban { size: 15 }
-                    }
-                    button {
-                        class:
-                        if panel() == Panel::Tasks {
-                            "panel-tab panel-tab--active"
-                        } else {
-                            "panel-tab"
-                        },
-                        onclick: move |_| panel.set(Panel::Tasks),
-                        title: "Tasks",
-                        IcoListChecks { size: 15 }
-                    }
+                    button { class: if panel() == Panel::Files { "panel-tab panel-tab--active" } else { "panel-tab" }, onclick: move |_| panel.set(Panel::Files), title: "Files", IcoFolderTree { size: 15 } }
+                    button { class: if panel() == Panel::Search { "panel-tab panel-tab--active" } else { "panel-tab" }, onclick: move |_| panel.set(Panel::Search), title: "Search", IcoSearch { size: 15 } }
+                    button { class: if panel() == Panel::Backlinks { "panel-tab panel-tab--active" } else { "panel-tab" }, onclick: move |_| panel.set(Panel::Backlinks), title: "Backlinks", IcoLink2 { size: 15 } }
+                    button { class: if panel() == Panel::Graph { "panel-tab panel-tab--active" } else { "panel-tab" }, onclick: move |_| panel.set(Panel::Graph), title: "Graph", IcoNetwork { size: 15 } }
+                    button { class: if panel() == Panel::Bookmarks { "panel-tab panel-tab--active" } else { "panel-tab" }, onclick: move |_| panel.set(Panel::Bookmarks), title: "Bookmarks", IcoBookmark { size: 15 } }
+                    button { class: if panel() == Panel::Kanban { "panel-tab panel-tab--active" } else { "panel-tab" }, onclick: move |_| panel.set(Panel::Kanban), title: "Kanban", IcoFolderKanban { size: 15 } }
+                    button { class: if panel() == Panel::Tasks { "panel-tab panel-tab--active" } else { "panel-tab" }, onclick: move |_| panel.set(Panel::Tasks), title: "Tasks", IcoListChecks { size: 15 } }
                 }
 
                 div { class: "panel-content",
@@ -1246,24 +1164,13 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                             // Plugin picker — icons hardcoded for builtins; label from registry
                             div { class: "nav-style-picker",
                                 button {
-                                    class:
-                                    if nav_style() == "tree" {
-                                        "nav-style-btn nav-style-btn--active"
-                                    } else {
-                                        "nav-style-btn"
-                                    },
+                                    class: if nav_style() == "tree" { "nav-style-btn nav-style-btn--active" } else { "nav-style-btn" },
                                     title: "Tree",
                                     onclick: move |_| nav_style.set("tree"),
                                     IcoFolderTree { size: 14 }
                                 }
                                 button {
-                                    class:
-                                    if nav_style() == "flat" {
-                                        "nav-style-btn nav-style-btn--active"
-                                    }
-                                    if files.read().is_empty() {
-                                        "nav-style-btn"
-                                    },
+                                    class: if nav_style() == "flat" { "nav-style-btn nav-style-btn--active" } else { "nav-style-btn" },
                                     title: "Flat list",
                                     onclick: move |_| nav_style.set("flat"),
                                     IcoLayoutList { size: 14 }
@@ -1285,26 +1192,21 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                                 if files.read().is_empty() {
                                     div { class: "sidebar-status", "No markdown files found." }
                                 } else {
-                                    {
-                                        nav_dispatch(
-                                            nav_style(),
-                                            NavCallbacks {
-                                                files: files.read().clone(),
-                                                active: active_path,
-                                                selected_dir,
-                                                on_select: EventHandler::new(move |path: String| {
-                                                    open_focused(path);
-                                                    show_switcher.set(false);
-                                                    sidebar_open.set(false);
-                                                }),
-                                                on_select_dir: EventHandler::new(move |dir: String| {
-                                                    selected_dir.set(if dir.is_empty() { None } else { Some(dir) });
-                                                }),
-                                                on_delete: EventHandler::new(handle_delete),
-                                                on_move: EventHandler::new(handle_move),
-                                            },
-                                        )
-                                    }
+                                    { nav_dispatch(nav_style(), NavCallbacks {
+                                        files: files.read().clone(),
+                                        active: active_path,
+                                        selected_dir,
+                                        on_select: EventHandler::new(move |path: String| {
+                                            open_focused(path);
+                                            show_switcher.set(false);
+                                            sidebar_open.set(false);
+                                        }),
+                                        on_select_dir: EventHandler::new(move |dir: String| {
+                                            selected_dir.set(if dir.is_empty() { None } else { Some(dir) });
+                                        }),
+                                        on_delete: EventHandler::new(handle_delete),
+                                        on_move: EventHandler::new(handle_move),
+                                    }) }
                                 }
                             }
                             if has_file && !headings.is_empty() {
@@ -1325,17 +1227,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                                 active: active_path.read().clone(),
                                 backlinks: {
                                     let idx = index.read();
-                                    active_path
-                                        .read()
-                                        .as_ref()
-                                        .map(|p| {
-                                            idx
-                                                .backlinks(p)
-                                                .into_iter()
-                                                .map(std::string::ToString::to_string)
-                                                .collect::<Vec<_>>()
-                                        })
-                                        .unwrap_or_default()
+                                    active_path.read().as_ref().map(|p| idx.backlinks(p).into_iter().map(std::string::ToString::to_string).collect::<Vec<_>>()).unwrap_or_default()
                                 },
                                 on_select: move |path: String| {
                                     open_focused(path);
@@ -1485,11 +1377,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                         can_split: !split(),
                         on_split: move |()| split.set(true),
                         on_close_pane: None,
-                        on_send_other: move |p: String| {
-                            open_in_pane(tabs_b, active_b, p);
-                            focused.set(1);
-                            split.set(true);
-                        },
+                        on_send_other: move |p: String| { open_in_pane(tabs_b, active_b, p); focused.set(1); split.set(true); },
                         on_back: move |()| sidebar_open.set(true),
                         on_palette: move |()| show_palette.set(true),
                     }
@@ -1510,16 +1398,8 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                             mirror_content: content,
                             can_split: false,
                             on_split: move |()| {},
-                            on_close_pane: Some(
-                                EventHandler::new(move |()| {
-                                    split.set(false);
-                                    focused.set(0);
-                                }),
-                            ),
-                            on_send_other: move |p: String| {
-                                open_in_pane(tabs_a, active_a, p);
-                                focused.set(0);
-                            },
+                            on_close_pane: Some(EventHandler::new(move |()| { split.set(false); focused.set(0); })),
+                            on_send_other: move |p: String| { open_in_pane(tabs_a, active_a, p); focused.set(0); },
                             on_back: move |()| sidebar_open.set(true),
                             on_palette: move |()| show_palette.set(true),
                         }
@@ -1530,86 +1410,38 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
             // ── Bottom nav (mobile only — hidden by web CSS) ─────────────────
             div { class: "bottom-nav",
                 button {
-                    class:
-                    if panel() == Panel::Files {
-                        "bottom-nav-btn bottom-nav-btn--active"
-                    } else {
-                        "bottom-nav-btn"
-                    },
-                    onclick: move |_| {
-                        panel.set(Panel::Files);
-                        sidebar_open.set(true);
-                    },
+                    class: if panel() == Panel::Files { "bottom-nav-btn bottom-nav-btn--active" } else { "bottom-nav-btn" },
+                    onclick: move |_| { panel.set(Panel::Files); sidebar_open.set(true); },
                     IcoFolderTree { size: 18 }
                     span { class: "bottom-nav-label", "Files" }
                 }
                 button {
-                    class:
-                    if panel() == Panel::Search {
-                        "bottom-nav-btn bottom-nav-btn--active"
-                    } else {
-                        "bottom-nav-btn"
-                    },
-                    onclick: move |_| {
-                        panel.set(Panel::Search);
-                        sidebar_open.set(true);
-                    },
+                    class: if panel() == Panel::Search { "bottom-nav-btn bottom-nav-btn--active" } else { "bottom-nav-btn" },
+                    onclick: move |_| { panel.set(Panel::Search); sidebar_open.set(true); },
                     IcoSearch { size: 18 }
                     span { class: "bottom-nav-label", "Search" }
                 }
                 button {
-                    class:
-                    if panel() == Panel::Backlinks {
-                        "bottom-nav-btn bottom-nav-btn--active"
-                    } else {
-                        "bottom-nav-btn"
-                    },
-                    onclick: move |_| {
-                        panel.set(Panel::Backlinks);
-                        sidebar_open.set(true);
-                    },
+                    class: if panel() == Panel::Backlinks { "bottom-nav-btn bottom-nav-btn--active" } else { "bottom-nav-btn" },
+                    onclick: move |_| { panel.set(Panel::Backlinks); sidebar_open.set(true); },
                     IcoLink2 { size: 18 }
                     span { class: "bottom-nav-label", "Links" }
                 }
                 button {
-                    class:
-                    if panel() == Panel::Graph {
-                        "bottom-nav-btn bottom-nav-btn--active"
-                    } else {
-                        "bottom-nav-btn"
-                    },
-                    onclick: move |_| {
-                        panel.set(Panel::Graph);
-                        sidebar_open.set(true);
-                    },
+                    class: if panel() == Panel::Graph { "bottom-nav-btn bottom-nav-btn--active" } else { "bottom-nav-btn" },
+                    onclick: move |_| { panel.set(Panel::Graph); sidebar_open.set(true); },
                     IcoNetwork { size: 18 }
                     span { class: "bottom-nav-label", "Graph" }
                 }
                 button {
-                    class:
-                    if panel() == Panel::Bookmarks {
-                        "bottom-nav-btn bottom-nav-btn--active"
-                    } else {
-                        "bottom-nav-btn"
-                    },
-                    onclick: move |_| {
-                        panel.set(Panel::Bookmarks);
-                        sidebar_open.set(true);
-                    },
+                    class: if panel() == Panel::Bookmarks { "bottom-nav-btn bottom-nav-btn--active" } else { "bottom-nav-btn" },
+                    onclick: move |_| { panel.set(Panel::Bookmarks); sidebar_open.set(true); },
                     IcoBookmark { size: 18 }
                     span { class: "bottom-nav-label", "Saved" }
                 }
                 button {
-                    class:
-                    if panel() == Panel::Tasks {
-                        "bottom-nav-btn bottom-nav-btn--active"
-                    } else {
-                        "bottom-nav-btn"
-                    },
-                    onclick: move |_| {
-                        panel.set(Panel::Tasks);
-                        sidebar_open.set(true);
-                    },
+                    class: if panel() == Panel::Tasks { "bottom-nav-btn bottom-nav-btn--active" } else { "bottom-nav-btn" },
+                    onclick: move |_| { panel.set(Panel::Tasks); sidebar_open.set(true); },
                     IcoListChecks { size: 18 }
                     span { class: "bottom-nav-label", "Tasks" }
                 }
@@ -1745,11 +1577,7 @@ fn StorageFooter(on_rebuild: EventHandler<()>) -> Element {
                             rebuilding.set(false);
                         });
                     },
-                    if rebuilding() {
-                        "Rebuilding…"
-                    } else {
-                        "Rebuild"
-                    }
+                    if rebuilding() { "Rebuilding…" } else { "Rebuild" }
                 }
             }
             div { class: "storage-detail", "{detail}" }
@@ -2501,75 +2329,48 @@ fn EditorPane(
         div { class: "{col_class}",
             // ── Tab strip (hidden until at least one doc is open) ──
             if !tabs.read().is_empty() {
-                div { class: "tab-strip",
-                    for tab in tabs.read().iter().cloned() {
-                        {
-                            let p = tab.path.clone();
-                            let p_dbl = tab.path.clone();
-                            let p_close = tab.path.clone();
-                            let name = tab
-                                .path
-                                .rsplit('/')
-                                .next()
-                                .unwrap_or(&tab.path)
-                                .trim_end_matches(".md")
-                                .to_string();
-                            let is_active = active.read().as_deref() == Some(tab.path.as_str());
-                            let cls = match (is_active, tab.pinned) {
-                                (true, true) => "tab tab--active",
-                                (true, false) => "tab tab--active tab--preview",
-                                (false, true) => "tab",
-                                (false, false) => "tab tab--preview",
-                            }
-                            }
-                            rsx! {
-                                div {
-                                    key: "{p}",
-                                    class: "{cls}",
-                                    onclick: move |_| {
-                                        focused.set(pane_idx);
-                                        open_in_pane(tabs, active, p.clone());
-                                    },
-                                    ondoubleclick: move |_| {
-                                        tabs.with_mut(|ts| {
-                                            if let Some(t) = ts.iter_mut().find(|t| t.path == p_dbl) {
-                                                t.pinned = true;
-                                            }
-                                        });
-                                    },
-                                    span { class: "tab-name", "{name}" }
-                                    button {
-                                        class: "tab-close",
-                                        title: "Close tab",
-                                        onclick: move |e| {
-                                            e.stop_propagation();
-                                            close_tab(tabs, active, &p_close);
-                                        },
-                                        IcoX { size: 11 }
-                                    }
+            div { class: "tab-strip",
+                for tab in tabs.read().iter().cloned() {
+                    {
+                        let p = tab.path.clone();
+                        let p_dbl = tab.path.clone();
+                        let p_close = tab.path.clone();
+                        let name = tab.path.rsplit('/').next().unwrap_or(&tab.path).trim_end_matches(".md").to_string();
+                        let is_active = active.read().as_deref() == Some(tab.path.as_str());
+                        let cls = match (is_active, tab.pinned) {
+                            (true, true)  => "tab tab--active",
+                            (true, false) => "tab tab--active tab--preview",
+                            (false, true) => "tab",
+                            (false, false)=> "tab tab--preview",
+                        };
+                        rsx! {
+                            div {
+                                key: "{p}",
+                                class: "{cls}",
+                                onclick: move |_| { focused.set(pane_idx); open_in_pane(tabs, active, p.clone()); },
+                                ondoubleclick: move |_| {
+                                    tabs.with_mut(|ts| { if let Some(t) = ts.iter_mut().find(|t| t.path == p_dbl) { t.pinned = true; } });
+                                },
+                                span { class: "tab-name", "{name}" }
+                                button {
+                                    class: "tab-close",
+                                    title: "Close tab",
+                                    onclick: move |e| { e.stop_propagation(); close_tab(tabs, active, &p_close); },
+                                    IcoX { size: 11 }
                                 }
                             }
                         }
                     }
-                    div { class: "tab-strip-actions",
-                        if can_split {
-                            button {
-                                class: "editor-icon-btn",
-                                title: "Split right",
-                                onclick: move |_| on_split(()),
-                                "⊟"
-                            }
-                        }
-                        if let Some(close) = on_close_pane {
-                            button {
-                                class: "editor-icon-btn",
-                                title: "Close pane",
-                                onclick: move |_| close(()),
-                                IcoX { size: 14 }
-                            }
-                        }
+                }
+                div { class: "tab-strip-actions",
+                    if can_split {
+                        button { class: "editor-icon-btn", title: "Split right", onclick: move |_| on_split(()), "⊟" }
+                    }
+                    if let Some(close) = on_close_pane {
+                        button { class: "editor-icon-btn", title: "Close pane", onclick: move |_| close(()), IcoX { size: 14 } }
                     }
                 }
+            }
             }
 
             if let Some(path) = path_opt {
@@ -2589,43 +2390,25 @@ fn EditorPane(
                             IcoLayoutList { size: 15 }
                         }
                         button {
-                            class:
-                            if is_bookmarked {
-                                "editor-icon-btn editor-icon-btn--active"
-                            } else {
-                                "editor-icon-btn"
-                            },
+                            class: if is_bookmarked { "editor-icon-btn editor-icon-btn--active" } else { "editor-icon-btn" },
                             title: if is_bookmarked { "Remove bookmark" } else { "Add bookmark" },
                             onclick: move |_| {
                                 if let Some(p) = active() {
                                     if is_bookmarked {
                                         bookmarks.with_mut(|bm| bm.retain(|b| b != &p));
                                     } else {
-                                        bookmarks
-                                            .with_mut(|bm| {
-                                                if !bm.contains(&p) {
-                                                    bm.push(p);
-                                                }
-                                            });
+                                        bookmarks.with_mut(|bm| { if !bm.contains(&p) { bm.push(p); } });
                                     }
                                     state::save_bookmarks(&bookmarks.read());
                                 }
                             },
-                            if is_bookmarked {
-                                IcoBookmarkCheck { size: 15 }
-                            } else {
-                                IcoBookmark { size: 15 }
-                            }
+                            if is_bookmarked { IcoBookmarkCheck { size: 15 } } else { IcoBookmark { size: 15 } }
                         }
                         if loading_file() {
                             span { class: "save-status", "Loading…" }
                         } else {
                             span { class: "word-count", "{words} words" }
-                            span {
-                                class: "{status_class}",
-                                title: "{status_title}",
-                                "{status_label}"
-                            }
+                            span { class: "{status_class}", title: "{status_title}", "{status_label}" }
                             button {
                                 class: "editor-icon-btn",
                                 title: "Move to other pane",
@@ -2642,12 +2425,8 @@ fn EditorPane(
                                 title: "Export as HTML",
                                 onclick: move |_| {
                                     if let Some(ref path) = active() {
-                                        let title = path
-                                            .rsplit('/')
-                                            .next()
-                                            .unwrap_or(path)
-                                            .trim_end_matches(".md")
-                                            .to_string();
+                                        let title = path.rsplit('/').next().unwrap_or(path)
+                                            .trim_end_matches(".md").to_string();
                                         let filename = format!("{title}.html");
                                         let html = export::to_html(&title, &content.read());
                                         js::download_file(filename, html);
@@ -2678,8 +2457,7 @@ fn EditorPane(
                     p { class: "editor-empty-sub",
                         "Connected to "
                         strong { "{config.owner}/{config.repo}" }
-                        " · "
-                        code { "{config.branch}" }
+                        " · " code { "{config.branch}" }
                     }
                 }
             }
@@ -2705,23 +2483,17 @@ fn EditorPane(
                                     let query_len = slash_query().unwrap_or_default().len();
                                     slash_query.set(None);
                                     let cfg = cfg_t.clone();
-                                    let current_dir = active()
-                                        .and_then(|p| { p.rfind('/').map(|i| p[..i].to_string()) })
-                                        .unwrap_or_default();
+                                    let current_dir = active().and_then(|p| {
+                                        p.rfind('/').map(|i| p[..i].to_string())
+                                    }).unwrap_or_default();
                                     spawn(async move {
                                         if meta.filepath.is_some() {
-                                            apply_template(&meta, &cfg, files, to_open, load_error, &current_dir)
-                                                .await;
+                                            apply_template(&meta, &cfg, files, to_open, load_error, &current_dir).await;
                                         } else {
                                             let date_json = crate::dates::date_vars_json().await;
-                                            let vars = template::TemplateVars::from_json(
-                                                &date_json,
-                                                "",
-                                                &current_dir,
-                                            );
+                                            let vars = template::TemplateVars::from_json(&date_json, "", &current_dir);
                                             let body = template::strip_tabstops(
-                                                &template::substitute_vars(&meta.body, &vars),
-                                            );
+                                                &template::substitute_vars(&meta.body, &vars));
                                             js::apply_slash(body, 1 + query_len);
                                         }
                                     });
@@ -2826,19 +2598,16 @@ fn NewFileModal(
     };
 
     rsx! {
-        div { class: "qs-overlay", onclick: move |_| on_close(()),
+        div {
+            class: "qs-overlay",
+            onclick: move |_| on_close(()),
             div {
-                class: "qs-modal",
-                style: "max-width: 400px;",
+                class: "qs-modal", style: "max-width: 400px;",
                 onclick: move |e| e.stop_propagation(),
                 div { style: "padding: 16px 16px 8px; font-weight: 600;", "New note" }
                 if let Some(ref p) = current_dir {
                     div { style: "padding: 0 16px 8px; font-size: 0.8rem; color: var(--text-muted);",
-                        "Creating inside "
-                        code { "{p}/" }
-                        " — start with "
-                        code { "/" }
-                        " for vault root."
+                        "Creating inside " code { "{p}/" } " — start with " code { "/" } " for vault root."
                     }
                 }
                 input {
@@ -2848,36 +2617,24 @@ fn NewFileModal(
                     value: "{name}",
                     oninput: move |e| name.set(e.value()),
                     onkeydown: move |e| {
-                        if e.key() == Key::Enter {
-                            trigger.set(true);
-                        }
-                        if e.key() == Key::Escape {
-                            on_close(());
-                        }
+                        if e.key() == Key::Enter  { trigger.set(true); }
+                        if e.key() == Key::Escape { on_close(()); }
                     },
                 }
                 if !preview.is_empty() {
                     div { style: "padding: 4px 16px 0; font-size: 0.8rem; color: var(--text-muted);",
-                        "Will create: "
-                        code { "{preview}" }
+                        "Will create: " code { "{preview}" }
                     }
                 }
                 if let Some(ref err) = error() {
-                    div { style: "padding: 0 16px 8px; color: var(--danger); font-size: 0.85rem;",
-                        "{err}"
-                    }
+                    div { style: "padding: 0 16px 8px; color: var(--danger); font-size: 0.85rem;", "{err}" }
                 }
                 div { style: "padding: 8px 16px 14px; display: flex; gap: 8px; justify-content: flex-end;",
                     button {
-                        class: "settings-btn",
-                        style: "padding: 7px 16px;",
+                        class: "settings-btn", style: "padding: 7px 16px;",
                         disabled: creating(),
                         onclick: move |_| trigger.set(true),
-                        if creating() {
-                            "Creating…"
-                        } else {
-                            "Create"
-                        }
+                        if creating() { "Creating…" } else { "Create" }
                     }
                 }
             }
@@ -2960,19 +2717,16 @@ fn NewFolderModal(
     };
 
     rsx! {
-        div { class: "qs-overlay", onclick: move |_| on_close(()),
+        div {
+            class: "qs-overlay",
+            onclick: move |_| on_close(()),
             div {
-                class: "qs-modal",
-                style: "max-width: 400px;",
+                class: "qs-modal", style: "max-width: 400px;",
                 onclick: move |e| e.stop_propagation(),
                 div { style: "padding: 16px 16px 8px; font-weight: 600;", "New folder" }
                 if let Some(ref p) = parent {
                     div { style: "padding: 0 16px 8px; font-size: 0.8rem; color: var(--text-muted);",
-                        "Creating inside "
-                        code { "{p}/" }
-                        " — start with "
-                        code { "/" }
-                        " for vault root."
+                        "Creating inside " code { "{p}/" } " — start with " code { "/" } " for vault root."
                     }
                 }
                 input {
@@ -2982,36 +2736,24 @@ fn NewFolderModal(
                     value: "{name}",
                     oninput: move |e| name.set(e.value()),
                     onkeydown: move |e| {
-                        if e.key() == Key::Enter {
-                            trigger.set(true);
-                        }
-                        if e.key() == Key::Escape {
-                            on_close(());
-                        }
+                        if e.key() == Key::Enter  { trigger.set(true); }
+                        if e.key() == Key::Escape { on_close(()); }
                     },
                 }
                 if !preview.is_empty() {
                     div { style: "padding: 4px 16px 0; font-size: 0.8rem; color: var(--text-muted);",
-                        "Will create: "
-                        code { "{preview}/" }
+                        "Will create: " code { "{preview}/" }
                     }
                 }
                 if let Some(ref err) = error() {
-                    div { style: "padding: 0 16px 8px; color: var(--danger); font-size: 0.85rem;",
-                        "{err}"
-                    }
+                    div { style: "padding: 0 16px 8px; color: var(--danger); font-size: 0.85rem;", "{err}" }
                 }
                 div { style: "padding: 8px 16px 14px; display: flex; gap: 8px; justify-content: flex-end;",
                     button {
-                        class: "settings-btn",
-                        style: "padding: 7px 16px;",
+                        class: "settings-btn", style: "padding: 7px 16px;",
                         disabled: creating(),
                         onclick: move |_| trigger.set(true),
-                        if creating() {
-                            "Creating…"
-                        } else {
-                            "Create"
-                        }
+                        if creating() { "Creating…" } else { "Create" }
                     }
                 }
             }
@@ -3136,10 +2878,7 @@ fn BookmarksPanel(
                                 button {
                                     class: "bookmark-remove",
                                     title: "Remove bookmark",
-                                    onclick: move |e| {
-                                        e.stop_propagation();
-                                        on_remove(p2.clone());
-                                    },
+                                    onclick: move |e| { e.stop_propagation(); on_remove(p2.clone()); },
                                     IcoX { size: 12 }
                                 }
                             }
@@ -3205,21 +2944,19 @@ fn QuickSwitcher(
     };
 
     rsx! {
-        div { class: "qs-overlay", onclick: move |_| on_close(()),
-            div { class: "qs-modal", onclick: move |e| e.stop_propagation(),
+        div {
+            class: "qs-overlay",
+            onclick: move |_| on_close(()),
+            div {
+                class: "qs-modal",
+                onclick: move |e| e.stop_propagation(),
                 input {
-                    class: "qs-input",
-                    placeholder: "Go to file…",
-                    autofocus: true,
+                    class: "qs-input", placeholder: "Go to file…", autofocus: true,
                     value: "{query}",
                     oninput: move |e| query.set(e.value()),
                     onkeydown: move |e| {
-                        if e.key() == Key::Escape {
-                            on_close(());
-                        }
-                        if e.key() == Key::Enter && let Some(ref p) = first_path {
-                            on_select(p.clone());
-                        }
+                        if e.key() == Key::Escape { on_close(()); }
+                        if e.key() == Key::Enter && let Some(ref p) = first_path { on_select(p.clone()); }
                     },
                 }
                 if items.is_empty() {
@@ -3231,9 +2968,7 @@ fn QuickSwitcher(
                                 class: "qs-item",
                                 onclick: move |_| on_select(path.clone()),
                                 span { class: "qs-item-name", "{name}" }
-                                if !dir.is_empty() {
-                                    span { class: "qs-item-dir", "{dir}" }
-                                }
+                                if !dir.is_empty() { span { class: "qs-item-dir", "{dir}" } }
                             }
                         }
                     }
@@ -3292,21 +3027,19 @@ fn CommandPalette(
     let empty = matches.is_empty();
 
     rsx! {
-        div { class: "qs-overlay", onclick: move |_| on_close(()),
-            div { class: "qs-modal", onclick: move |e| e.stop_propagation(),
+        div {
+            class: "qs-overlay",
+            onclick: move |_| on_close(()),
+            div {
+                class: "qs-modal",
+                onclick: move |e| e.stop_propagation(),
                 input {
-                    class: "qs-input",
-                    placeholder: "Run a command…",
-                    autofocus: true,
+                    class: "qs-input", placeholder: "Run a command…", autofocus: true,
                     value: "{query}",
                     oninput: move |e| query.set(e.value()),
                     onkeydown: move |e| {
-                        if e.key() == Key::Escape {
-                            on_close(());
-                        }
-                        if e.key() == Key::Enter && let Some(a) = &first {
-                            on_run(a.clone());
-                        }
+                        if e.key() == Key::Escape { on_close(()); }
+                        if e.key() == Key::Enter && let Some(a) = &first { on_run(a.clone()); }
                     },
                 }
                 if empty {
@@ -3516,32 +3249,28 @@ fn TasksView(
                     for (path, items) in groups {
                         {
                             let p_open = path.clone();
-                            let name = path
-                                .rsplit('/')
-                                .next()
-                                .unwrap_or(&path)
-                                .trim_end_matches(".md")
-                                .to_string();
+                            let name = path.rsplit('/').next().unwrap_or(&path)
+                                .trim_end_matches(".md").to_string();
                             let dir = path.rfind('/').map(|i| path[..i].to_string()).unwrap_or_default();
-                            let open_items: Vec<Task> = items
-                                .iter()
-                                .filter(|t| t.is_open())
-                                .cloned()
-                                .collect();
+                            // Only open tasks move: a resolved one — done,
+                            // already migrated, dropped, or an event — is a
+                            // record of what happened in the note it happened
+                            // in, and dragging it forward would falsify that.
+                            let open_items: Vec<Task> =
+                                items.iter().filter(|t| t.is_open()).cloned().collect();
                             let has_open = !open_items.is_empty();
                             let busy = moving() == Some(path.clone());
                             let for_today = open_items.clone();
                             let for_pick = open_items.clone();
                             rsx! {
                                 div { class: "tasks-group",
-                                    div { class: "tasks-group-header",
+                                    div {
+                                        class: "tasks-group-header",
                                         div {
                                             class: "tasks-group-title",
                                             onclick: move |_| on_open(p_open.clone()),
                                             span { class: "tasks-group-name", "{name}" }
-                                            if !dir.is_empty() {
-                                                span { class: "tasks-group-dir", "{dir}" }
-                                            }
+                                            if !dir.is_empty() { span { class: "tasks-group-dir", "{dir}" } }
                                         }
                                         if has_open {
                                             div { class: "tasks-group-actions",
@@ -3553,12 +3282,7 @@ fn TasksView(
                                                         e.stop_propagation();
                                                         run_move.call((for_today.clone(), None));
                                                     },
-                                                    if busy {
-                                                        "Moving…"
-                                                    }
-                                                    if let Some(due) = t.due.clone() {
-                                                        "Move to today"
-                                                    }
+                                                    if busy { "Moving…" } else { "Move to today" }
                                                 }
                                                 button {
                                                     class: "tasks-move-btn",
@@ -3680,7 +3404,9 @@ fn MigrationReview(
             div {
                 class: "review-modal",
                 onclick: move |e: Event<MouseData>| e.stop_propagation(),
-                div { class: "move-picker-header", "Review {from_label} → {to_label}" }
+                div { class: "move-picker-header",
+                    "Review {from_label} → {to_label}"
+                }
                 if entries.is_empty() {
                     div { class: "review-empty",
                         "Nothing left open in {from_label}. That is the good outcome."
@@ -3695,13 +3421,7 @@ fn MigrationReview(
                                 rsx! {
                                     div {
                                         key: "{t.path}:{t.line}",
-                                        class:
-                                        if current == Decision::Undecided {
-                                            "review-row"
-                                        }
-                                        }
-                                            "review-row review-row--decided"
-                                        },
+                                        class: if current == Decision::Undecided { "review-row" } else { "review-row review-row--decided" },
                                         div { class: "review-entry",
                                             span { class: "review-text", "{text}" }
                                             if let Some(d) = due {
@@ -3714,8 +3434,7 @@ fn MigrationReview(
                                                 (Decision::Carry, "›", "Migrate"),
                                                 (Decision::Schedule, "‹", "Schedule"),
                                                 (Decision::Drop, "–", "Drop"),
-                                            ]
-                                            {
+                                            ] {
                                                 button {
                                                     key: "{title}",
                                                     class: if current == decision { "review-btn review-btn--on" } else { "review-btn" },
@@ -3724,10 +3443,11 @@ fn MigrationReview(
                                                     // this its accessible name would be "›".
                                                     "aria-label": "{title}",
                                                     onclick: move |_| {
-                                                        decisions
-                                                            .with_mut(|d| {
-                                                                d[i] = if d[i] == decision { Decision::Undecided } else { decision };
-                                                            });
+                                                        decisions.with_mut(|d| {
+                                                            // Clicking the chosen one again undoes it,
+                                                            // so a misclick isn't a commitment.
+                                                            d[i] = if d[i] == decision { Decision::Undecided } else { decision };
+                                                        });
                                                     },
                                                     "{label}"
                                                 }
@@ -3750,11 +3470,7 @@ fn MigrationReview(
                     }
                     div { class: "review-footer",
                         span { class: "review-count", "{decided} of {entries.len()} decided" }
-                        button {
-                            class: "review-cancel",
-                            onclick: move |_| on_cancel(()),
-                            "Cancel"
-                        }
+                        button { class: "review-cancel", onclick: move |_| on_cancel(()), "Cancel" }
                         button {
                             class: "review-apply",
                             disabled: busy || decided == 0 || date_missing,
@@ -3766,21 +3482,13 @@ fn MigrationReview(
                                     .zip(ds)
                                     .filter(|(_, d)| *d != Decision::Undecided)
                                     .map(|(t, d)| {
-                                        let due = if d == Decision::Schedule {
-                                            Some(date.clone())
-                                        } else {
-                                            None
-                                        };
+                                        let due = if d == Decision::Schedule { Some(date.clone()) } else { None };
                                         (t.clone(), d, due)
                                     })
                                     .collect();
                                 on_apply(picked);
                             },
-                            if busy {
-                                "Applying…"
-                            } else {
-                                "Apply"
-                            }
+                            if busy { "Applying…" } else { "Apply" }
                         }
                     }
                     if date_missing {
@@ -3823,7 +3531,9 @@ fn MoveTargetPicker(
             div {
                 class: "move-picker",
                 onclick: move |e: Event<MouseData>| e.stop_propagation(),
-                div { class: "move-picker-header", "Move {count} task(s) to…" }
+                div { class: "move-picker-header",
+                    "Move {count} task(s) to…"
+                }
                 input {
                     class: "move-picker-input",
                     r#type: "text",
@@ -3844,15 +3554,14 @@ fn MoveTargetPicker(
                         for path in matches {
                             {
                                 let p = path.clone();
-                                let name = path
-                                    .rsplit('/')
-                                    .next()
-                                    .unwrap_or(&path)
-                                    .trim_end_matches(".md")
-                                    .to_string();
-                                let dir = path.rfind('/').map(|i| path[..i].to_string()).unwrap_or_default();
+                                let name = path.rsplit('/').next().unwrap_or(&path)
+                                    .trim_end_matches(".md").to_string();
+                                let dir = path.rfind('/').map(|i| path[..i].to_string())
+                                    .unwrap_or_default();
                                 rsx! {
-                                    div { class: "move-picker-row", onclick: move |_| on_pick(p.clone()),
+                                    div {
+                                        class: "move-picker-row",
+                                        onclick: move |_| on_pick(p.clone()),
                                         span { class: "move-picker-name", "{name}" }
                                         if !dir.is_empty() {
                                             span { class: "move-picker-dir", "{dir}" }
@@ -3863,11 +3572,7 @@ fn MoveTargetPicker(
                         }
                     }
                 }
-                button {
-                    class: "move-picker-cancel",
-                    onclick: move |_| on_cancel(()),
-                    "Cancel"
-                }
+                button { class: "move-picker-cancel", onclick: move |_| on_cancel(()), "Cancel" }
             }
         }
     }
@@ -3885,9 +3590,7 @@ fn BacklinksPanel(
         div { class: "backlinks-panel",
             div { class: "outline-title",
                 if let Some(ref p) = active {
-                    "Linked to "
-                    {p.rsplit('/').next().unwrap_or(p)}
-                    ""
+                    "Linked to "{p.rsplit('/').next().unwrap_or(p)}""
                 } else {
                     "Backlinks"
                 }
@@ -3900,7 +3603,11 @@ fn BacklinksPanel(
                         let p = path.clone();
                         let name = path.rsplit('/').next().unwrap_or(path).to_string();
                         rsx! {
-                            div { class: "file-entry", onclick: move |_| on_select(p.clone()), "← {name}" }
+                            div {
+                                class: "file-entry",
+                                onclick: move |_| on_select(p.clone()),
+                                "← {name}"
+                            }
                         }
                     }
                 }
@@ -4092,19 +3799,14 @@ fn FileTree(
         // bubble up here.
         div {
             class: if root_drop() { "file-tree file-tree--drop" } else { "file-tree" },
-            ondragover: move |e| {
-                e.prevent_default();
-                root_drop.set(true);
-            },
+            ondragover: move |e| { e.prevent_default(); root_drop.set(true); },
             ondragleave: move |_| root_drop.set(false),
             ondrop: move |_| {
                 root_drop.set(false);
                 spawn(async move {
                     let data = js::get_drag_data().await;
                     js::clear_drag_data();
-                    if !data.is_empty() {
-                        on_move((data, String::new()));
-                    }
+                    if !data.is_empty() { on_move((data, String::new())); }
                 });
             },
             for (dir_prefix, dir_files) in dirs {
@@ -4193,10 +3895,7 @@ fn FileTreeDir(
                 style: "padding-left: {dir_pl}px",
                 draggable: true,
                 ondragstart: move |_| js::set_drag_data(dir_drag_payload(&prefix_drag)),
-                ondragover: move |e| {
-                    e.prevent_default();
-                    drag_over.set(true);
-                },
+                ondragover: move |e| { e.prevent_default(); drag_over.set(true); },
                 ondragleave: move |_| drag_over.set(false),
                 ondrop: move |e| {
                     e.stop_propagation();
@@ -4205,27 +3904,15 @@ fn FileTreeDir(
                     spawn(async move {
                         let data = js::get_drag_data().await;
                         js::clear_drag_data();
-                        if !data.is_empty() {
-                            on_move((data, dest));
-                        }
+                        if !data.is_empty() { on_move((data, dest)); }
                     });
                 },
                 onclick: move |_| {
                     collapsed.set(!collapsed());
                     on_select_dir(prefix_click.clone());
                 },
-                span { class: "file-tree-dir-chevron",
-                    if collapsed() {
-                        IcoChevronRight { size: 11 }
-                    } else {
-                        IcoChevronDown { size: 11 }
-                    }
-                }
-                if collapsed() {
-                    IcoFolderClosed { size: 14 }
-                } else {
-                    IcoFolderOpen { size: 14 }
-                }
+                span { class: "file-tree-dir-chevron", if collapsed() { IcoChevronRight { size: 11 } } else { IcoChevronDown { size: 11 } } }
+                if collapsed() { IcoFolderClosed { size: 14 } } else { IcoFolderOpen { size: 14 } }
                 span { class: "file-tree-dir-label", "{name}" }
             }
             if !collapsed() {
@@ -4291,9 +3978,7 @@ fn FileEntry(
                     on_delete(file_clone.clone());
                 }
             },
-            span { class: "file-entry-icon",
-                IcoFileText { size: 13 }
-            }
+            span { class: "file-entry-icon", IcoFileText { size: 13 } }
             span { class: "file-entry-name", "{file.name()}" }
             button {
                 class: "file-entry-delete",
@@ -4381,9 +4066,7 @@ fn FlatList(
                                         spawn(async move {
                                             let data = js::get_drag_data().await;
                                             js::clear_drag_data();
-                                            if !data.is_empty() {
-                                                on_move((data, dest));
-                                            }
+                                            if !data.is_empty() { on_move((data, dest)); }
                                         });
                                     },
                                     onclick: move |_| on_select_dir(dir_clone.clone()),
@@ -4403,18 +4086,13 @@ fn FlatList(
                                             draggable: true,
                                             ondragstart: move |_| js::set_drag_data(file_drag_payload(&p_drag)),
                                             onclick: move |_| on_select(p.clone()),
-                                            span { class: "file-entry-icon",
-                                                IcoFileText { size: 12 }
-                                            }
+                                            span { class: "file-entry-icon", IcoFileText { size: 12 } }
                                             span { class: "flat-list-name", "{file.name()}" }
                                             button {
                                                 class: "file-entry-delete",
                                                 title: "Delete",
                                                 tabindex: "-1",
-                                                onclick: move |e| {
-                                                    e.stop_propagation();
-                                                    on_delete(file_clone.clone());
-                                                },
+                                                onclick: move |e| { e.stop_propagation(); on_delete(file_clone.clone()); },
                                                 IcoTrash2 { size: 12 }
                                             }
                                         }
@@ -4524,9 +4202,7 @@ fn ColumnView(
                                 },
                                 "{label}"
                             }
-                            if !is_last {
-                                span { class: "col-crumb-sep", "/" }
-                            }
+                            if !is_last { span { class: "col-crumb-sep", "/" } }
                         }
                     }
                 }
@@ -4553,9 +4229,7 @@ fn ColumnView(
                                         spawn(async move {
                                             let data = js::get_drag_data().await;
                                             js::clear_drag_data();
-                                            if !data.is_empty() {
-                                                on_move((data, dest));
-                                            }
+                                            if !data.is_empty() { on_move((data, dest)); }
                                         });
                                     },
                                     onclick: move |_| {
@@ -4586,10 +4260,7 @@ fn ColumnView(
                                         button {
                                             class: "file-entry-delete",
                                             tabindex: "-1",
-                                            onclick: move |e| {
-                                                e.stop_propagation();
-                                                on_delete(fc.clone());
-                                            },
+                                            onclick: move |e| { e.stop_propagation(); on_delete(fc.clone()); },
                                             "🗑"
                                         }
                                     }
@@ -4622,9 +4293,7 @@ fn ColumnView(
                                             spawn(async move {
                                                 let data = js::get_drag_data().await;
                                                 js::clear_drag_data();
-                                                if !data.is_empty() {
-                                                    on_move((data, dest));
-                                                }
+                                                if !data.is_empty() { on_move((data, dest)); }
                                             });
                                         },
                                         onclick: move |_| {
@@ -4656,10 +4325,7 @@ fn ColumnView(
                                             button {
                                                 class: "file-entry-delete",
                                                 tabindex: "-1",
-                                                onclick: move |e| {
-                                                    e.stop_propagation();
-                                                    on_delete(fc.clone());
-                                                },
+                                                onclick: move |e| { e.stop_propagation(); on_delete(fc.clone()); },
                                                 "🗑"
                                             }
                                         }

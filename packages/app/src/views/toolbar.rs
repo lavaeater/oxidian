@@ -33,72 +33,18 @@ pub fn toggle_line_prefix(source: &str, cursor: usize, prefix: &str) -> String {
 pub fn FormattingToolbar(mut content: Signal<String>) -> Element {
     rsx! {
         div { class: "formatting-toolbar",
-            TbPrefix {
-                content,
-                label: "H1",
-                title: "Heading 1",
-                prefix: "# ",
-            }
-            TbPrefix {
-                content,
-                label: "H2",
-                title: "Heading 2",
-                prefix: "## ",
-            }
-            TbPrefix {
-                content,
-                label: "H3",
-                title: "Heading 3",
-                prefix: "### ",
-            }
+            TbPrefix { content, label: "H1", title: "Heading 1", prefix: "# " }
+            TbPrefix { content, label: "H2", title: "Heading 2", prefix: "## " }
+            TbPrefix { content, label: "H3", title: "Heading 3", prefix: "### " }
             div { class: "tb-sep" }
-            TbInline {
-                content,
-                label: "B",
-                title: "Bold",
-                prefix: "**",
-                suffix: "**",
-            }
-            TbInline {
-                content,
-                label: "I",
-                title: "Italic",
-                prefix: "*",
-                suffix: "*",
-            }
-            TbInline {
-                content,
-                label: "S",
-                title: "Strikethrough",
-                prefix: "~~",
-                suffix: "~~",
-            }
-            TbInline {
-                content,
-                label: "`C`",
-                title: "Inline code",
-                prefix: "`",
-                suffix: "`",
-            }
+            TbInline { content, label: "B",      title: "Bold",          prefix: "**", suffix: "**" }
+            TbInline { content, label: "I",      title: "Italic",        prefix: "*",  suffix: "*"  }
+            TbInline { content, label: "S",      title: "Strikethrough", prefix: "~~", suffix: "~~" }
+            TbInline { content, label: "`C`",    title: "Inline code",   prefix: "`",  suffix: "`"  }
             div { class: "tb-sep" }
-            TbPrefix {
-                content,
-                label: "• List",
-                title: "Bullet list",
-                prefix: "- ",
-            }
-            TbPrefix {
-                content,
-                label: "☐ Task",
-                title: "Task item",
-                prefix: "- [ ] ",
-            }
-            TbPrefix {
-                content,
-                label: "> Quote",
-                title: "Blockquote",
-                prefix: "> ",
-            }
+            TbPrefix { content, label: "• List", title: "Bullet list", prefix: "- "      }
+            TbPrefix { content, label: "☐ Task", title: "Task item",   prefix: "- [ ] "  }
+            TbPrefix { content, label: "> Quote",title: "Blockquote",  prefix: "> "      }
         }
     }
 }

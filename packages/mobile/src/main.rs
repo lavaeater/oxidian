@@ -32,18 +32,21 @@ fn App() -> Element {
     });
 
     rsx! {
-        document::Meta {
-            name: "viewport",
-            content: "width=device-width, initial-scale=1, viewport-fit=cover",
-        }
+        document::Meta { name: "viewport", content: "width=device-width, initial-scale=1, viewport-fit=cover" }
         document::Link { rel: "stylesheet", href: MAIN_CSS }
 
         if !booted() {
-
+            // blank while loading
         } else if let Some(cfg) = config() {
-            VaultBrowser { config: cfg, on_logout: move |()| config.set(None) }
+            VaultBrowser {
+                config: cfg,
+                on_logout: move |()| config.set(None),
+            }
         } else {
-            Settings { existing: None, on_save: move |cfg| config.set(Some(cfg)) }
+            Settings {
+                existing: None,
+                on_save: move |cfg| config.set(Some(cfg)),
+            }
         }
     }
 }

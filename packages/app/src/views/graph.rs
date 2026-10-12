@@ -144,6 +144,9 @@ pub fn GraphView(
     });
 
     rsx! {
-        canvas { id: "{canvas_id}", class: "graph-canvas" }
+        canvas {
+            id: "{canvas_id}",
+            class: "graph-canvas",
+        }
     }
 }
