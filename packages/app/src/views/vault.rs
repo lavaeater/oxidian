@@ -712,13 +712,10 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                 };
                 // Read the closing log from the vault, not the index: the index
                 // may be a refresh behind, and this is about to write to it.
-                match vault::dispatch::read_file(&cfg, &from_path).await {
-                    Ok(fc) => entries.extend(
-                        tasks::parse_file(&from_path, &fc.content).into_iter().filter(Task::is_open),
-                    ),
-                    // A log that was never written has nothing open in it,
-                    // which is a legitimate (and common) answer, not an error.
-                    Err(_) => {}
+                if let Ok(fc) = vault::dispatch::read_file(&cfg, &from_path).await {
+                  entries.extend(
+                    tasks::parse_file(&from_path, &fc.content).into_iter().filter(Task::is_open),
+                  );
                 }
             }
             review.set(Some(ReviewState {
