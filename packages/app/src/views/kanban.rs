@@ -305,7 +305,7 @@ pub fn KanbanBoard(
                                             Ok(_) => {
                                                 columns
                                                     .with_mut(|cols| {
-                                                        if let Some(c) = cols.iter_mut().find(|(n, _)| *n == col_add) // Move the underlying note between column folders.
+                                                        if let Some(c) = cols.iter_mut().find(|(n, _)| *n == col_add) // Move the underlying note between column folders. // Move the underlying note between column folders.
                                                         {
                                                             c.1.push(title.clone());
                                                         }
@@ -340,7 +340,7 @@ pub fn KanbanBoard(
                                                 if let Err(e) = vault::dispatch::create_file(
                                                         &cfg,
                                                         &dst_path,
-                                                        &fc.content, // Update board ordering: remove from src, append to dst.
+                                                        &fc.content, // Update board ordering: remove from src, append to dst. // Update board ordering: remove from src, append to dst.
                                                         &format!("Move {title} to {dst}"),
                                                     )
                                                     .await
