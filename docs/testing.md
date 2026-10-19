@@ -113,7 +113,7 @@ SSR in production).
 Add to the crate(s) under test (`app`, `ui`) as `[dev-dependencies]`:
 ```toml
 [dev-dependencies]
-dioxus-ssr      = "0.8.0-alpha.0"   # match the dioxus alpha in use
+dioxus-ssr      = "0.8.0-alpha.3"   # match the dioxus alpha in use
 pretty_assertions = "1"
 futures         = "0.3"
 ```
@@ -324,7 +324,7 @@ Runs on push to `main`/`testing` and on PRs, two jobs:
    on the same crates. Scoped to the three crates that hold tests: the
    desktop/mobile shells have no tests and would drag in libxdo/webkit link deps,
    and the web build is covered by the e2e job. Cached via `Swatinem/rust-cache`.
-2. **`e2e`** — installs the `dx` CLI (`cargo binstall dioxus-cli@0.8.0-alpha.0`) +
+2. **`e2e`** — installs the `dx` CLI (`cargo binstall dioxus-cli@0.8.0-alpha.3`) +
    the `wasm32-unknown-unknown` target, Node 20, `npm ci`, `npx playwright install
    --with-deps chromium`, then `npm test` (Playwright starts `dx run --package
    web` itself; `CI=1` disables server reuse and enables retries). Uploads the

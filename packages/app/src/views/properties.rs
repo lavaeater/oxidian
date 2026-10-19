@@ -109,7 +109,7 @@ pub fn PropertiesPanel(mut content: Signal<String>) -> Element {
                                     value: "{new_val}",
                                     oninput: move |e| new_val.set(e.value()),
                                     onkeydown: move |e| {
-                                        if e.key() != Key::Enter { return; }
+                                        if e.key() != Key::Named(NamedKey::Enter) { return; }
                                         let k = new_key.read().trim().to_string();
                                         let v = new_val.read().trim().to_string();
                                         if k.is_empty() { return; }

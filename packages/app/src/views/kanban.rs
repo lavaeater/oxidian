@@ -382,11 +382,11 @@ pub fn KanbanBoard(
                                         value: "{new_col_name}",
                                         oninput: move |e| new_col_name.set(e.value()),
                                         onkeydown: move |e| {
-                                            if e.key() == Key::Escape {
+                                            if e.key() == Key::Named(NamedKey::Escape) {
                                                 adding_col.set(false);
                                                 new_col_name.set(String::new());
                                             }
-                                            if e.key() == Key::Enter {
+                                            if e.key() == Key::Named(NamedKey::Enter) {
                                                 let name = new_col_name.read().trim().to_string();
                                                 if name.is_empty() { return; }
                                                 if columns.read().iter().any(|(n, _)| n == &name) {
@@ -497,8 +497,8 @@ fn KanbanColumn(
                         value: "{new_card}",
                         oninput: move |e| new_card.set(e.value()),
                         onkeydown: move |e| {
-                            if e.key() == Key::Escape { adding.set(false); new_card.set(String::new()); }
-                            if e.key() == Key::Enter {
+                            if e.key() == Key::Named(NamedKey::Escape) { adding.set(false); new_card.set(String::new()); }
+                            if e.key() == Key::Named(NamedKey::Enter) {
                                 let t = new_card.read().trim().to_string();
                                 if !t.is_empty() { on_add_card(t); }
                                 adding.set(false);

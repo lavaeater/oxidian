@@ -1308,7 +1308,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                                         value: "{board_input}",
                                         oninput: move |e| board_input.set(e.value()),
                                         onkeydown: move |e| {
-                                            if e.key() == Key::Enter {
+                                            if e.key() == Key::Named(NamedKey::Enter) {
                                                 let v = board_input.read().trim().to_string();
                                                 board_root.set(v.clone());
                                                 js::ls_set("oxidian_board", v);
@@ -2673,8 +2673,8 @@ fn NewFileModal(
                     value: "{name}",
                     oninput: move |e| name.set(e.value()),
                     onkeydown: move |e| {
-                        if e.key() == Key::Enter  { trigger.set(true); }
-                        if e.key() == Key::Escape { on_close(()); }
+                        if e.key() == Key::Named(NamedKey::Enter)  { trigger.set(true); }
+                        if e.key() == Key::Named(NamedKey::Escape) { on_close(()); }
                     },
                 }
                 if !preview.is_empty() {
@@ -2792,8 +2792,8 @@ fn NewFolderModal(
                     value: "{name}",
                     oninput: move |e| name.set(e.value()),
                     onkeydown: move |e| {
-                        if e.key() == Key::Enter  { trigger.set(true); }
-                        if e.key() == Key::Escape { on_close(()); }
+                        if e.key() == Key::Named(NamedKey::Enter)  { trigger.set(true); }
+                        if e.key() == Key::Named(NamedKey::Escape) { on_close(()); }
                     },
                 }
                 if !preview.is_empty() {
@@ -3011,8 +3011,8 @@ fn QuickSwitcher(
                     value: "{query}",
                     oninput: move |e| query.set(e.value()),
                     onkeydown: move |e| {
-                        if e.key() == Key::Escape { on_close(()); }
-                        if e.key() == Key::Enter && let Some(ref p) = first_path { on_select(p.clone()); }
+                        if e.key() == Key::Named(NamedKey::Escape) { on_close(()); }
+                        if e.key() == Key::Named(NamedKey::Enter) && let Some(ref p) = first_path { on_select(p.clone()); }
                     },
                 }
                 if items.is_empty() {
@@ -3094,8 +3094,8 @@ fn CommandPalette(
                     value: "{query}",
                     oninput: move |e| query.set(e.value()),
                     onkeydown: move |e| {
-                        if e.key() == Key::Escape { on_close(()); }
-                        if e.key() == Key::Enter && let Some(a) = &first { on_run(a.clone()); }
+                        if e.key() == Key::Named(NamedKey::Escape) { on_close(()); }
+                        if e.key() == Key::Named(NamedKey::Enter) && let Some(a) = &first { on_run(a.clone()); }
                     },
                 }
                 if empty {
@@ -3604,7 +3604,7 @@ fn MoveTargetPicker(
                     value: "{query}",
                     oninput: move |e| query.set(e.value()),
                     onkeydown: move |e: Event<KeyboardData>| {
-                        if e.key() == Key::Escape {
+                        if e.key() == Key::Named(NamedKey::Escape) {
                             on_cancel(());
                         }
                     },
@@ -4036,7 +4036,7 @@ fn FileEntry(
             ondragstart: move |_| js::set_drag_data(file_drag_payload(&path_drag)),
             onclick: move |_| on_select(path.clone()),
             onkeydown: move |e| {
-                if e.key() == Key::Delete || e.key() == Key::Backspace {
+                if e.key() == Key::Named(NamedKey::Delete) || e.key() == Key::Named(NamedKey::Backspace) {
                     on_delete(file_clone.clone());
                 }
             },
