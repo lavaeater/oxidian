@@ -6,8 +6,11 @@
 //! — its settings and its three log templates — lives under
 //! `.oxidian/plugins/bujo/`.
 
+use std::collections::BTreeSet;
+
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use vault::GithubConfig;
+use vault::{GithubConfig, VaultError};
 
 use super::{Asset, Field, PathKind, PluginDef, PluginStore};
 use crate::dates::Period;
@@ -114,6 +117,65 @@ pub fn seed_from_config(cfg: &GithubConfig) -> super::store::Values {
     seed
 }
 
+// ── Review state ──────────────────────────────────────────────────────────────
+
+/// Where the daily review records how far it has got. A file of its own rather
+/// than a key in `settings.json`: it changes on every review, and is read fresh
+/// each time so a review done on the phone is seen by the browser without a
+/// reload (and the browser's stale SHA can't collide with it).
+pub const REVIEW_STATE_PATH: &str = ".oxidian/plugins/bujo/review.json";
+
+#[derive(Serialize, Deserialize)]
+struct ReviewMark {
+    /// Every day *before* this one has been reviewed: the next daily review
+    /// starts here (clamped to the current month).
+    reviewed_through: String,
+}
+
+/// The date the last daily review left off at, if one has been recorded.
+pub async fn reviewed_through(cfg: &GithubConfig) -> Option<String> {
+    let fc = vault::dispatch::read_file(cfg, REVIEW_STATE_PATH).await.ok()?;
+    serde_json::from_str::<ReviewMark>(&fc.content)
+        .ok()
+        .map(|m| m.reviewed_through)
+}
+
+/// Record where the next daily review should start. Creates the file the
+/// first time.
+pub async fn mark_reviewed(cfg: &GithubConfig, date: &str) -> Result<(), String> {
+    let mark = ReviewMark { reviewed_through: date.to_string() };
+    let json = serde_json::to_string_pretty(&mark).map_err(|e| e.to_string())?;
+    let content = format!("{json}\n");
+    let msg = format!("Bullet Journal reviewed through {date}");
+    let result = match vault::dispatch::read_file(cfg, REVIEW_STATE_PATH).await {
+        Ok(fc) if fc.content == content => return Ok(()),
+        Ok(fc) => vault::dispatch::write_file(cfg, REVIEW_STATE_PATH, &content, &fc.sha, &msg).await,
+        Err(VaultError::NotFound(_)) => {
+            vault::dispatch::create_file(cfg, REVIEW_STATE_PATH, &content, &msg).await
+        }
+        Err(e) => Err(e),
+    };
+    result
+        .map(|_| ())
+        .map_err(|e| format!("Could not save {REVIEW_STATE_PATH}: {e}"))
+}
+
+/// The texts of the open tasks a log template seeds every new log with —
+/// "check email", "fill in timesheet". Each log gets a fresh copy of these, so
+/// yesterday's unticked one is not a straggler and the review leaves it alone.
+///
+/// Blank tasks (the template's empty `- [ ] ` prompt) are not included: an
+/// empty entry is not a recurring chore.
+#[must_use]
+pub fn template_task_texts(template_body: &str) -> BTreeSet<String> {
+    index::tasks::parse_file("", template_body)
+        .into_iter()
+        .filter(index::tasks::Task::is_open)
+        .map(|t| t.text.trim().to_string())
+        .filter(|t| !t.is_empty())
+        .collect()
+}
+
 // ── Default templates ─────────────────────────────────────────────────────────
 //
 // Written into the plugin's folder on first enable and never overwritten after
@@ -201,6 +263,18 @@ mod tests {
             let meta = crate::template::parse_template(path, contents);
             assert!(meta.filepath.is_some(), "{path} has no filepath:");
         }
+    }
+
+    #[test]
+    fn recurring_template_tasks_are_the_open_non_blank_ones() {
+        let body = "# Log\n\n- [ ] Check email\n- [ ]  Complete timesheet \n- [x] Done already\n- [ ] \n";
+        let texts = template_task_texts(body);
+        assert_eq!(
+            texts.into_iter().collect::<Vec<_>>(),
+            vec!["Check email".to_string(), "Complete timesheet".to_string()]
+        );
+        // The shipped template's blank prompt is not a chore.
+        assert!(template_task_texts(DAILY_LOG).is_empty());
     }
 
     #[test]

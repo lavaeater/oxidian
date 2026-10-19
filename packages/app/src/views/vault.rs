@@ -682,11 +682,12 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
     // Open the review for the period *before* the one being browsed: closing a
     // log is something you do to the one that just ended.
     //
-    // For a Day review this walks every day from the start of the current
-    // week up to (but not including) the one being opened, not just the
-    // single day before it — skip the Wednesday review, open Thursday, and
-    // Monday and Tuesday's stragglers still need to be seen, not silently
-    // skipped. Week/Month reviews still cover just the one period before.
+    // For a Day review this walks every day since the last review (within the
+    // current month) up to (but not including) the one being opened — see
+    // `review_from_dates`. Week/Month reviews cover just the one period before.
+    //
+    // Entries the period's template seeds every log with ("check email") are
+    // left out: the new log already has its own fresh copy.
     let open_review = use_callback(move |(): ()| {
         let cfg = cfg_review.clone();
         let period = log_period();
@@ -695,13 +696,18 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                 let d = log_date.read().clone();
                 if d.is_empty() { crate::dates::today().await } else { d }
             };
-            let from_dates = review_from_dates(period, &base);
+            let mark = if period == dates::Period::Day {
+                plugins::bujo::reviewed_through(&cfg).await
+            } else {
+                None
+            };
+            let from_dates = review_from_dates(period, &base, mark.as_deref());
             let tmpls = templates_when_ready(templates, templates_ready).await;
             let store = plugin_store.peek().clone();
             let Some((to_path, to_body)) = periodic_note(&cfg, &store, &tmpls, period, &base).await else {
                 return;
             };
-            let mut entries: Vec<Task> = Vec::new();
+            let mut sources: Vec<(String, String)> = Vec::new();
             for from_date in &from_dates {
                 let Some((from_path, _)) = periodic_note(&cfg, &store, &tmpls, period, from_date).await else {
                     load_error.set(Some(format!(
@@ -710,12 +716,28 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                     )));
                     return;
                 };
-                // Read the closing log from the vault, not the index: the index
-                // may be a refresh behind, and this is about to write to it.
-                if let Ok(fc) = vault::dispatch::read_file(&cfg, &from_path).await {
-                  entries.extend(
-                    tasks::parse_file(&from_path, &fc.content).into_iter().filter(Task::is_open),
-                  );
+                sources.push((from_date.clone(), from_path));
+            }
+            // Read the closing logs from the vault, not the index: the index
+            // may be a refresh behind, and this is about to write to them. A
+            // month's worth of days is a lot of round trips, so all at once.
+            let reads = futures::future::join_all(
+                sources.iter().map(|(_, path)| vault::dispatch::read_file(&cfg, path)),
+            )
+            .await;
+            let recurring = plugins::bujo::template_task_texts(&to_body);
+            let entries: Vec<Task> = sources
+                .iter()
+                .zip(reads)
+                .filter_map(|((_, path), read)| read.ok().map(|fc| tasks::parse_file(path, &fc.content)))
+                .flatten()
+                .filter(|t| t.is_open() && !recurring.contains(t.text.trim()))
+                .collect();
+            if period == dates::Period::Day && entries.is_empty() {
+                // Nothing to decide, so these days are as reviewed as they'll
+                // get. Best-effort: failing only means re-walking them later.
+                if let Err(e) = plugins::bujo::mark_reviewed(&cfg, &base).await {
+                    console_log(&format!("[oxidian] {e}"));
                 }
             }
             review.set(Some(ReviewState {
@@ -723,6 +745,8 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                 to_label: dates::period_key(period, &base),
                 to_path,
                 to_body,
+                base: base.clone(),
+                sources: if period == dates::Period::Day { sources } else { Vec::new() },
                 entries,
             }));
         });
@@ -759,6 +783,20 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                 &today_now,
             )
             .await;
+            if result.is_ok() && !state.sources.is_empty() {
+                let undecided: std::collections::BTreeSet<&str> = state
+                    .entries
+                    .iter()
+                    .filter(|e| !picked.iter().any(|(t, _, _)| t.path == e.path && t.line == e.line))
+                    .map(|e| e.path.as_str())
+                    .collect();
+                let next = next_review_mark(&state.sources, &undecided, &state.base);
+                // Best-effort: the migration itself has landed, and a missing
+                // mark only means the next review walks a few extra days.
+                if let Err(e) = plugins::bujo::mark_reviewed(&cfg, &next).await {
+                    console_log(&format!("[oxidian] {e}"));
+                }
+            }
             review_busy.set(false);
             match result {
                 Ok(()) => {
@@ -1659,29 +1697,50 @@ async fn templates_when_ready(
 /// Which dates a migration review should pull open tasks from, for the period
 /// just before `base`.
 ///
-/// For `Day` this is every day from the start of the current week up to (but
-/// not including) `base`, not just the single day before it — skip the
-/// Wednesday review, open Thursday, and Monday and Tuesday's stragglers still
-/// need to be seen, not silently carried past. `Week`/`Month` still cover just
-/// the one period before, since there's no equivalent "skipped a week inside
-/// a month" scenario the switcher exposes. Always returns at least one date.
-fn review_from_dates(period: dates::Period, base: &str) -> Vec<String> {
+/// For `Day` this is every day from where the last review left off
+/// (`reviewed_through`, see `plugins::bujo::reviewed_through`) up to (but not
+/// including) `base` — skip a few days' reviews and those days' stragglers
+/// still need to be seen, not silently carried past. The walk never reaches
+/// back past the 1st of `base`'s month, and with no mark it starts there.
+/// `Week`/`Month` still cover just the one period before. Always returns at
+/// least one date.
+fn review_from_dates(period: dates::Period, base: &str, reviewed_through: Option<&str>) -> Vec<String> {
     if period != dates::Period::Day {
         return vec![dates::shift_period(period, base, -1)];
     }
-    let week_start = dates::period_start(dates::Period::Week, base);
-    let mut d = week_start;
+    let month_start = dates::period_start(dates::Period::Month, base);
+    let mut d = match reviewed_through {
+        Some(mark) if mark > month_start.as_str() => mark.to_string(),
+        _ => month_start,
+    };
     let mut days = Vec::new();
     while d.as_str() < base {
         days.push(d.clone());
         d = dates::shift_days(&d, 1);
     }
-    // Monday reviewing itself has no earlier day this week — fall back to the
-    // single day before, same as it always has.
+    // Nothing left to walk — the 1st of the month, or a second review the same
+    // day — so fall back to the single day before, same as it always has.
     if days.is_empty() {
         days.push(dates::shift_days(base, -1));
     }
     days
+}
+
+/// Where the next daily review should start, once this one is applied: the
+/// earliest source day that still has an undecided entry on it, or `base` when
+/// everything was decided. A partial review must not move the mark past the
+/// entries it left open, or the next review would never show them.
+///
+/// `sources` is `(date, path)` per reviewed day, oldest first.
+fn next_review_mark(
+    sources: &[(String, String)],
+    undecided_paths: &std::collections::BTreeSet<&str>,
+    base: &str,
+) -> String {
+    sources
+        .iter()
+        .find(|(_, path)| undecided_paths.contains(path.as_str()))
+        .map_or_else(|| base.to_string(), |(date, _)| date.clone())
 }
 
 /// The label shown for the source side of a review, e.g. `2026-08-25` for one
@@ -3354,6 +3413,12 @@ struct ReviewState {
     to_label: String,
     to_path: String,
     to_body: String,
+    /// The date the review was opened on — where the next one starts if
+    /// everything gets decided.
+    base: String,
+    /// `(date, path)` of each day log read, oldest first. Empty for week and
+    /// month reviews, which don't track a review mark.
+    sources: Vec<(String, String)>,
     entries: Vec<Task>,
 }
 
@@ -4354,12 +4419,12 @@ mod tests {
         assert!(human_bytes(u64::MAX).ends_with(" TB"));
     }
 
-    // 2026-08-24 is a Monday, so 2026-08-27 (Thursday) has two skipped days
-    // (Tue, Wed) sitting behind the one directly before it.
     #[test]
-    fn day_review_covers_every_skipped_day_this_week() {
+    fn day_review_covers_every_day_since_the_last_review() {
+        // Last reviewed on the 24th, opened on the 27th: the 24th's own
+        // entries (logged after that review) and the skipped 25th and 26th.
         assert_eq!(
-            review_from_dates(dates::Period::Day, "2026-08-27"),
+            review_from_dates(dates::Period::Day, "2026-08-27", Some("2026-08-24")),
             vec!["2026-08-24", "2026-08-25", "2026-08-26"]
         );
     }
@@ -4367,22 +4432,50 @@ mod tests {
     #[test]
     fn day_review_the_morning_after_still_covers_just_that_day() {
         assert_eq!(
-            review_from_dates(dates::Period::Day, "2026-08-25"),
+            review_from_dates(dates::Period::Day, "2026-08-25", Some("2026-08-24")),
             vec!["2026-08-24"]
         );
     }
 
     #[test]
-    fn day_review_on_monday_falls_back_to_the_prior_sunday() {
-        // Nothing earlier in *this* week to walk, so it reaches back across
-        // the week boundary rather than reviewing nothing.
-        assert_eq!(review_from_dates(dates::Period::Day, "2026-08-24"), vec!["2026-08-23"]);
+    fn day_review_with_no_mark_walks_the_whole_month_so_far() {
+        let days = review_from_dates(dates::Period::Day, "2026-08-05", None);
+        assert_eq!(days, vec!["2026-08-01", "2026-08-02", "2026-08-03", "2026-08-04"]);
+    }
+
+    #[test]
+    fn day_review_never_reaches_back_past_the_first_of_the_month() {
+        let days = review_from_dates(dates::Period::Day, "2026-08-03", Some("2026-07-20"));
+        assert_eq!(days, vec!["2026-08-01", "2026-08-02"]);
+    }
+
+    #[test]
+    fn day_review_with_nothing_to_walk_falls_back_to_the_day_before() {
+        // The 1st of the month...
+        assert_eq!(review_from_dates(dates::Period::Day, "2026-09-01", None), vec!["2026-08-31"]);
+        // ...or a second review on a day already reviewed.
+        assert_eq!(
+            review_from_dates(dates::Period::Day, "2026-08-27", Some("2026-08-27")),
+            vec!["2026-08-26"]
+        );
     }
 
     #[test]
     fn week_and_month_reviews_still_cover_only_the_one_period_before() {
-        assert_eq!(review_from_dates(dates::Period::Week, "2026-08-27"), vec!["2026-08-17"]);
-        assert_eq!(review_from_dates(dates::Period::Month, "2026-08-27"), vec!["2026-07-01"]);
+        assert_eq!(review_from_dates(dates::Period::Week, "2026-08-27", None), vec!["2026-08-17"]);
+        assert_eq!(review_from_dates(dates::Period::Month, "2026-08-27", None), vec!["2026-07-01"]);
+    }
+
+    #[test]
+    fn the_review_mark_stops_at_the_first_day_with_undecided_entries() {
+        let sources: Vec<(String, String)> = ["24", "25", "26"]
+            .iter()
+            .map(|d| (format!("2026-08-{d}"), format!("j/2026-08-{d}.md")))
+            .collect();
+        let none = std::collections::BTreeSet::new();
+        assert_eq!(next_review_mark(&sources, &none, "2026-08-27"), "2026-08-27");
+        let left = std::collections::BTreeSet::from(["j/2026-08-25.md"]);
+        assert_eq!(next_review_mark(&sources, &left, "2026-08-27"), "2026-08-25");
     }
 
     #[test]
