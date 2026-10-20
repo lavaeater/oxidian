@@ -1301,7 +1301,8 @@ kbd {
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
   overflow: hidden;
 }
-.review-list { overflow-y: auto; flex: 1; }
+/* Tasks and note sections scroll together between the header and footer. */
+.review-body { overflow-y: auto; flex: 1; min-height: 0; }
 .review-empty,
 .review-hint {
   padding: 14px 12px;
@@ -1338,6 +1339,49 @@ kbd {
 }
 .review-btn:hover { color: var(--text); border-color: var(--accent); }
 .review-btn--on { background: var(--accent); border-color: var(--accent); color: #fff; }
+/* "File notes": one card per ## section — heading, where it is from, a short
+   preview, and where it is going. */
+.review-subheader {
+  padding: 10px 12px 6px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
+}
+.review-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.review-section-head { display: flex; align-items: baseline; gap: 8px; }
+.review-section-head .review-text { font-weight: 600; flex: 1; min-width: 0; }
+.review-section-from { font-size: 0.72rem; color: var(--text-muted); white-space: nowrap; }
+.review-section-preview {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.review-section-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+.review-section-dest { font-size: 0.8rem; color: var(--accent); overflow-wrap: anywhere; }
+.review-file-btn {
+  padding: 4px 10px;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.review-file-btn:hover { border-color: var(--accent); }
 .review-date {
   display: flex;
   align-items: center;
@@ -1419,6 +1463,7 @@ kbd {
   color: var(--text);
 }
 .move-picker-row:hover { background: var(--bg3); }
+.move-picker-row--new { color: var(--accent); }
 .move-picker-name { font-weight: 500; }
 .move-picker-dir {
   font-size: 0.72rem;

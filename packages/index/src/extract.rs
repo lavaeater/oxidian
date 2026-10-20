@@ -174,14 +174,15 @@ fn collect_tags(line: &str, out: &mut Vec<String>) {
     }
 }
 
-/// `[[target]]` and `[[target|display]]` → `target`.
+/// `[[target]]`, `[[target|display]]` and `[[target#heading]]` → `target`.
 fn collect_links(line: &str, out: &mut Vec<String>) {
     let mut rest = line;
     while let Some(start) = rest.find("[[") {
         rest = &rest[start + 2..];
         let Some(end) = rest.find("]]") else { break };
         let inner = &rest[..end];
-        let target = inner.split('|').next().unwrap_or(inner).trim();
+        let target = inner.split('|').next().unwrap_or(inner);
+        let target = target.split(['#', '^']).next().unwrap_or(target).trim();
         if !target.is_empty() {
             out.push(target.to_string());
         }
@@ -302,6 +303,12 @@ not a #tag and not [[a link]] and not a # heading\n\
     #[test]
     fn collects_links_without_display_text() {
         assert_eq!(page().links, vec!["Alice", "Bob"]);
+    }
+
+    #[test]
+    fn a_heading_link_is_a_link_to_the_note() {
+        let p = extract("a.md", "s", "see [[Website#Meeting]] and [[Plan^b1|label]]\n");
+        assert_eq!(p.links, vec!["Website", "Plan"]);
     }
 
     #[test]
