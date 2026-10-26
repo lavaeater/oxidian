@@ -116,8 +116,10 @@ What is missing is the **review surface**: one screen, one entry at a time, show
 |---|---|---|
 | **Done** | `- [x]` + `✅ YYYY-MM-DD` in place | Completed, stays in its original log |
 | **Migrate** | `- [>]` in place, appended as `- [ ]` in the next period's log | Moved forward |
-| **Schedule** | `- [<]` in place, appended to the Future Log with `📅 date` | Deferred to a chosen date |
+| **To month** | `- [<]` in place, appended as `- [ ]` to this month's log | Deferred to the month backlog |
 | **Drop** | `- [-]` in place | Consciously abandoned, still visible |
+
+**The month backlog.** The month log is where deferred entries wait. Every day or week review lists its open entries below the closing log's, each with **Done**, **Drop**, or **Pull in** — `- [>]` in the month log, a fresh `- [ ]` in the log being opened. So the daily loop is: pull what you'll do today down from the month, and push back up what you won't. (This replaced a dated *Schedule*, which nothing collected — a Future Log is still unbuilt.)
 
 The original line is never deleted — it is re-marked. That is true to the paper method (you can see your own churn) and it is what makes the statistics in phase 6 possible.
 
@@ -148,7 +150,7 @@ Each phase is independently shippable, and the early ones pay for themselves eve
 | **0** ✅ | `Status` enum replacing `checked: bool`; parse and write `[>] [<] [-] [o]`; `FORMAT_VERSION` → 3; Tasks panel and DQL `TASK` show the new states. Pure `packages/index` work, fully unit-testable. `set_status_content` is the single write path, which phase 3 reuses. | — |
 | **1** ✅ | Weekly and monthly logs (absorbs the weekly/monthly half of US 3.2/3.3): `weekly_note_template` / `monthly_note_template` settings, `dates::Period` arithmetic, palette commands, and the period switcher. Useful on its own to anyone who wants weekly notes. | 0 |
 | **2** ✅ | Rapid logging in the editor: the tokenizer accepts every signifier and carries the raw marker (the `ui` crate can't depend on `index`, so `task_status_name` mirrors `Status`); glyphs are drawn in CSS so the raw `[m]` survives the `innerText` round trip; **Ctrl/⌘-Enter** cycles an entry's state (Shift reverses) and promotes a plain bullet to a task; slash commands for each entry type. | 0 |
-| **3** ✅ | **The migration ritual.** Review over the closing period with Done / Migrate / Schedule / Drop (`MigrationReview` + `migrate_tasks`), destination written first. Not built on the existing move: the original line is re-marked, never cut. **The first recognisably-BuJo release.** | 1 |
+| **3** ✅ | **The migration ritual.** Review over the closing period with Done / Migrate / To month / Drop, plus pulling from the month backlog (`MigrationReview` + `migrate_tasks`), destination written first. Not built on the existing move: the original line is re-marked, never cut. **The first recognisably-BuJo release.** | 1 |
 | **4** | **The running Index** — collections, threads, first-seen/last-touched, as a panel. | 0 |
 | **5** | Future Log: collect `📅`-dated and `[<]` entries beyond this month; migrate them into a month when it opens. | 3 |
 | **6** | Reflection: per-period statistics — completed vs migrated vs dropped, and repeat-migration nagging. The "review what got done" half of the original ask. | 3 |

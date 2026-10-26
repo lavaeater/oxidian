@@ -741,6 +741,28 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                 .iter()
                 .flat_map(|(path, content)| fileable_sections(path, content, &task_headings))
                 .collect();
+            // The month log is the backlog: entries pushed up out of a day or
+            // week wait there until a review pulls them back down. A month
+            // review has nowhere further up to push, so it has no backlog.
+            let month = if period == dates::Period::Month {
+                None
+            } else {
+                periodic_note(&cfg, &store, &tmpls, dates::Period::Month, &base).await
+            };
+            let (month, backlog) = match month {
+                Some((path, body)) => {
+                    let backlog: Vec<Task> = match vault::dispatch::read_file(&cfg, &path).await {
+                        Ok(fc) => tasks::parse_file(&path, &fc.content)
+                            .into_iter()
+                            .filter(Task::is_open)
+                            .collect(),
+                        Err(_) => Vec::new(),
+                    };
+                    let label = dates::period_key(dates::Period::Month, &base);
+                    (Some(ReviewMonth { label, path, body }), backlog)
+                }
+                None => (None, Vec::new()),
+            };
             if period == dates::Period::Day && entries.is_empty() && sections.is_empty() {
                 // Nothing to decide, so these days are as reviewed as they'll
                 // get. Best-effort: failing only means re-walking them later.
@@ -757,6 +779,8 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                 sources: if period == dates::Period::Day { sources } else { Vec::new() },
                 entries,
                 sections,
+                month,
+                backlog,
             }));
         });
     });
@@ -769,14 +793,30 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
         spawn(async move {
             review_busy.set(true);
             let ReviewPicks { tasks: picked, filed } = picks;
-            let carried: Vec<(Task, Option<String>)> = picked
-                .iter()
-                .filter(|(_, d, _)| matches!(d, Decision::Carry | Decision::Schedule))
-                .map(|(t, _, due)| (t.clone(), due.clone()))
-                .collect();
+            let picked_as = |decision: Decision| -> Vec<Task> {
+                picked.iter().filter(|(_, d)| *d == decision).map(|(t, _)| t.clone()).collect()
+            };
+            // Forward into the log being opened is a migration (`[>]`); back up
+            // into the month is a deferral (`[<]`), so the closing log records
+            // which way each entry went.
+            let mut carried = vec![CarryTo {
+                dest: state.to_path.clone(),
+                dest_body: state.to_body.clone(),
+                mark: Status::Migrated,
+                tasks: picked_as(Decision::Carry),
+            }];
+            if let Some(month) = &state.month {
+                carried.push(CarryTo {
+                    dest: month.path.clone(),
+                    dest_body: month.body.clone(),
+                    mark: Status::Scheduled,
+                    tasks: picked_as(Decision::ToMonth),
+                });
+            }
+            carried.retain(|c| !c.tasks.is_empty());
             let resolved: Vec<(Task, Status)> = picked
                 .iter()
-                .filter_map(|(t, d, _)| match d {
+                .filter_map(|(t, d)| match d {
                     Decision::Done => Some((t.clone(), Status::Done)),
                     Decision::Drop => Some((t.clone(), Status::Dropped)),
                     _ => None,
@@ -788,16 +828,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
             let mut result = if carried.is_empty() && resolved.is_empty() {
                 Ok(())
             } else {
-                migrate_tasks(
-                    vault_idx,
-                    &cfg,
-                    &carried,
-                    &resolved,
-                    &state.to_path,
-                    &state.to_body,
-                    &today_now,
-                )
-                .await
+                migrate_tasks(vault_idx, &cfg, &carried, &resolved, &today_now).await
             };
             if result.is_ok() && !filed.is_empty() {
                 result = file_sections(vault_idx, &cfg, &filed).await;
@@ -806,7 +837,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                 let undecided: std::collections::BTreeSet<&str> = state
                     .entries
                     .iter()
-                    .filter(|e| !picked.iter().any(|(t, _, _)| t.path == e.path && t.line == e.line))
+                    .filter(|e| !picked.iter().any(|(t, _)| t.path == e.path && t.line == e.line))
                     .map(|e| e.path.as_str())
                     .collect();
                 let next = next_review_mark(&state.sources, &undecided, &state.base);
@@ -1541,6 +1572,8 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                     to_label: state.to_label.clone(),
                     entries: state.entries.clone(),
                     sections: state.sections.clone(),
+                    month_label: state.month.as_ref().map(|m| m.label.clone()),
+                    backlog: state.backlog.clone(),
                     files,
                     busy: review_busy(),
                     on_apply: move |picked| apply_review.call(picked),
@@ -1848,30 +1881,28 @@ async fn periodic_note(
 /// re-marks it, so the closing log keeps an honest record of what was on it and
 /// what became of each entry (`docs/bujo-roadmap.md` §5).
 ///
-/// `carried` are the entries going forward (with an optional due date each, for
-/// scheduling); `resolved` are the ones being marked done or dropped in place.
-/// The destination is written **first**, for the same reason as `move_tasks`: a
-/// failure between the writes shows the entry in both logs, which is visible and
-/// fixable, rather than losing it.
+/// `carried` are the entries going somewhere else, grouped by destination;
+/// `resolved` are the ones being marked done or dropped in place. Destinations
+/// are written **first**, for the same reason as `move_tasks`: a failure between
+/// the writes shows the entry in both logs, which is visible and fixable, rather
+/// than losing it.
 async fn migrate_tasks(
     idx: Signal<Index>,
     cfg: &GithubConfig,
-    carried: &[(Task, Option<String>)],
+    carried: &[CarryTo],
     resolved: &[(Task, Status)],
-    dest: &str,
-    dest_body: &str,
     today: &str,
 ) -> Result<(), String> {
-    if carried.is_empty() && resolved.is_empty() {
+    if carried.iter().all(|c| c.tasks.is_empty()) && resolved.is_empty() {
         return Err("Nothing to review.".to_string());
     }
 
-    // Destination first, and only if something is actually going forward.
-    if !carried.is_empty() {
-        let lines: Vec<String> = carried
-            .iter()
-            .map(|(t, due)| tasks::carried_line(t, due.as_deref()))
-            .collect();
+    // Destinations first, and only the ones something is actually going to.
+    for CarryTo { dest, dest_body, tasks: items, .. } in carried {
+        if items.is_empty() {
+            continue;
+        }
+        let lines: Vec<String> = items.iter().map(|t| tasks::carried_line(t, None)).collect();
         let dest_name = dest.rsplit('/').next().unwrap_or(dest);
         let msg = format!("Migrate {} entr(y/ies) to {dest_name}", lines.len());
         let (content, sha) = match vault::dispatch::read_file(cfg, dest).await {
@@ -1892,11 +1923,10 @@ async fn migrate_tasks(
     // Then re-mark the sources, one rewrite per file per status.
     let mut by_file: std::collections::BTreeMap<String, Vec<(Task, Status)>> =
         std::collections::BTreeMap::default();
-    for (t, due) in carried {
-        // Carrying forward with a date is scheduling; without one it's a plain
-        // migration. The marker records which, so the log reads back honestly.
-        let status = if due.is_some() { Status::Scheduled } else { Status::Migrated };
-        by_file.entry(t.path.clone()).or_default().push((t.clone(), status));
+    for c in carried {
+        for t in &c.tasks {
+            by_file.entry(t.path.clone()).or_default().push((t.clone(), c.mark));
+        }
     }
     for (t, status) in resolved {
         by_file.entry(t.path.clone()).or_default().push((t.clone(), *status));
@@ -3531,6 +3561,31 @@ struct ReviewState {
     entries: Vec<Task>,
     /// Note sections in the closing logs that could be filed away.
     sections: Vec<ReviewSection>,
+    /// The month log entries can be pushed back up into. `None` for a month
+    /// review, or when no monthly log is configured.
+    month: Option<ReviewMonth>,
+    /// The open entries already waiting in that month log, offered for pulling
+    /// down into the log being opened.
+    backlog: Vec<Task>,
+}
+
+/// The month log a review can defer entries into.
+#[derive(Clone, PartialEq)]
+struct ReviewMonth {
+    /// e.g. `2026-10`.
+    label: String,
+    path: String,
+    /// Seed body, if the month log doesn't exist yet.
+    body: String,
+}
+
+/// One destination a review carries entries into, and what the originals are
+/// re-marked as once they've gone.
+struct CarryTo {
+    dest: String,
+    dest_body: String,
+    mark: Status,
+    tasks: Vec<Task>,
 }
 
 /// One `##` section of a closing log, offered for filing into another note.
@@ -3549,7 +3604,9 @@ struct ReviewSection {
 /// section being filed away.
 #[derive(Clone)]
 struct ReviewPicks {
-    tasks: Vec<(Task, Decision, Option<String>)>,
+    /// Closing-log entries and month-backlog entries alike: the decisions mean
+    /// the same thing whichever log the task is in.
+    tasks: Vec<(Task, Decision)>,
     filed: Vec<(ReviewSection, String)>,
 }
 
@@ -3577,26 +3634,65 @@ fn fileable_sections(
     out
 }
 
-/// What the reviewer decided about one entry. `Carry` is a plain migration;
-/// `Schedule` carries it with a date, which is the same act aimed further out.
+/// What the reviewer decided about one entry. `Carry` moves it into the log
+/// being opened — forward from the closing log, or down from the month
+/// backlog; `ToMonth` pushes it back up into the month log to wait there.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Decision {
     Undecided,
     Carry,
-    Schedule,
+    ToMonth,
     Done,
     Drop,
 }
 
+/// One row of review decisions: a task and the buttons it offers. Shared by
+/// the closing-log list and the month backlog, which differ only in which
+/// ways out they have.
+#[component]
+fn ReviewRow(
+    task: Task,
+    current: Decision,
+    choices: Vec<(Decision, &'static str, &'static str)>,
+    on_pick: EventHandler<Decision>,
+) -> Element {
+    rsx! {
+        div {
+            class: if current == Decision::Undecided { "review-row" } else { "review-row review-row--decided" },
+            div { class: "review-entry",
+                span { class: "review-text", "{task.text}" }
+                if let Some(d) = task.due.clone() {
+                    span { class: "review-due", "📅 {d}" }
+                }
+            }
+            div { class: "review-actions",
+                for (decision, label, title) in choices {
+                    button {
+                        key: "{title}",
+                        class: if current == decision { "review-btn review-btn--on" } else { "review-btn" },
+                        title: "{title}",
+                        // The face of the button is a glyph, so without
+                        // this its accessible name would be "›".
+                        "aria-label": "{title}",
+                        onclick: move |_| on_pick(decision),
+                        "{label}"
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// The migration review: every open entry from the closing period, one row
-/// each, four ways out — then the period's note sections, each of which can be
-/// filed into the note it belongs in.
+/// each, four ways out — then the month backlog, whose entries can be pulled
+/// down into the log being opened — then the period's note sections, each of
+/// which can be filed into the note it belongs in.
 ///
 /// The friction is the feature. The method's claim is that touching each
 /// unfinished thing and deciding about it — rather than letting it roll over
 /// silently — is what keeps a list honest, so there is no "carry everything"
-/// default and nothing happens until Apply. Sections are the opposite: keeping
-/// one where it is costs nothing, so leaving it alone is the default.
+/// default and nothing happens until Apply. The backlog and sections are the
+/// opposite: leaving them where they are costs nothing, so that is the default.
 #[component]
 fn MigrationReview(
     /// The log being closed, e.g. `2026-W32`.
@@ -3605,6 +3701,11 @@ fn MigrationReview(
     to_label: String,
     entries: Vec<Task>,
     sections: Vec<ReviewSection>,
+    /// The month log entries can be pushed back up into, e.g. `2026-10`.
+    /// `None` hides that option and the backlog.
+    month_label: Option<String>,
+    /// Open entries waiting in the month log.
+    backlog: Vec<Task>,
     /// The vault listing, for the destination picker.
     files: Signal<Vec<FileMeta>>,
     busy: bool,
@@ -3612,21 +3713,30 @@ fn MigrationReview(
     on_cancel: EventHandler<()>,
 ) -> Element {
     let mut decisions = use_signal(|| vec![Decision::Undecided; entries.len()]);
-    // One shared date for everything scheduled in this pass: in practice you
-    // push a batch of things to the same "not now, then".
-    let mut schedule_date = use_signal(String::new);
+    let mut pulls = use_signal(|| vec![Decision::Undecided; backlog.len()]);
     // The destination note per section; `None` = keep it where it is.
     let mut filing = use_signal(|| vec![None::<String>; sections.len()]);
     // The section whose destination is being picked.
     let mut picking = use_signal(|| None::<usize>);
 
     let decided = decisions.read().iter().filter(|d| **d != Decision::Undecided).count();
+    let pulled = pulls.read().iter().filter(|d| **d != Decision::Undecided).count();
     let to_file = filing.read().iter().filter(|d| d.is_some()).count();
-    let scheduling = decisions.read().contains(&Decision::Schedule);
-    let date_missing = scheduling && schedule_date.read().trim().is_empty();
     let entries_for_apply = entries.clone();
+    let backlog_for_apply = backlog.clone();
     let sections_for_apply = sections.clone();
     let picking_source = picking().and_then(|i| sections.get(i)).map(|s| s.path.clone());
+
+    let mut entry_choices = vec![(Decision::Done, "✗", "Done"), (Decision::Carry, "›", "Migrate")];
+    if month_label.is_some() {
+        entry_choices.push((Decision::ToMonth, "↑", "To month"));
+    }
+    entry_choices.push((Decision::Drop, "–", "Drop"));
+    let backlog_choices = vec![
+        (Decision::Done, "✗", "Done"),
+        (Decision::Carry, "↓", "Pull in"),
+        (Decision::Drop, "–", "Drop"),
+    ];
 
     rsx! {
         div { class: "move-picker-backdrop", onclick: move |_| on_cancel(()),
@@ -3644,57 +3754,32 @@ fn MigrationReview(
                     } else {
                         div { class: "review-list",
                             for (i, t) in entries.iter().enumerate() {
-                                {
-                                    let current = decisions.read()[i];
-                                    let text = t.text.clone();
-                                    let due = t.due.clone();
-                                    rsx! {
-                                        div {
-                                            key: "{t.path}:{t.line}",
-                                            class: if current == Decision::Undecided { "review-row" } else { "review-row review-row--decided" },
-                                            div { class: "review-entry",
-                                                span { class: "review-text", "{text}" }
-                                                if let Some(d) = due {
-                                                    span { class: "review-due", "📅 {d}" }
-                                                }
-                                            }
-                                            div { class: "review-actions",
-                                                for (decision, label, title) in [
-                                                    (Decision::Done, "✗", "Done"),
-                                                    (Decision::Carry, "›", "Migrate"),
-                                                    (Decision::Schedule, "‹", "Schedule"),
-                                                    (Decision::Drop, "–", "Drop"),
-                                                ] {
-                                                    button {
-                                                        key: "{title}",
-                                                        class: if current == decision { "review-btn review-btn--on" } else { "review-btn" },
-                                                        title: "{title}",
-                                                        // The face of the button is a glyph, so without
-                                                        // this its accessible name would be "›".
-                                                        "aria-label": "{title}",
-                                                        onclick: move |_| {
-                                                            decisions.with_mut(|d| {
-                                                                // Clicking the chosen one again undoes it,
-                                                                // so a misclick isn't a commitment.
-                                                                d[i] = if d[i] == decision { Decision::Undecided } else { decision };
-                                                            });
-                                                        },
-                                                        "{label}"
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
+                                ReviewRow {
+                                    key: "{t.path}:{t.line}",
+                                    task: t.clone(),
+                                    current: decisions.read()[i],
+                                    choices: entry_choices.clone(),
+                                    // Clicking the chosen one again undoes it,
+                                    // so a misclick isn't a commitment.
+                                    on_pick: move |decision| decisions.with_mut(|d| {
+                                        d[i] = if d[i] == decision { Decision::Undecided } else { decision };
+                                    }),
                                 }
                             }
                         }
-                        if scheduling {
-                            label { class: "review-date",
-                                "Scheduled for"
-                                input {
-                                    r#type: "date",
-                                    value: "{schedule_date}",
-                                    oninput: move |e| schedule_date.set(e.value()),
+                    }
+                    if let Some(month) = month_label.clone().filter(|_| !backlog.is_empty()) {
+                        div { class: "review-subheader", "Month backlog · {month}" }
+                        div { class: "review-list review-list--backlog",
+                            for (i, t) in backlog.iter().enumerate() {
+                                ReviewRow {
+                                    key: "{t.path}:{t.line}",
+                                    task: t.clone(),
+                                    current: pulls.read()[i],
+                                    choices: backlog_choices.clone(),
+                                    on_pick: move |decision| pulls.with_mut(|d| {
+                                        d[i] = if d[i] == decision { Decision::Undecided } else { decision };
+                                    }),
                                 }
                             }
                         }
@@ -3746,30 +3831,25 @@ fn MigrationReview(
                         }
                     }
                 }
-                if !entries.is_empty() || !sections.is_empty() {
+                if !entries.is_empty() || !sections.is_empty() || !backlog.is_empty() {
                     div { class: "review-footer",
                         span { class: "review-count",
-                            if sections.is_empty() {
-                                "{decided} of {entries.len()} decided"
-                            } else {
-                                "{decided} of {entries.len()} decided · {to_file} to file"
-                            }
+                            "{decided} of {entries.len()} decided"
+                            if pulled > 0 { " · {pulled} from backlog" }
+                            if !sections.is_empty() { " · {to_file} to file" }
                         }
                         button { class: "review-cancel", onclick: move |_| on_cancel(()), "Cancel" }
                         button {
                             class: "review-apply",
-                            disabled: busy || (decided == 0 && to_file == 0) || date_missing,
+                            disabled: busy || (decided == 0 && pulled == 0 && to_file == 0),
                             onclick: move |_| {
-                                let date = schedule_date.read().trim().to_string();
-                                let ds = decisions.read().clone();
-                                let tasks: Vec<(Task, Decision, Option<String>)> = entries_for_apply
+                                let decided_only = |(_, d): &(Task, Decision)| *d != Decision::Undecided;
+                                let tasks: Vec<(Task, Decision)> = entries_for_apply
                                     .iter()
-                                    .zip(ds)
-                                    .filter(|(_, d)| *d != Decision::Undecided)
-                                    .map(|(t, d)| {
-                                        let due = if d == Decision::Schedule { Some(date.clone()) } else { None };
-                                        (t.clone(), d, due)
-                                    })
+                                    .cloned()
+                                    .zip(decisions.read().iter().copied())
+                                    .chain(backlog_for_apply.iter().cloned().zip(pulls.read().iter().copied()))
+                                    .filter(decided_only)
                                     .collect();
                                 let filed: Vec<(ReviewSection, String)> = sections_for_apply
                                     .iter()
@@ -3780,9 +3860,6 @@ fn MigrationReview(
                             },
                             if busy { "Applying…" } else { "Apply" }
                         }
-                    }
-                    if date_missing {
-                        div { class: "review-hint", "Pick a date for the scheduled entries." }
                     }
                 }
             }

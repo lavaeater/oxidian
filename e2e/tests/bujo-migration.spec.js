@@ -52,7 +52,9 @@ function trackWrites(page) {
 }
 
 async function openReview(page, vault = VAULT) {
-  await mockGitHub(page, vault);
+  // A copy: the mock writes back into the object it's given, and a shared
+  // VAULT would carry one test's migrations into the next.
+  await mockGitHub(page, { ...vault });
   // A weekly template makes the period switcher (and its Review button) appear;
   // the review itself runs on whichever scale is selected, Day by default.
   await seedConfig(page, { weekly_note_template: ".oxidian/templates/weekly.md" });
@@ -137,28 +139,80 @@ test("completing an entry during the review stamps it where it stands", async ({
   expect(writes.some((w) => w.path === `${TODAY}.md`)).toBe(false);
 });
 
-test("scheduling requires a date, and writes it onto the carried copy", async ({ page }) => {
-  const writes = trackWrites(page);
+// A monthly template gives the review a month log to defer into — and the
+// backlog waiting in it to pull from.
+const THIS_MONTH = TODAY.slice(0, 7);
+const MONTH_LOG = `monthly/${THIS_MONTH}.md`;
+const MONTHLY_TEMPLATE = [
+  "---",
+  "oxid_template:",
+  "  filepath: monthly/${OXID_DATE_YEAR}-${OXID_DATE_MONTH}.md",
+  "---",
+  "# ${OXID_DATE_YEAR}-${OXID_DATE_MONTH}",
+  "",
+].join("\n");
+
+async function openReviewWithMonth(page, vault = VAULT) {
+  await mockGitHub(page, { ...vault, ".oxidian/templates/monthly.md": MONTHLY_TEMPLATE });
+  await seedConfig(page, {
+    weekly_note_template: ".oxidian/templates/weekly.md",
+    monthly_note_template: ".oxidian/templates/monthly.md",
+  });
+  await page.goto("/");
+  await expect(page.getByText("Oxidian", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Review" }).click();
+  await expect(page.locator(".review-modal")).toBeVisible();
+}
+
+test("without a monthly log there is nowhere to defer to, so no To month", async ({ page }) => {
   await openReview(page);
+  await expect(page.getByRole("button", { name: "To month" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Schedule" })).toHaveCount(0);
+});
 
-  await page.locator(".review-row", { hasText: "draft the proposal" })
-    .getByRole("button", { name: "Schedule" }).click();
+test("To month defers an entry up into the month log", async ({ page }) => {
+  const writes = trackWrites(page);
+  await openReviewWithMonth(page);
 
-  // A scheduled entry without a date would silently become a plain migration.
-  await expect(page.getByRole("button", { name: "Apply" })).toBeDisabled();
-  await expect(page.locator(".review-hint")).toBeVisible();
-
-  await page.locator(".review-date input").fill("2026-12-24");
-  await expect(page.getByRole("button", { name: "Apply" })).toBeEnabled();
+  await page.locator(".review-row", { hasText: "learn the accordion" })
+    .getByRole("button", { name: "To month" }).click();
   await page.getByRole("button", { name: "Apply" }).click();
 
   await expect.poll(() => writes.length).toBeGreaterThanOrEqual(2);
-  // The carried copy takes the new date, replacing the one it had.
-  expect(writes[0].body).toContain("- [ ] draft the proposal 📅 2026-12-24");
-  expect(writes[0].body).not.toContain("📅 2026-09-01");
-  // ...and the original records that it was scheduled, not merely migrated.
+  // Destination first, as with any carry.
+  expect(writes[0].path).toBe(MONTH_LOG);
+  expect(writes[0].body).toContain("- [ ] learn the accordion");
+  // The original records that it went back up, not forward.
   const source = writes.find((w) => w.path === `${YESTERDAY}.md`);
-  expect(source.body).toContain("- [<] draft the proposal");
+  expect(source.body).toContain("- [<] learn the accordion");
+  expect(writes.some((w) => w.path === `${TODAY}.md`)).toBe(false);
+});
+
+test("the month backlog is listed, and Pull in brings an entry down into today", async ({ page }) => {
+  const writes = trackWrites(page);
+  await openReviewWithMonth(page, {
+    ...VAULT,
+    [MONTH_LOG]: `# ${THIS_MONTH}\n\n- [ ] fix the bike\n- [ ] sort the attic\n- [x] book flights\n`,
+  });
+
+  const backlog = page.locator(".review-list--backlog .review-row");
+  await expect(backlog).toHaveCount(2);
+  await expect(page.locator(".review-list--backlog")).not.toContainText("book flights");
+
+  await backlog.filter({ hasText: "fix the bike" })
+    .getByRole("button", { name: "Pull in" }).click();
+  await backlog.filter({ hasText: "sort the attic" })
+    .getByRole("button", { name: "Done" }).click();
+  // Pulling from the backlog alone is enough to apply.
+  await expect(page.locator(".review-modal")).toContainText("0 of 3 decided · 2 from backlog");
+  await page.getByRole("button", { name: "Apply" }).click();
+
+  await expect.poll(() => writes.length).toBeGreaterThanOrEqual(2);
+  expect(writes[0].path).toBe(`${TODAY}.md`);
+  expect(writes[0].body).toContain("- [ ] fix the bike");
+  const month = writes.find((w) => w.path === MONTH_LOG);
+  expect(month.body).toContain("- [>] fix the bike");
+  expect(month.body).toContain(`- [x] sort the attic ✅ ${TODAY}`);
 });
 
 test("the log is resolved through the template, not the root fallback", async ({ page }) => {
