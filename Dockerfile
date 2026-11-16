@@ -22,10 +22,16 @@ COPY . .
 # target/dx/web/release/web/public (no server binary).
 # target/ is a cache mount (not persisted in the layer), so copy the
 # bundle out to /public-out, which the runtime stage COPYs from.
+# The mount has its own id: the default id is the target path, which other
+# projects' Dockerfiles (craboot, decapod) also use, so they would share it.
+# Because target/ persists between builds, wipe dx's bundle output first:
+# a stale index.html left there keeps pointing at the previous build's
+# hashed JS/wasm, so the image would silently serve the old app.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/app/target \
-    dx bundle --release --package web \
+    --mount=type=cache,id=oxidian-target,target=/app/target \
+    rm -rf target/dx \
+ && dx bundle --release --package web \
  && mkdir -p /public-out \
  && cp -r target/dx/web/release/web/public/. /public-out/
 
