@@ -37,7 +37,9 @@ impl WikiLinkIndex {
             rest = &rest[start + 2..];
             if let Some(end) = rest.find("]]") {
                 let inner = &rest[..end];
-                let target = inner.split('|').next().unwrap_or(inner).trim();
+                // `[[Note#Heading]]` and `[[Note^block]]` link to `Note`.
+                let target = inner.split('|').next().unwrap_or(inner);
+                let target = target.split(['#', '^']).next().unwrap_or(target).trim();
                 if !target.is_empty() {
                     self.links.push(Link {
                         source: path.to_string(),
@@ -124,6 +126,13 @@ mod tests {
         let mut idx = WikiLinkIndex::new();
         idx.index_file("a.md", "see [[Target]] and [[Other|a label]] here");
         assert_eq!(targets_of(&idx, "a.md"), vec!["Target", "Other"]);
+    }
+
+    #[test]
+    fn a_heading_or_block_link_targets_the_note() {
+        let mut idx = WikiLinkIndex::new();
+        idx.index_file("a.md", "[[Website#Meeting]] and [[Plan^b1|x]]");
+        assert_eq!(targets_of(&idx, "a.md"), vec!["Website", "Plan"]);
     }
 
     #[test]

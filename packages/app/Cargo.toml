@@ -8,7 +8,7 @@ dioxus = { workspace = true, features = ["router"] }
 # Needed because the `asset!` macro (used for the shared MAIN_CSS) expands to a
 # bare `manganis::` path; renderer crates pull it in transitively, but `app`
 # must name it directly to own the asset.
-manganis = "0.8.0-alpha.0"
+manganis = "0.8.0-alpha.3"
 dioxus-use-js = { workspace = true }
 ui = { workspace = true }
 vault = { workspace = true }
@@ -21,7 +21,7 @@ futures = "0.3"
 [dev-dependencies]
 # Component/hook test harness: render RSX to a string on the native target.
 # There is no SSR in production — dioxus-ssr is used purely as a test driver.
-dioxus-ssr = "0.8.0-alpha.0"
+dioxus-ssr = "0.8.0-alpha.3"
 pretty_assertions = "1"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

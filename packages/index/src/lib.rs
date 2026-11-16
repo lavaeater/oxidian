@@ -25,6 +25,7 @@ pub mod dql;
 pub mod extract;
 pub mod frontmatter;
 pub mod search;
+pub mod sections;
 pub mod tasks;
 pub mod value;
 
@@ -49,7 +50,9 @@ pub use tasks::{Priority, Task};
 // see `docs/bujo-roadmap.md` §3. Records written by an older build would
 // deserialise into the wrong shape, so they are discarded like any other
 // version bump.
-pub const FORMAT_VERSION: u32 = 3;
+// 4 strips `#heading` / `^block` from `PageData::links`, so `[[Note#Section]]`
+// counts as a link to `Note`. Older records still hold the suffixed targets.
+pub const FORMAT_VERSION: u32 = 4;
 
 /// What an [`Index::apply`] changed, so the caller can persist just that.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]

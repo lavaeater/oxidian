@@ -13,7 +13,7 @@ RUN curl -L --proto '=https' --tlsv1.2 -sSf \
 ENV PATH="/.cargo/bin:$PATH"
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    cargo binstall dioxus-cli@0.8.0-alpha.0 --root /.cargo -y --force
+    cargo binstall dioxus-cli@0.8.0-alpha.3 --root /.cargo -y --force
 
 WORKDIR /app
 COPY . .

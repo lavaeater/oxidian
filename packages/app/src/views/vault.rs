@@ -682,11 +682,12 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
     // Open the review for the period *before* the one being browsed: closing a
     // log is something you do to the one that just ended.
     //
-    // For a Day review this walks every day from the start of the current
-    // week up to (but not including) the one being opened, not just the
-    // single day before it — skip the Wednesday review, open Thursday, and
-    // Monday and Tuesday's stragglers still need to be seen, not silently
-    // skipped. Week/Month reviews still cover just the one period before.
+    // For a Day review this walks every day since the last review (within the
+    // current month) up to (but not including) the one being opened — see
+    // `review_from_dates`. Week/Month reviews cover just the one period before.
+    //
+    // Entries the period's template seeds every log with ("check email") are
+    // left out: the new log already has its own fresh copy.
     let open_review = use_callback(move |(): ()| {
         let cfg = cfg_review.clone();
         let period = log_period();
@@ -695,13 +696,18 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                 let d = log_date.read().clone();
                 if d.is_empty() { crate::dates::today().await } else { d }
             };
-            let from_dates = review_from_dates(period, &base);
+            let mark = if period == dates::Period::Day {
+                plugins::bujo::reviewed_through(&cfg).await
+            } else {
+                None
+            };
+            let from_dates = review_from_dates(period, &base, mark.as_deref());
             let tmpls = templates_when_ready(templates, templates_ready).await;
             let store = plugin_store.peek().clone();
             let Some((to_path, to_body)) = periodic_note(&cfg, &store, &tmpls, period, &base).await else {
                 return;
             };
-            let mut entries: Vec<Task> = Vec::new();
+            let mut sources: Vec<(String, String)> = Vec::new();
             for from_date in &from_dates {
                 let Some((from_path, _)) = periodic_note(&cfg, &store, &tmpls, period, from_date).await else {
                     load_error.set(Some(format!(
@@ -710,15 +716,58 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                     )));
                     return;
                 };
-                // Read the closing log from the vault, not the index: the index
-                // may be a refresh behind, and this is about to write to it.
-                match vault::dispatch::read_file(&cfg, &from_path).await {
-                    Ok(fc) => entries.extend(
-                        tasks::parse_file(&from_path, &fc.content).into_iter().filter(Task::is_open),
-                    ),
-                    // A log that was never written has nothing open in it,
-                    // which is a legitimate (and common) answer, not an error.
-                    Err(_) => {}
+                sources.push((from_date.clone(), from_path));
+            }
+            // Read the closing logs from the vault, not the index: the index
+            // may be a refresh behind, and this is about to write to them. A
+            // month's worth of days is a lot of round trips, so all at once.
+            let reads = futures::future::join_all(
+                sources.iter().map(|(_, path)| vault::dispatch::read_file(&cfg, path)),
+            )
+            .await;
+            let logs: Vec<(String, String)> = sources
+                .iter()
+                .zip(reads)
+                .filter_map(|((_, path), read)| read.ok().map(|fc| (path.clone(), fc.content)))
+                .collect();
+            let recurring = plugins::bujo::template_task_texts(&to_body);
+            let entries: Vec<Task> = logs
+                .iter()
+                .flat_map(|(path, content)| tasks::parse_file(path, content))
+                .filter(|t| t.is_open() && !recurring.contains(t.text.trim()))
+                .collect();
+            let task_headings = plugins::bujo::template_task_headings(&to_body);
+            let sections: Vec<ReviewSection> = logs
+                .iter()
+                .flat_map(|(path, content)| fileable_sections(path, content, &task_headings))
+                .collect();
+            // The month log is the backlog: entries pushed up out of a day or
+            // week wait there until a review pulls them back down. A month
+            // review has nowhere further up to push, so it has no backlog.
+            let month = if period == dates::Period::Month {
+                None
+            } else {
+                periodic_note(&cfg, &store, &tmpls, dates::Period::Month, &base).await
+            };
+            let (month, backlog) = match month {
+                Some((path, body)) => {
+                    let backlog: Vec<Task> = match vault::dispatch::read_file(&cfg, &path).await {
+                        Ok(fc) => tasks::parse_file(&path, &fc.content)
+                            .into_iter()
+                            .filter(Task::is_open)
+                            .collect(),
+                        Err(_) => Vec::new(),
+                    };
+                    let label = dates::period_key(dates::Period::Month, &base);
+                    (Some(ReviewMonth { label, path, body }), backlog)
+                }
+                None => (None, Vec::new()),
+            };
+            if period == dates::Period::Day && entries.is_empty() && sections.is_empty() {
+                // Nothing to decide, so these days are as reviewed as they'll
+                // get. Best-effort: failing only means re-walking them later.
+                if let Err(e) = plugins::bujo::mark_reviewed(&cfg, &base).await {
+                    console_log(&format!("[oxidian] {e}"));
                 }
             }
             review.set(Some(ReviewState {
@@ -726,42 +775,78 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                 to_label: dates::period_key(period, &base),
                 to_path,
                 to_body,
+                base: base.clone(),
+                sources: if period == dates::Period::Day { sources } else { Vec::new() },
                 entries,
+                sections,
+                month,
+                backlog,
             }));
         });
     });
 
     // Carry out the decisions: one destination write, then one rewrite per
     // source file. See `migrate_tasks` for why that order.
-    let apply_review = use_callback(move |picked: Vec<(Task, Decision, Option<String>)>| {
+    let apply_review = use_callback(move |picks: ReviewPicks| {
         let cfg = cfg_review_apply.clone();
         let Some(state) = review.read().clone() else { return };
         spawn(async move {
             review_busy.set(true);
-            let carried: Vec<(Task, Option<String>)> = picked
-                .iter()
-                .filter(|(_, d, _)| matches!(d, Decision::Carry | Decision::Schedule))
-                .map(|(t, _, due)| (t.clone(), due.clone()))
-                .collect();
+            let ReviewPicks { tasks: picked, filed } = picks;
+            let picked_as = |decision: Decision| -> Vec<Task> {
+                picked.iter().filter(|(_, d)| *d == decision).map(|(t, _)| t.clone()).collect()
+            };
+            // Forward into the log being opened is a migration (`[>]`); back up
+            // into the month is a deferral (`[<]`), so the closing log records
+            // which way each entry went.
+            let mut carried = vec![CarryTo {
+                dest: state.to_path.clone(),
+                dest_body: state.to_body.clone(),
+                mark: Status::Migrated,
+                tasks: picked_as(Decision::Carry),
+            }];
+            if let Some(month) = &state.month {
+                carried.push(CarryTo {
+                    dest: month.path.clone(),
+                    dest_body: month.body.clone(),
+                    mark: Status::Scheduled,
+                    tasks: picked_as(Decision::ToMonth),
+                });
+            }
+            carried.retain(|c| !c.tasks.is_empty());
             let resolved: Vec<(Task, Status)> = picked
                 .iter()
-                .filter_map(|(t, d, _)| match d {
+                .filter_map(|(t, d)| match d {
                     Decision::Done => Some((t.clone(), Status::Done)),
                     Decision::Drop => Some((t.clone(), Status::Dropped)),
                     _ => None,
                 })
                 .collect();
             let today_now = crate::dates::today().await;
-            let result = migrate_tasks(
-                vault_idx,
-                &cfg,
-                &carried,
-                &resolved,
-                &state.to_path,
-                &state.to_body,
-                &today_now,
-            )
-            .await;
+            // Tasks first: filing a section moves its lines, so any re-marking
+            // has to land while they are still where the review found them.
+            let mut result = if carried.is_empty() && resolved.is_empty() {
+                Ok(())
+            } else {
+                migrate_tasks(vault_idx, &cfg, &carried, &resolved, &today_now).await
+            };
+            if result.is_ok() && !filed.is_empty() {
+                result = file_sections(vault_idx, &cfg, &filed).await;
+            }
+            if result.is_ok() && !state.sources.is_empty() {
+                let undecided: std::collections::BTreeSet<&str> = state
+                    .entries
+                    .iter()
+                    .filter(|e| !picked.iter().any(|(t, _)| t.path == e.path && t.line == e.line))
+                    .map(|e| e.path.as_str())
+                    .collect();
+                let next = next_review_mark(&state.sources, &undecided, &state.base);
+                // Best-effort: the migration itself has landed, and a missing
+                // mark only means the next review walks a few extra days.
+                if let Err(e) = plugins::bujo::mark_reviewed(&cfg, &next).await {
+                    console_log(&format!("[oxidian] {e}"));
+                }
+            }
             review_busy.set(false);
             match result {
                 Ok(()) => {
@@ -1273,7 +1358,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                                         value: "{board_input}",
                                         oninput: move |e| board_input.set(e.value()),
                                         onkeydown: move |e| {
-                                            if e.key() == Key::Enter {
+                                            if e.key() == Key::Named(NamedKey::Enter) {
                                                 let v = board_input.read().trim().to_string();
                                                 board_root.set(v.clone());
                                                 js::ls_set("oxidian_board", v);
@@ -1486,6 +1571,10 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                     from_label: state.from_label.clone(),
                     to_label: state.to_label.clone(),
                     entries: state.entries.clone(),
+                    sections: state.sections.clone(),
+                    month_label: state.month.as_ref().map(|m| m.label.clone()),
+                    backlog: state.backlog.clone(),
+                    files,
                     busy: review_busy(),
                     on_apply: move |picked| apply_review.call(picked),
                     on_cancel: move |()| review.set(None),
@@ -1662,29 +1751,50 @@ async fn templates_when_ready(
 /// Which dates a migration review should pull open tasks from, for the period
 /// just before `base`.
 ///
-/// For `Day` this is every day from the start of the current week up to (but
-/// not including) `base`, not just the single day before it — skip the
-/// Wednesday review, open Thursday, and Monday and Tuesday's stragglers still
-/// need to be seen, not silently carried past. `Week`/`Month` still cover just
-/// the one period before, since there's no equivalent "skipped a week inside
-/// a month" scenario the switcher exposes. Always returns at least one date.
-fn review_from_dates(period: dates::Period, base: &str) -> Vec<String> {
+/// For `Day` this is every day from where the last review left off
+/// (`reviewed_through`, see `plugins::bujo::reviewed_through`) up to (but not
+/// including) `base` — skip a few days' reviews and those days' stragglers
+/// still need to be seen, not silently carried past. The walk never reaches
+/// back past the 1st of `base`'s month, and with no mark it starts there.
+/// `Week`/`Month` still cover just the one period before. Always returns at
+/// least one date.
+fn review_from_dates(period: dates::Period, base: &str, reviewed_through: Option<&str>) -> Vec<String> {
     if period != dates::Period::Day {
         return vec![dates::shift_period(period, base, -1)];
     }
-    let week_start = dates::period_start(dates::Period::Week, base);
-    let mut d = week_start;
+    let month_start = dates::period_start(dates::Period::Month, base);
+    let mut d = match reviewed_through {
+        Some(mark) if mark > month_start.as_str() => mark.to_string(),
+        _ => month_start,
+    };
     let mut days = Vec::new();
     while d.as_str() < base {
         days.push(d.clone());
         d = dates::shift_days(&d, 1);
     }
-    // Monday reviewing itself has no earlier day this week — fall back to the
-    // single day before, same as it always has.
+    // Nothing left to walk — the 1st of the month, or a second review the same
+    // day — so fall back to the single day before, same as it always has.
     if days.is_empty() {
         days.push(dates::shift_days(base, -1));
     }
     days
+}
+
+/// Where the next daily review should start, once this one is applied: the
+/// earliest source day that still has an undecided entry on it, or `base` when
+/// everything was decided. A partial review must not move the mark past the
+/// entries it left open, or the next review would never show them.
+///
+/// `sources` is `(date, path)` per reviewed day, oldest first.
+fn next_review_mark(
+    sources: &[(String, String)],
+    undecided_paths: &std::collections::BTreeSet<&str>,
+    base: &str,
+) -> String {
+    sources
+        .iter()
+        .find(|(_, path)| undecided_paths.contains(path.as_str()))
+        .map_or_else(|| base.to_string(), |(date, _)| date.clone())
 }
 
 /// The label shown for the source side of a review, e.g. `2026-08-25` for one
@@ -1771,30 +1881,28 @@ async fn periodic_note(
 /// re-marks it, so the closing log keeps an honest record of what was on it and
 /// what became of each entry (`docs/bujo-roadmap.md` §5).
 ///
-/// `carried` are the entries going forward (with an optional due date each, for
-/// scheduling); `resolved` are the ones being marked done or dropped in place.
-/// The destination is written **first**, for the same reason as `move_tasks`: a
-/// failure between the writes shows the entry in both logs, which is visible and
-/// fixable, rather than losing it.
+/// `carried` are the entries going somewhere else, grouped by destination;
+/// `resolved` are the ones being marked done or dropped in place. Destinations
+/// are written **first**, for the same reason as `move_tasks`: a failure between
+/// the writes shows the entry in both logs, which is visible and fixable, rather
+/// than losing it.
 async fn migrate_tasks(
     idx: Signal<Index>,
     cfg: &GithubConfig,
-    carried: &[(Task, Option<String>)],
+    carried: &[CarryTo],
     resolved: &[(Task, Status)],
-    dest: &str,
-    dest_body: &str,
     today: &str,
 ) -> Result<(), String> {
-    if carried.is_empty() && resolved.is_empty() {
+    if carried.iter().all(|c| c.tasks.is_empty()) && resolved.is_empty() {
         return Err("Nothing to review.".to_string());
     }
 
-    // Destination first, and only if something is actually going forward.
-    if !carried.is_empty() {
-        let lines: Vec<String> = carried
-            .iter()
-            .map(|(t, due)| tasks::carried_line(t, due.as_deref()))
-            .collect();
+    // Destinations first, and only the ones something is actually going to.
+    for CarryTo { dest, dest_body, tasks: items, .. } in carried {
+        if items.is_empty() {
+            continue;
+        }
+        let lines: Vec<String> = items.iter().map(|t| tasks::carried_line(t, None)).collect();
         let dest_name = dest.rsplit('/').next().unwrap_or(dest);
         let msg = format!("Migrate {} entr(y/ies) to {dest_name}", lines.len());
         let (content, sha) = match vault::dispatch::read_file(cfg, dest).await {
@@ -1815,11 +1923,10 @@ async fn migrate_tasks(
     // Then re-mark the sources, one rewrite per file per status.
     let mut by_file: std::collections::BTreeMap<String, Vec<(Task, Status)>> =
         std::collections::BTreeMap::default();
-    for (t, due) in carried {
-        // Carrying forward with a date is scheduling; without one it's a plain
-        // migration. The marker records which, so the log reads back honestly.
-        let status = if due.is_some() { Status::Scheduled } else { Status::Migrated };
-        by_file.entry(t.path.clone()).or_default().push((t.clone(), status));
+    for c in carried {
+        for t in &c.tasks {
+            by_file.entry(t.path.clone()).or_default().push((t.clone(), c.mark));
+        }
     }
     for (t, status) in resolved {
         by_file.entry(t.path.clone()).or_default().push((t.clone(), *status));
@@ -1857,6 +1964,94 @@ async fn migrate_tasks(
                 return Err(format!(
                     "Carried forward, but could not update {path} ({e}) — \
                      those entries are now open in both logs."
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// File review sections into the notes they belong in: append each one to its
+/// destination, then replace its body in the log with a link to it.
+///
+/// Destinations are written **first**, for the same reason as `migrate_tasks`:
+/// a failure between the writes leaves the text in both notes — visible and
+/// fixable — rather than in neither. Every source is read before anything is
+/// written, so a section that has vanished since the review opened stops the
+/// whole thing with nothing changed.
+async fn file_sections(
+    idx: Signal<Index>,
+    cfg: &GithubConfig,
+    filed: &[(ReviewSection, String)],
+) -> Result<(), String> {
+    use std::collections::BTreeMap;
+    use index::sections;
+
+    let mut logs: BTreeMap<String, (String, String)> = BTreeMap::new(); // path → (content, sha)
+    for (s, _) in filed {
+        if !logs.contains_key(&s.path) {
+            let fc = vault::dispatch::read_file(cfg, &s.path)
+                .await
+                .map_err(|e| format!("Could not read {}: {e}", s.path))?;
+            logs.insert(s.path.clone(), (fc.content, fc.sha));
+        }
+    }
+
+    // Lift each section's current text, grouped by destination.
+    let mut by_dest: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (s, dest) in filed {
+        let content = &logs[&s.path].0;
+        let Some(found) = sections::find(content, &s.heading, s.nth) else {
+            return Err(format!("“{}” is no longer in {} — nothing was filed.", s.heading, s.path));
+        };
+        let body = sections::body(content, &found);
+        by_dest
+            .entry(dest.clone())
+            .or_default()
+            .push(plugins::bujo::filed_block(&s.heading, &body, &s.path));
+    }
+
+    for (dest, blocks) in &by_dest {
+        let joined = vec![blocks.join("\n\n")];
+        let dest_name = dest.rsplit('/').next().unwrap_or(dest);
+        let msg = format!("File {} section(s) into {dest_name}", blocks.len());
+        let (content, sha) = match vault::dispatch::read_file(cfg, dest).await {
+            Ok(fc) => (tasks::append_lines(&fc.content, &joined), Some(fc.sha)),
+            Err(vault::VaultError::NotFound(_)) => {
+                let title = dest_name.strip_suffix(".md").unwrap_or(dest_name);
+                (tasks::append_lines(&format!("# {title}\n"), &joined), None)
+            }
+            Err(e) => return Err(format!("Could not read {dest}: {e}")),
+        };
+        let new_sha = match sha {
+            Some(sha) => vault::dispatch::write_file(cfg, dest, &content, &sha, &msg)
+                .await
+                .map_err(|e| format!("Could not write {dest}: {e}"))?,
+            None => vault::dispatch::create_file(cfg, dest, &content, &msg)
+                .await
+                .map_err(|e| format!("Could not create {dest}: {e}"))?,
+        };
+        crate::vault_index::update_page(idx, dest, &new_sha, &content).await;
+        // Filing one log's section into another log that is itself being
+        // filed from: carry on from what was just written, not the old copy.
+        if let Some(log) = logs.get_mut(dest) {
+            *log = (content, new_sha);
+        }
+    }
+
+    for (path, (content, sha)) in &logs {
+        let mut updated = content.clone();
+        for (s, dest) in filed.iter().filter(|(s, _)| &s.path == path) {
+            if let Some(found) = sections::find(&updated, &s.heading, s.nth) {
+                updated = sections::replace_body(&updated, &found, &plugins::bujo::filed_link(dest, &s.heading));
+            }
+        }
+        let msg = format!("File notes from {}", path.rsplit('/').next().unwrap_or(path));
+        match vault::dispatch::write_file(cfg, path, &updated, sha, &msg).await {
+            Ok(new_sha) => crate::vault_index::update_page(idx, path, &new_sha, &updated).await,
+            Err(e) => {
+                return Err(format!(
+                    "Filed, but could not update {path} ({e}) — those sections are now in both notes."
                 ));
             }
         }
@@ -2617,8 +2812,8 @@ fn NewFileModal(
                     value: "{name}",
                     oninput: move |e| name.set(e.value()),
                     onkeydown: move |e| {
-                        if e.key() == Key::Enter  { trigger.set(true); }
-                        if e.key() == Key::Escape { on_close(()); }
+                        if e.key() == Key::Named(NamedKey::Enter)  { trigger.set(true); }
+                        if e.key() == Key::Named(NamedKey::Escape) { on_close(()); }
                     },
                 }
                 if !preview.is_empty() {
@@ -2736,8 +2931,8 @@ fn NewFolderModal(
                     value: "{name}",
                     oninput: move |e| name.set(e.value()),
                     onkeydown: move |e| {
-                        if e.key() == Key::Enter  { trigger.set(true); }
-                        if e.key() == Key::Escape { on_close(()); }
+                        if e.key() == Key::Named(NamedKey::Enter)  { trigger.set(true); }
+                        if e.key() == Key::Named(NamedKey::Escape) { on_close(()); }
                     },
                 }
                 if !preview.is_empty() {
@@ -2955,8 +3150,8 @@ fn QuickSwitcher(
                     value: "{query}",
                     oninput: move |e| query.set(e.value()),
                     onkeydown: move |e| {
-                        if e.key() == Key::Escape { on_close(()); }
-                        if e.key() == Key::Enter && let Some(ref p) = first_path { on_select(p.clone()); }
+                        if e.key() == Key::Named(NamedKey::Escape) { on_close(()); }
+                        if e.key() == Key::Named(NamedKey::Enter) && let Some(ref p) = first_path { on_select(p.clone()); }
                     },
                 }
                 if items.is_empty() {
@@ -3038,8 +3233,8 @@ fn CommandPalette(
                     value: "{query}",
                     oninput: move |e| query.set(e.value()),
                     onkeydown: move |e| {
-                        if e.key() == Key::Escape { on_close(()); }
-                        if e.key() == Key::Enter && let Some(a) = &first { on_run(a.clone()); }
+                        if e.key() == Key::Named(NamedKey::Escape) { on_close(()); }
+                        if e.key() == Key::Named(NamedKey::Enter) && let Some(a) = &first { on_run(a.clone()); }
                     },
                 }
                 if empty {
@@ -3231,7 +3426,7 @@ fn TasksView(
             if let Some(items) = picking() {
                 MoveTargetPicker {
                     files,
-                    count: items.len(),
+                    title: "Move {items.len()} task(s) to…",
                     source: items.first().map(|t| t.path.clone()).unwrap_or_default(),
                     on_cancel: move |()| picking.set(None),
                     on_pick: move |dest: String| {
@@ -3357,27 +3552,147 @@ struct ReviewState {
     to_label: String,
     to_path: String,
     to_body: String,
+    /// The date the review was opened on — where the next one starts if
+    /// everything gets decided.
+    base: String,
+    /// `(date, path)` of each day log read, oldest first. Empty for week and
+    /// month reviews, which don't track a review mark.
+    sources: Vec<(String, String)>,
     entries: Vec<Task>,
+    /// Note sections in the closing logs that could be filed away.
+    sections: Vec<ReviewSection>,
+    /// The month log entries can be pushed back up into. `None` for a month
+    /// review, or when no monthly log is configured.
+    month: Option<ReviewMonth>,
+    /// The open entries already waiting in that month log, offered for pulling
+    /// down into the log being opened.
+    backlog: Vec<Task>,
 }
 
-/// What the reviewer decided about one entry. `Carry` is a plain migration;
-/// `Schedule` carries it with a date, which is the same act aimed further out.
+/// The month log a review can defer entries into.
+#[derive(Clone, PartialEq)]
+struct ReviewMonth {
+    /// e.g. `2026-10`.
+    label: String,
+    path: String,
+    /// Seed body, if the month log doesn't exist yet.
+    body: String,
+}
+
+/// One destination a review carries entries into, and what the originals are
+/// re-marked as once they've gone.
+struct CarryTo {
+    dest: String,
+    dest_body: String,
+    mark: Status,
+    tasks: Vec<Task>,
+}
+
+/// One `##` section of a closing log, offered for filing into another note.
+#[derive(Clone, PartialEq, Debug)]
+struct ReviewSection {
+    /// The log it lives in.
+    path: String,
+    heading: String,
+    /// Which of that log's sections with this heading it is, so it can be
+    /// found again after the task half of the review rewrites the file.
+    nth: usize,
+    body: String,
+}
+
+/// What the reviewer chose: a decision per task, and a destination note per
+/// section being filed away.
+#[derive(Clone)]
+struct ReviewPicks {
+    /// Closing-log entries and month-backlog entries alike: the decisions mean
+    /// the same thing whichever log the task is in.
+    tasks: Vec<(Task, Decision)>,
+    filed: Vec<(ReviewSection, String)>,
+}
+
+/// The sections of one log worth offering for filing: not the template's task
+/// section, and not ones with nothing but tasks (or a filed link) in them.
+fn fileable_sections(
+    path: &str,
+    content: &str,
+    task_headings: &std::collections::BTreeSet<String>,
+) -> Vec<ReviewSection> {
+    let mut seen: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    let mut out = Vec::new();
+    for s in index::sections::sections(content) {
+        let nth = seen.entry(s.heading.clone()).or_default();
+        let this = *nth;
+        *nth += 1;
+        if task_headings.contains(&s.heading) {
+            continue;
+        }
+        let body = index::sections::body(content, &s);
+        if plugins::bujo::is_fileable(&body) {
+            out.push(ReviewSection { path: path.to_string(), heading: s.heading, nth: this, body });
+        }
+    }
+    out
+}
+
+/// What the reviewer decided about one entry. `Carry` moves it into the log
+/// being opened — forward from the closing log, or down from the month
+/// backlog; `ToMonth` pushes it back up into the month log to wait there.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Decision {
     Undecided,
     Carry,
-    Schedule,
+    ToMonth,
     Done,
     Drop,
 }
 
+/// One row of review decisions: a task and the buttons it offers. Shared by
+/// the closing-log list and the month backlog, which differ only in which
+/// ways out they have.
+#[component]
+fn ReviewRow(
+    task: Task,
+    current: Decision,
+    choices: Vec<(Decision, &'static str, &'static str)>,
+    on_pick: EventHandler<Decision>,
+) -> Element {
+    rsx! {
+        div {
+            class: if current == Decision::Undecided { "review-row" } else { "review-row review-row--decided" },
+            div { class: "review-entry",
+                span { class: "review-text", "{task.text}" }
+                if let Some(d) = task.due.clone() {
+                    span { class: "review-due", "📅 {d}" }
+                }
+            }
+            div { class: "review-actions",
+                for (decision, label, title) in choices {
+                    button {
+                        key: "{title}",
+                        class: if current == decision { "review-btn review-btn--on" } else { "review-btn" },
+                        title: "{title}",
+                        // The face of the button is a glyph, so without
+                        // this its accessible name would be "›".
+                        "aria-label": "{title}",
+                        onclick: move |_| on_pick(decision),
+                        "{label}"
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// The migration review: every open entry from the closing period, one row
-/// each, four ways out.
+/// each, four ways out — then the month backlog, whose entries can be pulled
+/// down into the log being opened — then the period's note sections, each of
+/// which can be filed into the note it belongs in.
 ///
 /// The friction is the feature. The method's claim is that touching each
 /// unfinished thing and deciding about it — rather than letting it roll over
 /// silently — is what keeps a list honest, so there is no "carry everything"
-/// default and nothing happens until Apply.
+/// default and nothing happens until Apply. The backlog and sections are the
+/// opposite: leaving them where they are costs nothing, so that is the default.
 #[component]
 fn MigrationReview(
     /// The log being closed, e.g. `2026-W32`.
@@ -3385,19 +3700,43 @@ fn MigrationReview(
     /// The log entries are carried into, e.g. `2026-W33`.
     to_label: String,
     entries: Vec<Task>,
+    sections: Vec<ReviewSection>,
+    /// The month log entries can be pushed back up into, e.g. `2026-10`.
+    /// `None` hides that option and the backlog.
+    month_label: Option<String>,
+    /// Open entries waiting in the month log.
+    backlog: Vec<Task>,
+    /// The vault listing, for the destination picker.
+    files: Signal<Vec<FileMeta>>,
     busy: bool,
-    on_apply: EventHandler<Vec<(Task, Decision, Option<String>)>>,
+    on_apply: EventHandler<ReviewPicks>,
     on_cancel: EventHandler<()>,
 ) -> Element {
     let mut decisions = use_signal(|| vec![Decision::Undecided; entries.len()]);
-    // One shared date for everything scheduled in this pass: in practice you
-    // push a batch of things to the same "not now, then".
-    let mut schedule_date = use_signal(String::new);
+    let mut pulls = use_signal(|| vec![Decision::Undecided; backlog.len()]);
+    // The destination note per section; `None` = keep it where it is.
+    let mut filing = use_signal(|| vec![None::<String>; sections.len()]);
+    // The section whose destination is being picked.
+    let mut picking = use_signal(|| None::<usize>);
 
     let decided = decisions.read().iter().filter(|d| **d != Decision::Undecided).count();
-    let scheduling = decisions.read().contains(&Decision::Schedule);
-    let date_missing = scheduling && schedule_date.read().trim().is_empty();
+    let pulled = pulls.read().iter().filter(|d| **d != Decision::Undecided).count();
+    let to_file = filing.read().iter().filter(|d| d.is_some()).count();
     let entries_for_apply = entries.clone();
+    let backlog_for_apply = backlog.clone();
+    let sections_for_apply = sections.clone();
+    let picking_source = picking().and_then(|i| sections.get(i)).map(|s| s.path.clone());
+
+    let mut entry_choices = vec![(Decision::Done, "✗", "Done"), (Decision::Carry, "›", "Migrate")];
+    if month_label.is_some() {
+        entry_choices.push((Decision::ToMonth, "↑", "To month"));
+    }
+    entry_choices.push((Decision::Drop, "–", "Drop"));
+    let backlog_choices = vec![
+        (Decision::Done, "✗", "Done"),
+        (Decision::Carry, "↓", "Pull in"),
+        (Decision::Drop, "–", "Drop"),
+    ];
 
     rsx! {
         div { class: "move-picker-backdrop", onclick: move |_| on_cancel(()),
@@ -3407,49 +3746,82 @@ fn MigrationReview(
                 div { class: "move-picker-header",
                     "Review {from_label} → {to_label}"
                 }
-                if entries.is_empty() {
-                    div { class: "review-empty",
-                        "Nothing left open in {from_label}. That is the good outcome."
+                div { class: "review-body",
+                    if entries.is_empty() {
+                        div { class: "review-empty",
+                            "Nothing left open in {from_label}. That is the good outcome."
+                        }
+                    } else {
+                        div { class: "review-list",
+                            for (i, t) in entries.iter().enumerate() {
+                                ReviewRow {
+                                    key: "{t.path}:{t.line}",
+                                    task: t.clone(),
+                                    current: decisions.read()[i],
+                                    choices: entry_choices.clone(),
+                                    // Clicking the chosen one again undoes it,
+                                    // so a misclick isn't a commitment.
+                                    on_pick: move |decision| decisions.with_mut(|d| {
+                                        d[i] = if d[i] == decision { Decision::Undecided } else { decision };
+                                    }),
+                                }
+                            }
+                        }
                     }
-                } else {
-                    div { class: "review-list",
-                        for (i, t) in entries.iter().enumerate() {
-                            {
-                                let current = decisions.read()[i];
-                                let text = t.text.clone();
-                                let due = t.due.clone();
-                                rsx! {
-                                    div {
-                                        key: "{t.path}:{t.line}",
-                                        class: if current == Decision::Undecided { "review-row" } else { "review-row review-row--decided" },
-                                        div { class: "review-entry",
-                                            span { class: "review-text", "{text}" }
-                                            if let Some(d) = due {
-                                                span { class: "review-due", "📅 {d}" }
+                    if let Some(month) = month_label.clone().filter(|_| !backlog.is_empty()) {
+                        div { class: "review-subheader", "Month backlog · {month}" }
+                        div { class: "review-list review-list--backlog",
+                            for (i, t) in backlog.iter().enumerate() {
+                                ReviewRow {
+                                    key: "{t.path}:{t.line}",
+                                    task: t.clone(),
+                                    current: pulls.read()[i],
+                                    choices: backlog_choices.clone(),
+                                    on_pick: move |decision| pulls.with_mut(|d| {
+                                        d[i] = if d[i] == decision { Decision::Undecided } else { decision };
+                                    }),
+                                }
+                            }
+                        }
+                    }
+                    if !sections.is_empty() {
+                        div { class: "review-subheader", "File notes" }
+                        div { class: "review-list",
+                            for (i, s) in sections.iter().enumerate() {
+                                {
+                                    let dest = filing.read()[i].clone();
+                                    let row_class = if dest.is_some() { "review-section review-row--decided" } else { "review-section" };
+                                    let heading = s.heading.clone();
+                                    let from = s.path.rsplit('/').next().unwrap_or(&s.path)
+                                        .trim_end_matches(".md").to_string();
+                                    let preview = s.body.clone();
+                                    rsx! {
+                                        div {
+                                            key: "{s.path}#{s.heading}#{s.nth}",
+                                            class: row_class,
+                                            div { class: "review-section-head",
+                                                span { class: "review-text", "{heading}" }
+                                                span { class: "review-section-from", "{from}" }
                                             }
-                                        }
-                                        div { class: "review-actions",
-                                            for (decision, label, title) in [
-                                                (Decision::Done, "✗", "Done"),
-                                                (Decision::Carry, "›", "Migrate"),
-                                                (Decision::Schedule, "‹", "Schedule"),
-                                                (Decision::Drop, "–", "Drop"),
-                                            ] {
-                                                button {
-                                                    key: "{title}",
-                                                    class: if current == decision { "review-btn review-btn--on" } else { "review-btn" },
-                                                    title: "{title}",
-                                                    // The face of the button is a glyph, so without
-                                                    // this its accessible name would be "›".
-                                                    "aria-label": "{title}",
-                                                    onclick: move |_| {
-                                                        decisions.with_mut(|d| {
-                                                            // Clicking the chosen one again undoes it,
-                                                            // so a misclick isn't a commitment.
-                                                            d[i] = if d[i] == decision { Decision::Undecided } else { decision };
-                                                        });
-                                                    },
-                                                    "{label}"
+                                            div { class: "review-section-preview", "{preview}" }
+                                            div { class: "review-section-actions",
+                                                if let Some(d) = dest {
+                                                    span { class: "review-section-dest",
+                                                        "→ {d.trim_end_matches(\".md\")}"
+                                                    }
+                                                    button {
+                                                        class: "review-btn",
+                                                        title: "Keep it here",
+                                                        "aria-label": "Keep it here",
+                                                        onclick: move |_| filing.with_mut(|f| f[i] = None),
+                                                        "×"
+                                                    }
+                                                } else {
+                                                    button {
+                                                        class: "review-file-btn",
+                                                        onclick: move |_| picking.set(Some(i)),
+                                                        "Move to…"
+                                                    }
                                                 }
                                             }
                                         }
@@ -3458,43 +3830,51 @@ fn MigrationReview(
                             }
                         }
                     }
-                    if scheduling {
-                        label { class: "review-date",
-                            "Scheduled for"
-                            input {
-                                r#type: "date",
-                                value: "{schedule_date}",
-                                oninput: move |e| schedule_date.set(e.value()),
-                            }
-                        }
-                    }
+                }
+                if !entries.is_empty() || !sections.is_empty() || !backlog.is_empty() {
                     div { class: "review-footer",
-                        span { class: "review-count", "{decided} of {entries.len()} decided" }
+                        span { class: "review-count",
+                            "{decided} of {entries.len()} decided"
+                            if pulled > 0 { " · {pulled} from backlog" }
+                            if !sections.is_empty() { " · {to_file} to file" }
+                        }
                         button { class: "review-cancel", onclick: move |_| on_cancel(()), "Cancel" }
                         button {
                             class: "review-apply",
-                            disabled: busy || decided == 0 || date_missing,
+                            disabled: busy || (decided == 0 && pulled == 0 && to_file == 0),
                             onclick: move |_| {
-                                let date = schedule_date.read().trim().to_string();
-                                let ds = decisions.read().clone();
-                                let picked: Vec<(Task, Decision, Option<String>)> = entries_for_apply
+                                let decided_only = |(_, d): &(Task, Decision)| *d != Decision::Undecided;
+                                let tasks: Vec<(Task, Decision)> = entries_for_apply
                                     .iter()
-                                    .zip(ds)
-                                    .filter(|(_, d)| *d != Decision::Undecided)
-                                    .map(|(t, d)| {
-                                        let due = if d == Decision::Schedule { Some(date.clone()) } else { None };
-                                        (t.clone(), d, due)
-                                    })
+                                    .cloned()
+                                    .zip(decisions.read().iter().copied())
+                                    .chain(backlog_for_apply.iter().cloned().zip(pulls.read().iter().copied()))
+                                    .filter(decided_only)
                                     .collect();
-                                on_apply(picked);
+                                let filed: Vec<(ReviewSection, String)> = sections_for_apply
+                                    .iter()
+                                    .zip(filing.read().iter())
+                                    .filter_map(|(s, d)| d.clone().map(|d| (s.clone(), d)))
+                                    .collect();
+                                on_apply(ReviewPicks { tasks, filed });
                             },
                             if busy { "Applying…" } else { "Apply" }
                         }
                     }
-                    if date_missing {
-                        div { class: "review-hint", "Pick a date for the scheduled entries." }
-                    }
                 }
+            }
+        }
+        if let (Some(i), Some(source)) = (picking(), picking_source) {
+            MoveTargetPicker {
+                files,
+                title: "File “{sections[i].heading}” into…",
+                source,
+                allow_new: true,
+                on_cancel: move |()| picking.set(None),
+                on_pick: move |dest: String| {
+                    picking.set(None);
+                    filing.with_mut(|f| f[i] = Some(dest));
+                },
             }
         }
     }
@@ -3508,13 +3888,20 @@ fn MigrationReview(
 #[component]
 fn MoveTargetPicker(
     files: Signal<Vec<FileMeta>>,
-    count: usize,
-    /// The note the tasks are leaving; excluded from the list.
+    /// What is being moved, e.g. "Move 3 task(s) to…".
+    title: String,
+    /// The note the content is leaving; excluded from the list.
     source: String,
+    /// Offer to create the typed name as a new note when nothing matches it
+    /// exactly.
+    #[props(default)]
+    allow_new: bool,
     on_pick: EventHandler<String>,
     on_cancel: EventHandler<()>,
 ) -> Element {
     let mut query = use_signal(String::new);
+    let new_path = if allow_new { new_note_target(&query()) } else { None }
+        .filter(|p| !files.read().iter().any(|f| f.path.eq_ignore_ascii_case(p)));
 
     let q = query().to_lowercase();
     let matches: Vec<String> = files
@@ -3531,23 +3918,28 @@ fn MoveTargetPicker(
             div {
                 class: "move-picker",
                 onclick: move |e: Event<MouseData>| e.stop_propagation(),
-                div { class: "move-picker-header",
-                    "Move {count} task(s) to…"
-                }
+                div { class: "move-picker-header", "{title}" }
                 input {
                     class: "move-picker-input",
                     r#type: "text",
-                    placeholder: "Filter notes…",
+                    placeholder: if allow_new { "Filter notes, or type a new one…" } else { "Filter notes…" },
                     autofocus: true,
                     value: "{query}",
                     oninput: move |e| query.set(e.value()),
                     onkeydown: move |e: Event<KeyboardData>| {
-                        if e.key() == Key::Escape {
+                        if e.key() == Key::Named(NamedKey::Escape) {
                             on_cancel(());
                         }
                     },
                 }
                 div { class: "move-picker-list",
+                    if let Some(p) = new_path {
+                        div {
+                            class: "move-picker-row move-picker-row--new",
+                            onclick: move |_| on_pick(p.clone()),
+                            span { class: "move-picker-name", "Create “{p}”" }
+                        }
+                    }
                     if matches.is_empty() {
                         div { class: "sidebar-status", "No matching notes." }
                     } else {
@@ -3576,6 +3968,16 @@ fn MoveTargetPicker(
             }
         }
     }
+}
+
+/// The vault path a typed name becomes when the picker creates it: trimmed,
+/// no leading or trailing slash, `.md` added. `None` for a blank name.
+fn new_note_target(typed: &str) -> Option<String> {
+    let t = typed.trim().trim_matches('/');
+    if t.is_empty() {
+        return None;
+    }
+    Some(if t.to_lowercase().ends_with(".md") { t.to_string() } else { format!("{t}.md") })
 }
 
 // ── Backlinks panel ───────────────────────────────────────────────────────────
@@ -3974,7 +4376,7 @@ fn FileEntry(
             ondragstart: move |_| js::set_drag_data(file_drag_payload(&path_drag)),
             onclick: move |_| on_select(path.clone()),
             onkeydown: move |e| {
-                if e.key() == Key::Delete || e.key() == Key::Backspace {
+                if e.key() == Key::Named(NamedKey::Delete) || e.key() == Key::Named(NamedKey::Backspace) {
                     on_delete(file_clone.clone());
                 }
             },
@@ -4357,12 +4759,12 @@ mod tests {
         assert!(human_bytes(u64::MAX).ends_with(" TB"));
     }
 
-    // 2026-08-24 is a Monday, so 2026-08-27 (Thursday) has two skipped days
-    // (Tue, Wed) sitting behind the one directly before it.
     #[test]
-    fn day_review_covers_every_skipped_day_this_week() {
+    fn day_review_covers_every_day_since_the_last_review() {
+        // Last reviewed on the 24th, opened on the 27th: the 24th's own
+        // entries (logged after that review) and the skipped 25th and 26th.
         assert_eq!(
-            review_from_dates(dates::Period::Day, "2026-08-27"),
+            review_from_dates(dates::Period::Day, "2026-08-27", Some("2026-08-24")),
             vec!["2026-08-24", "2026-08-25", "2026-08-26"]
         );
     }
@@ -4370,22 +4772,76 @@ mod tests {
     #[test]
     fn day_review_the_morning_after_still_covers_just_that_day() {
         assert_eq!(
-            review_from_dates(dates::Period::Day, "2026-08-25"),
+            review_from_dates(dates::Period::Day, "2026-08-25", Some("2026-08-24")),
             vec!["2026-08-24"]
         );
     }
 
     #[test]
-    fn day_review_on_monday_falls_back_to_the_prior_sunday() {
-        // Nothing earlier in *this* week to walk, so it reaches back across
-        // the week boundary rather than reviewing nothing.
-        assert_eq!(review_from_dates(dates::Period::Day, "2026-08-24"), vec!["2026-08-23"]);
+    fn day_review_with_no_mark_walks_the_whole_month_so_far() {
+        let days = review_from_dates(dates::Period::Day, "2026-08-05", None);
+        assert_eq!(days, vec!["2026-08-01", "2026-08-02", "2026-08-03", "2026-08-04"]);
+    }
+
+    #[test]
+    fn day_review_never_reaches_back_past_the_first_of_the_month() {
+        let days = review_from_dates(dates::Period::Day, "2026-08-03", Some("2026-07-20"));
+        assert_eq!(days, vec!["2026-08-01", "2026-08-02"]);
+    }
+
+    #[test]
+    fn day_review_with_nothing_to_walk_falls_back_to_the_day_before() {
+        // The 1st of the month...
+        assert_eq!(review_from_dates(dates::Period::Day, "2026-09-01", None), vec!["2026-08-31"]);
+        // ...or a second review on a day already reviewed.
+        assert_eq!(
+            review_from_dates(dates::Period::Day, "2026-08-27", Some("2026-08-27")),
+            vec!["2026-08-26"]
+        );
     }
 
     #[test]
     fn week_and_month_reviews_still_cover_only_the_one_period_before() {
-        assert_eq!(review_from_dates(dates::Period::Week, "2026-08-27"), vec!["2026-08-17"]);
-        assert_eq!(review_from_dates(dates::Period::Month, "2026-08-27"), vec!["2026-07-01"]);
+        assert_eq!(review_from_dates(dates::Period::Week, "2026-08-27", None), vec!["2026-08-17"]);
+        assert_eq!(review_from_dates(dates::Period::Month, "2026-08-27", None), vec!["2026-07-01"]);
+    }
+
+    #[test]
+    fn only_note_sections_are_offered_for_filing() {
+        let log = "# Monday\n\n## Log\n\n- [ ] Call Bo\nA note under Log\n\n## Notes\n\n## Meeting\n\nTalked.\n\n## Done\n\n→ [[Website#Done]]\n\n## Meeting\n\nAgain.\n";
+        let task_headings = std::collections::BTreeSet::from(["Log".to_string()]);
+        let got: Vec<(String, usize, String)> = fileable_sections("j/d.md", log, &task_headings)
+            .into_iter()
+            .map(|s| (s.heading, s.nth, s.body))
+            .collect();
+        // Not the template's task section (even with a note in it), not the
+        // empty one, not one already filed — and repeated headings keep count.
+        assert_eq!(
+            got,
+            vec![
+                ("Meeting".to_string(), 0, "Talked.".to_string()),
+                ("Meeting".to_string(), 1, "Again.".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_typed_name_becomes_a_markdown_path() {
+        assert_eq!(new_note_target(" Projects/Website "), Some("Projects/Website.md".to_string()));
+        assert_eq!(new_note_target("/Ideas.md/"), Some("Ideas.md".to_string()));
+        assert_eq!(new_note_target("   "), None);
+    }
+
+    #[test]
+    fn the_review_mark_stops_at_the_first_day_with_undecided_entries() {
+        let sources: Vec<(String, String)> = ["24", "25", "26"]
+            .iter()
+            .map(|d| (format!("2026-08-{d}"), format!("j/2026-08-{d}.md")))
+            .collect();
+        let none = std::collections::BTreeSet::new();
+        assert_eq!(next_review_mark(&sources, &none, "2026-08-27"), "2026-08-27");
+        let left = std::collections::BTreeSet::from(["j/2026-08-25.md"]);
+        assert_eq!(next_review_mark(&sources, &left, "2026-08-27"), "2026-08-25");
     }
 
     #[test]

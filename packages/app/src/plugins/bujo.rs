@@ -6,8 +6,11 @@
 //! — its settings and its three log templates — lives under
 //! `.oxidian/plugins/bujo/`.
 
+use std::collections::BTreeSet;
+
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use vault::GithubConfig;
+use vault::{GithubConfig, VaultError};
 
 use super::{Asset, Field, PathKind, PluginDef, PluginStore};
 use crate::dates::Period;
@@ -114,6 +117,126 @@ pub fn seed_from_config(cfg: &GithubConfig) -> super::store::Values {
     seed
 }
 
+// ── Review state ──────────────────────────────────────────────────────────────
+
+/// Where the daily review records how far it has got. A file of its own rather
+/// than a key in `settings.json`: it changes on every review, and is read fresh
+/// each time so a review done on the phone is seen by the browser without a
+/// reload (and the browser's stale SHA can't collide with it).
+pub const REVIEW_STATE_PATH: &str = ".oxidian/plugins/bujo/review.json";
+
+#[derive(Serialize, Deserialize)]
+struct ReviewMark {
+    /// Every day *before* this one has been reviewed: the next daily review
+    /// starts here (clamped to the current month).
+    reviewed_through: String,
+}
+
+/// The date the last daily review left off at, if one has been recorded.
+pub async fn reviewed_through(cfg: &GithubConfig) -> Option<String> {
+    let fc = vault::dispatch::read_file(cfg, REVIEW_STATE_PATH).await.ok()?;
+    serde_json::from_str::<ReviewMark>(&fc.content)
+        .ok()
+        .map(|m| m.reviewed_through)
+}
+
+/// Record where the next daily review should start. Creates the file the
+/// first time.
+pub async fn mark_reviewed(cfg: &GithubConfig, date: &str) -> Result<(), String> {
+    let mark = ReviewMark { reviewed_through: date.to_string() };
+    let json = serde_json::to_string_pretty(&mark).map_err(|e| e.to_string())?;
+    let content = format!("{json}\n");
+    let msg = format!("Bullet Journal reviewed through {date}");
+    let result = match vault::dispatch::read_file(cfg, REVIEW_STATE_PATH).await {
+        Ok(fc) if fc.content == content => return Ok(()),
+        Ok(fc) => vault::dispatch::write_file(cfg, REVIEW_STATE_PATH, &content, &fc.sha, &msg).await,
+        Err(VaultError::NotFound(_)) => {
+            vault::dispatch::create_file(cfg, REVIEW_STATE_PATH, &content, &msg).await
+        }
+        Err(e) => Err(e),
+    };
+    result
+        .map(|_| ())
+        .map_err(|e| format!("Could not save {REVIEW_STATE_PATH}: {e}"))
+}
+
+/// The texts of the open tasks a log template seeds every new log with —
+/// "check email", "fill in timesheet". Each log gets a fresh copy of these, so
+/// yesterday's unticked one is not a straggler and the review leaves it alone.
+///
+/// Blank tasks (the template's empty `- [ ] ` prompt) are not included: an
+/// empty entry is not a recurring chore.
+#[must_use]
+pub fn template_task_texts(template_body: &str) -> BTreeSet<String> {
+    index::tasks::parse_file("", template_body)
+        .into_iter()
+        .filter(index::tasks::Task::is_open)
+        .map(|t| t.text.trim().to_string())
+        .filter(|t| !t.is_empty())
+        .collect()
+}
+
+// ── Filing sections away ──────────────────────────────────────────────────────
+//
+// The second half of a review: a log's note sections (a meeting, an idea) are
+// moved to the note they belong in, and the log keeps the heading plus a link.
+
+/// What a filed-away section's body becomes in the log it left.
+const FILED_MARK: &str = "→ [[";
+
+/// Headings of the template's task sections — the `## Log` a fresh log comes
+/// with. Those belong to the task half of the review, never to filing.
+#[must_use]
+pub fn template_task_headings(template_body: &str) -> BTreeSet<String> {
+    index::sections::sections(template_body)
+        .into_iter()
+        .filter(|s| {
+            let body = index::sections::body(template_body, s);
+            !index::tasks::parse_file("", &body).is_empty()
+        })
+        .map(|s| s.heading)
+        .collect()
+}
+
+/// Is there anything in this section body worth filing away? Not when it is
+/// empty, holds only tasks (the task review deals with those), or has already
+/// been filed (it is just the link left behind).
+#[must_use]
+pub fn is_fileable(body: &str) -> bool {
+    body.lines().any(|line| {
+        let l = line.trim();
+        !l.is_empty()
+            && !l.starts_with(FILED_MARK)
+            && index::tasks::parse_file("", line).is_empty()
+    })
+}
+
+/// The note name a wikilink uses for `path`: `Projects/Website.md` → `Website`.
+fn link_name(path: &str) -> &str {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    name.strip_suffix(".md").unwrap_or(name)
+}
+
+/// The line a filed section leaves behind: `→ [[Website#Meeting]]`. A heading
+/// that can't sit inside a link (it holds `[`, `]`, `|`, `#` or `^`) links to
+/// the note alone.
+#[must_use]
+pub fn filed_link(dest_path: &str, heading: &str) -> String {
+    let name = link_name(dest_path);
+    if heading.is_empty() || heading.contains(['[', ']', '|', '#', '^']) {
+        format!("{FILED_MARK}{name}]]")
+    } else {
+        format!("{FILED_MARK}{name}#{heading}]]")
+    }
+}
+
+/// The block appended to the destination note: the section under its own
+/// heading, then where it came from.
+#[must_use]
+pub fn filed_block(heading: &str, body: &str, source_path: &str) -> String {
+    format!("## {heading}\n\n{body}\n\nFrom [[{}]]", link_name(source_path))
+}
+
 // ── Default templates ─────────────────────────────────────────────────────────
 //
 // Written into the plugin's folder on first enable and never overwritten after
@@ -201,6 +324,45 @@ mod tests {
             let meta = crate::template::parse_template(path, contents);
             assert!(meta.filepath.is_some(), "{path} has no filepath:");
         }
+    }
+
+    #[test]
+    fn recurring_template_tasks_are_the_open_non_blank_ones() {
+        let body = "# Log\n\n- [ ] Check email\n- [ ]  Complete timesheet \n- [x] Done already\n- [ ] \n";
+        let texts = template_task_texts(body);
+        assert_eq!(
+            texts.into_iter().collect::<Vec<_>>(),
+            vec!["Check email".to_string(), "Complete timesheet".to_string()]
+        );
+        // The shipped template's blank prompt is not a chore.
+        assert!(template_task_texts(DAILY_LOG).is_empty());
+    }
+
+    #[test]
+    fn the_templates_task_section_is_the_one_holding_checkboxes() {
+        assert_eq!(
+            template_task_headings(WEEKLY_LOG).into_iter().collect::<Vec<_>>(),
+            vec!["Log".to_string()]
+        );
+    }
+
+    #[test]
+    fn only_sections_with_notes_in_them_are_fileable() {
+        assert!(is_fileable("Talked about the launch.\n- [ ] Follow up"));
+        assert!(is_fileable("- Prefers async reviews"));
+        assert!(!is_fileable(""));
+        assert!(!is_fileable("- [ ] Call Bo\n- [x] Email"));
+        assert!(!is_fileable("→ [[Website#Meeting]]"));
+    }
+
+    #[test]
+    fn a_filed_section_links_to_its_heading_when_it_can() {
+        assert_eq!(filed_link("Projects/Website.md", "Meeting"), "→ [[Website#Meeting]]");
+        assert_eq!(filed_link("Website.md", "Q&A [draft]"), "→ [[Website]]");
+        assert_eq!(
+            filed_block("Meeting", "Talked.", "journal/2026/10/2026-10-19.md"),
+            "## Meeting\n\nTalked.\n\nFrom [[2026-10-19]]"
+        );
     }
 
     #[test]
