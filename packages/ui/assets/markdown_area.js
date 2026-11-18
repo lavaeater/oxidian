@@ -54,6 +54,14 @@ export function setup_tasks(id) {
         // (a rendered dataview task) isn't editable through this path yet.
         const cb = e.target.closest('.md-task-checkbox');
         if (cb && cb.dataset.pos !== undefined) {
+            // Ticking a rendered checkbox is not a request to edit. Letting the
+            // caret land would focus the editor (popping the soft keyboard on
+            // Android), flip the line to raw source and recentre the document —
+            // the "whirlwind" when ticking off a shopping list. If the editor
+            // already has a caret elsewhere, it stays put. On the active line
+            // the box is raw `[ ]` text, so there the caret may land as usual.
+            const line = cb.closest('.md-line');
+            if (!line || !line.classList.contains('md-line--active')) e.preventDefault();
             el._taskClick = {
                 pos: parseInt(cb.dataset.pos),
                 checked: cb.dataset.checked === 'true'
@@ -342,6 +350,14 @@ export function read_click(id) {
         return 'edit:' + off;
     }
     return '';
+}
+
+// The caret offset in the same line-deterministic space as `read_state`, or -1
+// when there is no caret in the editor. Non-destructive (unlike `read_state`).
+export function caret_offset(id) {
+    const el = document.getElementById(id);
+    if (!el) return -1;
+    return lineTextAndCursor(el)[1];
 }
 
 // Reads text + cursor together and returns the tagged-string protocol the Rust

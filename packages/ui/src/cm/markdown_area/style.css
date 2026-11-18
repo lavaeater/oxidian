@@ -330,8 +330,15 @@
   font-style: italic;
 }
 
-/* On the active line, show raw [ ] / [x] text and hide the visual checkbox. */
+/* On the active line, show raw [ ] / [x] text and hide the visual checkbox.
+   It must also become plain inline, selectable text: an `inline-flex`,
+   `user-select: none` box is an atomic island the caret can't cross, so with
+   the caret right before the `[` ArrowDown went nowhere. */
 .md-line--active .md-task-checkbox {
+  display: inline;
+  user-select: text;
+  margin-right: 0;
+  vertical-align: baseline;
   font-size: 1em;
   line-height: normal;
   color: var(--secondary-color-5, #888);
