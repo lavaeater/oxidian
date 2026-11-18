@@ -1,0 +1,18 @@
+# static-web-server config for the web image (see Dockerfile).
+#
+# index.html must always be revalidated: it is the only file that says which
+# hashed JS/wasm bundle is current, so a cached copy keeps a browser on the
+# previous build — and once that build's files are gone from the image, the
+# app fails to start. Everything under /assets has a content hash in its name
+# and can be cached forever. Later rules override earlier ones.
+[advanced]
+
+[[advanced.headers]]
+source = "**"
+[advanced.headers.headers]
+Cache-Control = "no-cache"
+
+[[advanced.headers]]
+source = "/assets/**/*.{js,wasm,css,svg,ico}"
+[advanced.headers.headers]
+Cache-Control = "public, max-age=31536000, immutable"

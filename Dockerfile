@@ -39,11 +39,16 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 FROM ghcr.io/static-web-server/static-web-server:2 AS runtime
 
 COPY --from=builder /public-out /public
+COPY static-web-server.toml /static-web-server.toml
 
+# Cache-Control comes from static-web-server.toml, not the server's defaults
+# (which let browsers keep index.html for a day).
+# No SPA fallback page: the app has no client-side routes, and a fallback
+# would answer a request for a missing .wasm with index.html and a 200.
 ENV SERVER_ROOT=/public \
     SERVER_PORT=5173 \
-    SERVER_HOST=0.0.0.0
-# SPA fallback: serve index.html for unknown routes (client-side router)
-ENV SERVER_FALLBACK_PAGE=/public/index.html
+    SERVER_HOST=0.0.0.0 \
+    SERVER_CONFIG_FILE=/static-web-server.toml \
+    SERVER_CACHE_CONTROL_HEADERS=false
 
 EXPOSE 5173
