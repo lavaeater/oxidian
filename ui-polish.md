@@ -46,6 +46,18 @@ the tabs and the button itself.
 
 Formatting toolbar: why aren't the buttons working?
 
+> **Status (toolbar): fixed.** Both bugs were confirmed and fixed. The editor now exposes `_mdRange` / `_mdApply`
+> (`markdown_area.js`), reached through `js::editor_range` / `js::editor_apply`. The edits themselves are pure
+> Rust in `views/toolbar.rs`, with UTF-16↔byte conversion and 13 unit tests. Heading buttons now replace the
+> level instead of stacking (`## x` → `# x`). Bullet ↔ task conversion and multi-line selections work. An edit
+> that races a keystroke is dropped rather than clobbering it. E2E: `e2e/tests/formatting-toolbar.spec.js`.
+>
+> **Status (bars): done.** `state::UiPrefs` is persisted under `oxidian_ui`, and `views/layout_menu.rs` is opened
+> from a new button in the tab strip. Defaults: status bar at the bottom; properties and formatting at the top;
+> properties folded and remembered. Super Collapse hides every bar except the tab strip. On a phone, the formatting
+> toolbar is now one horizontally scrolling row instead of two. E2E: `e2e/tests/layout-menu.spec.js`.
+> **Still to verify on Android:** where the bottom status bar sits when the soft keyboard is open.
+>
 > **Analysis: why the formatting toolbar does nothing** (*Effort: S–M, ~1 day. Do this first within this item.*)
 >
 > There are two separate bugs in `packages/app/src/views/toolbar.rs`:
@@ -92,6 +104,10 @@ This was because the outline took up a lot of space. One way around this is to u
 making sidebars moveable to the left or right of the writing area. If we have two panes for writing, a bar would go to
 the far right or far left of both of the writing areas.
 
+> **Status: quick fix done; full left/right sidebars not started.** The outline title now folds and unfolds the
+> outline, and the state is remembered (`UiPrefs::outline_collapsed`). Level-1 outline entries also get their
+> indent back. The movable-sidebar feature needs a design decision first (see the summary).
+>
 > **Analysis** — *Effort: quick fix XS (1–2 h); full left/right sidebars L (4–6 days).*
 >
 > The outline is rendered inside the Files panel (`vault.rs:1298`, `OutlinePane`) with `max-height: 35vh`
@@ -141,14 +157,14 @@ across the document. Annoying.
 
 ## Summary & recommendation
 
-| # | Issue | Root cause found? | Effort | Platform impact |
-|---|-------|-------------------|--------|-----------------|
-| 1 | Jumpy checkbox toggling (mobile) | Yes: missing `preventDefault` on checkbox mousedown | S | Android (high) |
-| 2 | Caret stuck before `[` | Likely: atomic `inline-flex` + `user-select:none` checkbox | S | Web + Android |
-| 3 | Formatting toolbar dead | Yes: no repaint while focused + wrong offsets | S–M | All |
-| 4 | Properties default open | Yes: `collapsed` defaults `false`, not persisted | XS | All |
-| 5 | Configurable bars / Super Collapse | n/a (feature) | M | All; mobile keyboard caveat |
-| 6 | Outline crowding sidebar | Yes: fixed 35vh outline in Files panel | XS quick fix / L full | Web/iPad |
+| # | Issue | Root cause found? | Effort | Platform impact | Status |
+|---|-------|-------------------|--------|-----------------|--------|
+| 1 | Jumpy checkbox toggling (mobile) | Yes: missing `preventDefault` on checkbox mousedown | S | Android (high) | Fixed (web); verify Android |
+| 2 | Caret stuck before `[` | Likely: atomic `inline-flex` + `user-select:none` checkbox | S | Web + Android | Fixed (web); verify Android |
+| 3 | Formatting toolbar dead | Yes: no repaint while focused + wrong offsets | S–M | All | Fixed |
+| 4 | Properties default open | Yes: `collapsed` defaults `false`, not persisted | XS | All | Fixed |
+| 5 | Configurable bars / Super Collapse | n/a (feature) | M | All; mobile keyboard caveat | Done; verify Android keyboard |
+| 6 | Outline crowding sidebar | Yes: fixed 35vh outline in Files panel | XS quick fix / L full | Web/iPad | Quick fix done; full feature open |
 
 **Start with #1 + #2 together.** They're the same component (task checkbox in `markdown_area.js` / `style.css`),
 both are small, both have identified causes, and they hit the core "smooth editing" promise every day, especially
@@ -157,3 +173,7 @@ the shopping-list-on-the-phone case. One PR, tested on web and Android.
 Then **#3** (toolbar). It's a real bug with a known fix, and it establishes a proper "apply an edit to the editor" API
 that #5 and slash commands can reuse. Then **#4 + the outline quick fix (#6)** as a quick-win batch, and finally
 **#5** as the one genuine feature project, once the toolbar it rearranges actually works.
+
+**Open decision (#6, full feature):** a full two-sidebar system with any panel on either side is L
+(4–6 days, desktop/iPad only). A cheaper option that targets the original pain is M (~1–2 days): an
+optional right-hand rail for Outline and Backlinks, so the left sidebar is left to files.

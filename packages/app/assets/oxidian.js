@@ -264,25 +264,25 @@ function activeMdArea() {
     return areas[0];
 }
 
-// Returns [start, end] character offsets of the selection within the active
-// editor, or [-1, -1] when there is none.
-export function get_selection() {
+// The active editor's text and selection as `[text, start, end]`, in the
+// editor's own model offsets (UTF-16), or null when it has no caret. Delegates
+// to the API `markdown_area.js` attaches to each editor, so offsets agree with
+// the editor's model (line breaks and rendered blocks counted its way).
+export function editor_range() {
     const el = activeMdArea();
-    if (!el) return [-1, -1];
-    const sel = window.getSelection();
-    if (!sel || !sel.rangeCount || !el.contains(sel.anchorNode)) return [-1, -1];
-    const range = sel.getRangeAt(0);
-    let start = -1, end = -1, off = 0;
-    const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
-    while (walk.nextNode()) {
-        const n = walk.currentNode, len = n.textContent.length;
-        if (start < 0 && n === range.startContainer) start = off + range.startOffset;
-        if (end < 0 && n === range.endContainer) end = off + range.endOffset;
-        off += len;
-    }
-    if (start < 0) start = off;
-    if (end < 0) end = off;
-    return [start, end];
+    if (!el || !el._mdRange) return null;
+    return el._mdRange();
+}
+
+// Replaces the active editor's text and puts the caret at `caret` (a model
+// offset), through the editor's own pending-edit path so it repaints even while
+// focused. `base` is the text the edit was computed from; if the editor has
+// moved on since (a keystroke landed meanwhile) the edit is dropped rather
+// than overwriting it.
+export function editor_apply(base, text, caret) {
+    const el = activeMdArea();
+    if (!el || !el._mdApply) return;
+    el._mdApply(base, text, caret);
 }
 
 // ── Slash commands ────────────────────────────────────────────────────────────

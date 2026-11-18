@@ -23,7 +23,7 @@ mod bindings {
         confirm_dialog, copy_to_clipboard,
         focus_selector, scroll_active_into_view, start_sidebar_resize,
         download_file,
-        get_selection,
+        editor_range, editor_apply,
         slash_query, apply_slash,
         task_menu_armed, dismiss_task_menu,
         build_signin_link, read_signin_link, request_persistent_storage,
@@ -262,17 +262,22 @@ pub fn download_file(filename: impl Into<String>, content: impl Into<String>) {
 
 // ── Editor selection ──────────────────────────────────────────────────────────
 
-/// `(start, end)` selection offsets in the active editor; `(0, 0)` when none.
-pub async fn get_selection() -> (usize, usize) {
-    let v: [i64; 2] = bindings::get_selection().await.unwrap_or([-1, -1]);
-    if v[0] < 0 || v[1] < 0 {
-        (0, 0)
-    } else {
-        (
-            usize::try_from(v[0]).unwrap_or(0),
-            usize::try_from(v[1]).unwrap_or(0),
-        )
-    }
+/// The active editor's `(text, start, end)`, offsets in UTF-16 code units of
+/// the editor's own model; `None` when no editor has a caret.
+pub async fn editor_range() -> Option<(String, usize, usize)> {
+    let v: Option<(String, i64, i64)> = bindings::editor_range().await.ok().flatten();
+    let (text, s, e) = v?;
+    Some((text, usize::try_from(s).ok()?, usize::try_from(e).ok()?))
+}
+
+/// Replaces the active editor's text and puts the caret at `caret` (UTF-16
+/// offset), repainting even while the editor is focused. `base` is the text the
+/// edit was computed from (from [`editor_range`]); if the editor no longer
+/// holds it, the edit is dropped rather than clobbering newer typing.
+pub fn editor_apply(base: String, text: String, caret: usize) {
+    spawn(async move {
+        let _: Result<(), _> = bindings::editor_apply(base, text, caret).await;
+    });
 }
 
 // ── Slash commands ────────────────────────────────────────────────────────────

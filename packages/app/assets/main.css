@@ -197,7 +197,60 @@ code { font-family: ui-monospace, monospace; font-size: 0.88em; }
   flex-direction: column;
   min-width: 0;
   overflow-y: auto;
+  position: relative; /* anchors the layout menu */
 }
+
+/* ── Editor bars (status / properties / formatting), placed by UiPrefs ── */
+.editor-bars { flex-shrink: 0; display: flex; flex-direction: column; }
+/* Below the document, a bar's divider belongs on its top edge. */
+.editor-bars--bottom > * { border-bottom: none; border-top: 1px solid var(--border); }
+.editor-bars--bottom .editor-titlebar { padding-top: 4px; padding-bottom: 4px; }
+
+/* ── Layout menu ── */
+.layout-menu-scrim { position: fixed; inset: 0; z-index: 70; }
+.layout-menu {
+  position: absolute;
+  top: 36px;
+  right: 6px;
+  z-index: 71;
+  width: min(280px, calc(100% - 12px));
+  box-sizing: border-box;
+  padding: 8px 0;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  font-size: 0.85rem;
+}
+.layout-menu-title {
+  padding: 2px 12px 6px;
+  font-size: 0.72rem; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--text-muted);
+}
+.layout-menu-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 4px 12px;
+}
+.layout-menu-row--dim { opacity: 0.5; }
+.layout-menu-check {
+  display: flex; align-items: center; gap: 8px;
+  color: var(--text); cursor: pointer; min-height: 28px;
+}
+.layout-menu-check input { accent-color: var(--accent); margin: 0; }
+.layout-menu-pos {
+  display: flex; border: 1px solid var(--border); border-radius: 5px; overflow: hidden;
+  flex-shrink: 0;
+}
+.layout-pos-btn {
+  background: none; border: none; cursor: pointer;
+  color: var(--text-muted); font: inherit; font-size: 0.75rem;
+  padding: 3px 8px; min-height: 26px;
+}
+.layout-pos-btn + .layout-pos-btn { border-left: 1px solid var(--border); }
+.layout-pos-btn--active { background: var(--bg3); color: var(--text); }
+.layout-menu-sep { height: 1px; margin: 6px 0; background: var(--border); }
+.layout-menu-super { padding: 2px 12px; font-weight: 600; }
+.layout-menu-hint { padding: 0 12px 2px 36px; font-size: 0.75rem; color: var(--text-muted); }
 .editor-pane--split .editor-pane-col + .editor-pane-col { border-left: 1px solid var(--border); }
 .editor-pane--split .editor-pane-col--focused { box-shadow: inset 0 2px 0 var(--accent); }
 
@@ -717,7 +770,12 @@ kbd {
   max-height: 35vh;
   overflow-y: auto;
 }
+.outline-pane--collapsed { padding-bottom: 2px; }
 .outline-title {
+  display: flex; align-items: center; justify-content: space-between;
+  width: 100%;
+  background: none; border: none; cursor: pointer; text-align: left;
+  font-family: inherit;
   padding: 4px 14px 6px;
   font-size: 0.78rem;
   font-weight: 600;
@@ -725,6 +783,8 @@ kbd {
   letter-spacing: 0.06em;
   color: var(--text-muted);
 }
+.outline-title:hover { color: var(--text); }
+.outline-toggle { font-size: 0.7rem; }
 .outline-item {
   padding: 3px 14px;
   font-size: 0.83rem;
@@ -1128,6 +1188,11 @@ kbd {
      scrolling column gets bottom padding so content clears the fixed nav. */
   .editor-pane-col { padding-bottom: calc(54px + max(env(safe-area-inset-bottom, 0px), 8px)); }
   .editor-titlebar { padding: 8px 12px; }
+  /* One scrollable row instead of wrapping onto two: vertical space is the
+     scarce thing on a phone. */
+  .formatting-toolbar { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .formatting-toolbar::-webkit-scrollbar { display: none; }
+  .formatting-toolbar .tb-sep { flex-shrink: 0; }
 
   /* Force a single editor pane on narrow screens: hide any second column and
      the split control. */

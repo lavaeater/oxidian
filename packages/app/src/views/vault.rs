@@ -2,7 +2,7 @@ use crate::icons::{
     IcoBookmark, IcoBookmarkCheck, IcoCalendar, IcoChevronDown, IcoChevronLeft, IcoChevronRight,
     IcoDownload, IcoFilePlus, IcoFileText, IcoFolderClosed, IcoFolderKanban, IcoFolderOpen,
     IcoFolderPlus, IcoFolderTree, IcoLayoutList, IcoLink2, IcoListChecks, IcoNetwork, IcoSearch,
-    IcoPlug, IcoSettings, IcoTrash2, IcoX,
+    IcoPanelsTopLeft, IcoPlug, IcoSettings, IcoTrash2, IcoX,
 };
 use index::Index;
 use index::tasks::{self, Status, Task};
@@ -12,6 +12,7 @@ use vault::{FileMeta, GithubConfig};
 
 use super::graph::GraphView;
 use super::kanban::KanbanBoard;
+use super::layout_menu::{LayoutMenu, update_prefs, use_ui_prefs};
 use super::properties::PropertiesPanel;
 use super::plugins::PluginsModal;
 use super::slash::SlashMenu;
@@ -22,7 +23,7 @@ use crate::dates;
 use crate::export;
 use crate::js;
 use crate::plugins::{self, PluginStore};
-use crate::state;
+use crate::state::{self, Bar, BarPos, UiPrefs};
 use crate::template::{self, TemplateMeta};
 use crate::wikilink_index::WikiLinkIndex;
 
@@ -439,6 +440,9 @@ static NAV_PLUGINS: &[NavPlugin] = &[
 #[component]
 pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Element {
     let mut files: Signal<Vec<FileMeta>> = use_signal(Vec::new);
+    // Editor layout preferences (bars, Super Collapse, folded panels), shared
+    // by both panes and the sidebar outline. Loaded once on mount below.
+    let mut ui_prefs: Signal<UiPrefs> = use_context_provider(|| Signal::new(UiPrefs::default()));
     // ── Editor panes ──
     // Each pane (`EditorPane`) owns its own editor state and effects. Here we
     // hold only the per-pane *tab list* + *active path* + an *open mailbox*
@@ -516,6 +520,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
         spawn(async move {
             let file_result = vault::dispatch::list_files(&cfg).await;
             let bm = state::load_bookmarks().await;
+            ui_prefs.set(state::load_ui_prefs().await);
             match file_result {
                 Ok(mut list) => {
                     list.sort_by(|a, b| a.path.cmp(&b.path));
@@ -2520,6 +2525,87 @@ fn EditorPane(
     };
     let cfg_slash = config.clone();
 
+    // Bars under the tab strip, placed by the layout preferences.
+    let prefs = use_ui_prefs();
+    let mut layout_open = use_signal(|| false);
+    let top_bars = prefs.read().bars_at(BarPos::Top);
+    let bottom_bars = prefs.read().bars_at(BarPos::Bottom);
+    let status_bar: Element = match path_opt.clone() {
+        Some(path) => rsx! {
+            div { class: "editor-titlebar",
+                button {
+                    class: "editor-icon-btn editor-back-btn",
+                    title: "Back to files",
+                    onclick: move |_| on_back(()),
+                    IcoChevronLeft { size: 18 }
+                }
+                span { class: "editor-filename", "{path}" }
+                div { class: "editor-meta",
+                    button {
+                        class: "editor-icon-btn",
+                        title: "Command palette (Ctrl/⌘ P)",
+                        onclick: move |_| on_palette.call(()),
+                        IcoLayoutList { size: 15 }
+                    }
+                    button {
+                        class: if is_bookmarked { "editor-icon-btn editor-icon-btn--active" } else { "editor-icon-btn" },
+                        title: if is_bookmarked { "Remove bookmark" } else { "Add bookmark" },
+                        onclick: move |_| {
+                            if let Some(p) = active() {
+                                if is_bookmarked {
+                                    bookmarks.with_mut(|bm| bm.retain(|b| b != &p));
+                                } else {
+                                    bookmarks.with_mut(|bm| { if !bm.contains(&p) { bm.push(p); } });
+                                }
+                                state::save_bookmarks(&bookmarks.read());
+                            }
+                        },
+                        if is_bookmarked { IcoBookmarkCheck { size: 15 } } else { IcoBookmark { size: 15 } }
+                    }
+                    if loading_file() {
+                        span { class: "save-status", "Loading…" }
+                    } else {
+                        span { class: "word-count", "{words} words" }
+                        span { class: "{status_class}", title: "{status_title}", "{status_label}" }
+                        button {
+                            class: "editor-icon-btn",
+                            title: "Move to other pane",
+                            onclick: move |_| {
+                                if let Some(p) = active.peek().clone() {
+                                    on_send_other(p.clone());
+                                    close_tab(tabs, active, &p);
+                                }
+                            },
+                            "⇄"
+                        }
+                        button {
+                            class: "editor-icon-btn",
+                            title: "Export as HTML",
+                            onclick: move |_| {
+                                if let Some(ref path) = active() {
+                                    let title = path.rsplit('/').next().unwrap_or(path)
+                                        .trim_end_matches(".md").to_string();
+                                    let filename = format!("{title}.html");
+                                    let html = export::to_html(&title, &content.read());
+                                    js::download_file(filename, html);
+                                }
+                            },
+                            IcoDownload { size: 15 }
+                        }
+                    }
+                }
+            }
+        },
+        None => rsx! {},
+    };
+    let render_bar = move |bar: Bar| -> Element {
+        match bar {
+            Bar::Status => status_bar.clone(),
+            Bar::Properties => rsx! { PropertiesPanel { content } },
+            Bar::Formatting => rsx! { FormattingToolbar {} },
+        }
+    };
+
     rsx! {
         div { class: "{col_class}",
             // ── Tab strip (hidden until at least one doc is open) ──
@@ -2558,6 +2644,14 @@ fn EditorPane(
                     }
                 }
                 div { class: "tab-strip-actions",
+                    button {
+                        class: if layout_open() || prefs.read().super_collapse { "editor-icon-btn editor-icon-btn--active" } else { "editor-icon-btn" },
+                        title: "Layout: bars and Super Collapse",
+                        "aria-haspopup": "menu",
+                        "aria-expanded": if layout_open() { "true" } else { "false" },
+                        onclick: move |_| layout_open.set(!layout_open()),
+                        IcoPanelsTopLeft { size: 14 }
+                    }
                     if can_split {
                         button { class: "editor-icon-btn", title: "Split right", onclick: move |_| on_split(()), "⊟" }
                     }
@@ -2567,73 +2661,18 @@ fn EditorPane(
                 }
             }
             }
+            if layout_open() {
+                LayoutMenu { on_close: move |()| layout_open.set(false) }
+            }
 
-            if let Some(path) = path_opt {
-                div { class: "editor-titlebar",
-                    button {
-                        class: "editor-icon-btn editor-back-btn",
-                        title: "Back to files",
-                        onclick: move |_| on_back(()),
-                        IcoChevronLeft { size: 18 }
-                    }
-                    span { class: "editor-filename", "{path}" }
-                    div { class: "editor-meta",
-                        button {
-                            class: "editor-icon-btn",
-                            title: "Command palette (Ctrl/⌘ P)",
-                            onclick: move |_| on_palette.call(()),
-                            IcoLayoutList { size: 15 }
-                        }
-                        button {
-                            class: if is_bookmarked { "editor-icon-btn editor-icon-btn--active" } else { "editor-icon-btn" },
-                            title: if is_bookmarked { "Remove bookmark" } else { "Add bookmark" },
-                            onclick: move |_| {
-                                if let Some(p) = active() {
-                                    if is_bookmarked {
-                                        bookmarks.with_mut(|bm| bm.retain(|b| b != &p));
-                                    } else {
-                                        bookmarks.with_mut(|bm| { if !bm.contains(&p) { bm.push(p); } });
-                                    }
-                                    state::save_bookmarks(&bookmarks.read());
-                                }
-                            },
-                            if is_bookmarked { IcoBookmarkCheck { size: 15 } } else { IcoBookmark { size: 15 } }
-                        }
-                        if loading_file() {
-                            span { class: "save-status", "Loading…" }
-                        } else {
-                            span { class: "word-count", "{words} words" }
-                            span { class: "{status_class}", title: "{status_title}", "{status_label}" }
-                            button {
-                                class: "editor-icon-btn",
-                                title: "Move to other pane",
-                                onclick: move |_| {
-                                    if let Some(p) = active.peek().clone() {
-                                        on_send_other(p.clone());
-                                        close_tab(tabs, active, &p);
-                                    }
-                                },
-                                "⇄"
-                            }
-                            button {
-                                class: "editor-icon-btn",
-                                title: "Export as HTML",
-                                onclick: move |_| {
-                                    if let Some(ref path) = active() {
-                                        let title = path.rsplit('/').next().unwrap_or(path)
-                                            .trim_end_matches(".md").to_string();
-                                        let filename = format!("{title}.html");
-                                        let html = export::to_html(&title, &content.read());
-                                        js::download_file(filename, html);
-                                    }
-                                },
-                                IcoDownload { size: 15 }
-                            }
+            if path_opt.is_some() {
+                if !top_bars.is_empty() {
+                    div { class: "editor-bars editor-bars--top",
+                        for bar in top_bars {
+                            Fragment { key: "{bar:?}", {render_bar(bar)} }
                         }
                     }
                 }
-                PropertiesPanel { content }
-                FormattingToolbar { content }
                 MarkdownArea {
                     content,
                     variant: MarkdownAreaVariant::Ghost,
@@ -2643,6 +2682,13 @@ fn EditorPane(
                     on_block_action,
                     on_navigate,
                     onfocus: move |_| focused.set(pane_idx),
+                }
+                if !bottom_bars.is_empty() {
+                    div { class: "editor-bars editor-bars--bottom",
+                        for bar in bottom_bars {
+                            Fragment { key: "{bar:?}", {render_bar(bar)} }
+                        }
+                    }
                 }
             } else {
                 div {
@@ -3089,14 +3135,26 @@ fn BookmarksPanel(
 
 #[component]
 fn OutlinePane(headings: Vec<(u8, String)>) -> Element {
+    // Foldable so it can't crowd the file list out of the sidebar; the folded
+    // state is remembered.
+    let prefs = use_ui_prefs();
+    let collapsed = prefs.read().outline_collapsed;
     rsx! {
-        div { class: "outline-pane",
-            div { class: "outline-title", "Outline" }
-            for (level, text) in &headings {
-                div {
-                    class: "outline-item",
-                    style: "padding-left: {(*level as usize - 1) * 12}px",
-                    "{text}"
+        div { class: if collapsed { "outline-pane outline-pane--collapsed" } else { "outline-pane" },
+            button {
+                class: "outline-title",
+                "aria-expanded": if collapsed { "false" } else { "true" },
+                onclick: move |_| update_prefs(prefs, |p| p.outline_collapsed = !p.outline_collapsed),
+                span { "Outline" }
+                span { class: "outline-toggle", if collapsed { "▸" } else { "▾" } }
+            }
+            if !collapsed {
+                for (level, text) in &headings {
+                    div {
+                        class: "outline-item",
+                        style: "padding-left: {14 + (*level as usize - 1) * 12}px",
+                        "{text}"
+                    }
                 }
             }
         }
