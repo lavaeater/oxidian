@@ -233,6 +233,37 @@ export function start_sidebar_resize() {
     window.addEventListener('pointerup', onUp);
 }
 
+// Same drag as the left sidebar, for the right rail: width is measured from
+// the window's right edge.
+export function start_rail_resize() {
+    const root = document.documentElement;
+    function onMove(e) {
+        const w = Math.max(180, Math.min(520, window.innerWidth - e.clientX));
+        root.style.setProperty('--rail-w', w + 'px');
+    }
+    function onUp() {
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+    }
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+}
+
+// Scrolls the focused pane's editor to source line `n` (0-based). The editor
+// renders exactly one top-level `.md-line` per source line, so the index maps
+// straight across.
+export function scroll_to_line(n) {
+    const el = document.querySelector('.editor-pane-col--focused .md-area')
+        || document.querySelector('.md-area');
+    if (!el) return;
+    const line = el.querySelectorAll(':scope > .md-line')[n];
+    if (line) line.scrollIntoView({ block: 'start', behavior: 'smooth' });
+}
+
 // ── HTML export download ──────────────────────────────────────────────────────
 
 export function download_file(filename, content) {

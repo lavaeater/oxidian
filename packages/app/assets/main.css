@@ -13,6 +13,7 @@
   --accent-dim:   #1f6feb;
   --danger:       #f85149;
   --sidebar-w:    260px;
+  --rail-w:       240px;
 
   /* ui-kit variable mappings so MarkdownArea styles resolve correctly */
   --primary-color:    #0f1116;
@@ -771,6 +772,43 @@ kbd {
   overflow-y: auto;
 }
 .outline-pane--collapsed { padding-bottom: 2px; }
+.outline-item { cursor: pointer; }
+/* With the rail on, the rail owns the outline on wide screens; the Files-panel
+   copy only returns on phones (see the mobile media query). */
+.outline-pane--rail-fallback { display: none; }
+
+/* ── Right rail (outline + backlinks) ── */
+.right-rail {
+  position: relative;
+  width: var(--rail-w);
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+  background: var(--bg2);
+  border-left: 1px solid var(--border);
+  padding-top: 4px;
+}
+/* The rail is all outline + backlinks, so no height cap and no top rule. */
+.right-rail .outline-pane--rail { border-top: none; max-height: none; flex-shrink: 0; }
+.right-rail .backlinks-panel { border-top: 1px solid var(--border); padding-top: 8px; }
+.right-rail > .sidebar-status { padding: 12px 14px; }
+.outline-title--static { cursor: default; }
+.rail-close {
+  position: absolute; top: 6px; right: 6px;
+  display: flex; align-items: center;
+  background: none; border: none; cursor: pointer;
+  color: var(--text-muted); opacity: 0.6; padding: 3px; border-radius: 3px;
+}
+.rail-close:hover { opacity: 1; color: var(--text); background: var(--bg3); }
+.right-rail .outline-pane--rail .outline-title { padding-right: 32px; }
+.rail-resize-handle {
+  width: 5px; cursor: col-resize; flex-shrink: 0;
+  background: transparent; transition: background 0.15s; z-index: 10;
+}
+.rail-resize-handle:hover, .rail-resize-handle:active { background: var(--accent); }
+.layout-menu-rail { padding: 2px 12px; }
 .outline-title {
   display: flex; align-items: center; justify-content: space-between;
   width: 100%;
@@ -1201,6 +1239,11 @@ kbd {
 
   /* No drag-to-resize on touch layouts. */
   .sidebar-resize-handle { display: none; }
+
+  /* No room for a rail on a phone: hide it (and its menu option) and keep
+     the outline in the Files panel instead. */
+  .right-rail, .rail-resize-handle, .layout-menu-wide { display: none; }
+  .outline-pane--rail-fallback { display: block; }
 
   /* Reveal the mobile-only controls. */
   .sidebar-close-btn { display: inline-flex; }

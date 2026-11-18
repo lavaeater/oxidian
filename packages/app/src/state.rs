@@ -121,6 +121,8 @@ impl Bar {
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
+// Independent on/off switches, persisted as JSON — not states of one machine.
+#[allow(clippy::struct_excessive_bools)]
 pub struct UiPrefs {
     pub status: BarPref,
     pub properties: BarPref,
@@ -131,6 +133,8 @@ pub struct UiPrefs {
     pub props_collapsed: bool,
     /// Whether the sidebar outline is folded to its title.
     pub outline_collapsed: bool,
+    /// Show the right-hand rail (outline + backlinks) on wide screens.
+    pub right_rail: bool,
 }
 
 impl Default for UiPrefs {
@@ -145,6 +149,7 @@ impl Default for UiPrefs {
             // first thing you want between the tabs and the text.
             props_collapsed: true,
             outline_collapsed: false,
+            right_rail: false,
         }
     }
 }

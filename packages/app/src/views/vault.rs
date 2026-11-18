@@ -160,10 +160,14 @@ fn is_md_path(path: &str) -> bool {
         .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
 }
 
-fn extract_headings(content: &str) -> Vec<(u8, String)> {
+/// `(level, text, line)` for each ATX heading; `line` is the 0-based source
+/// line, which is also the editor's `.md-line` index (one div per line), so the
+/// outline can scroll straight to it.
+fn extract_headings(content: &str) -> Vec<(u8, String, usize)> {
     content
-        .lines()
-        .filter_map(|line| {
+        .split('\n')
+        .enumerate()
+        .filter_map(|(n, line)| {
             let level = line.bytes().take_while(|&b| b == b'#').count();
             if !(1..=6).contains(&level) {
                 return None;
@@ -172,7 +176,7 @@ fn extract_headings(content: &str) -> Vec<(u8, String)> {
             // Bounded 1..=6 by the check above.
             #[allow(clippy::cast_possible_truncation)]
             let level = level as u8;
-            Some((level, text.trim().to_string()))
+            Some((level, text.trim().to_string(), n))
         })
         .collect()
 }
@@ -256,6 +260,7 @@ enum Cmd {
     ExportHtml,
     ToggleSidebar,
     ToggleSplit,
+    ToggleRightRail,
     GoFiles,
     GoSearch,
     GoBacklinks,
@@ -277,6 +282,7 @@ impl Cmd {
         Cmd::ExportHtml,
         Cmd::ToggleSidebar,
         Cmd::ToggleSplit,
+        Cmd::ToggleRightRail,
         Cmd::GoFiles,
         Cmd::GoSearch,
         Cmd::GoBacklinks,
@@ -298,6 +304,7 @@ impl Cmd {
             Cmd::ExportHtml => "Export current note as HTML",
             Cmd::ToggleSidebar => "Toggle sidebar",
             Cmd::ToggleSplit => "Toggle editor split",
+            Cmd::ToggleRightRail => "Toggle right panel (outline & backlinks)",
             Cmd::GoFiles => "Show: Files",
             Cmd::GoSearch => "Show: Search",
             Cmd::GoBacklinks => "Show: Backlinks",
@@ -329,6 +336,7 @@ impl Cmd {
             Cmd::ExportHtml => "download save html",
             Cmd::ToggleSidebar => "hide show panel",
             Cmd::ToggleSplit => "pane two columns",
+            Cmd::ToggleRightRail => "rail outline backlinks side right sidebar",
             Cmd::GoFiles => "tree explorer",
             Cmd::GoSearch => "find grep",
             Cmd::GoBacklinks => "links references",
@@ -962,6 +970,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
             Cmd::ExportHtml => run_export.call(()),
             Cmd::ToggleSidebar => sidebar_open.set(!sidebar_open()),
             Cmd::ToggleSplit => split.set(!split()),
+            Cmd::ToggleRightRail => update_prefs(ui_prefs, |p| p.right_rail = !p.right_rail),
             Cmd::Plugins => show_plugins.set(true),
             Cmd::GoFiles => panel.set(Panel::Files),
             Cmd::GoSearch => panel.set(Panel::Search),
@@ -1300,7 +1309,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                                 }
                             }
                             if has_file && !headings.is_empty() {
-                                OutlinePane { headings }
+                                OutlinePane { headings: headings.clone(), in_files_with_rail: ui_prefs.read().right_rail }
                             }
                         },
                         Panel::Search => rsx! {
@@ -1493,6 +1502,47 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                             on_back: move |()| sidebar_open.set(true),
                             on_palette: move |()| show_palette.set(true),
                         }
+                    }
+                }
+            }
+
+            // ── Right rail: outline + backlinks (wide screens only) ──────────
+            // Gives the outline its own column so the left sidebar is all file
+            // list. Hidden by CSS on phones, where the Files-panel outline
+            // (`in_files_with_rail`) shows instead.
+            if ui_prefs.read().right_rail {
+                div {
+                    class: "rail-resize-handle",
+                    onpointerdown: move |_| js::start_rail_resize(),
+                }
+                aside { class: "right-rail",
+                    if has_file {
+                        if headings.is_empty() {
+                            div { class: "outline-pane outline-pane--rail",
+                                div { class: "outline-title outline-title--static", "Outline" }
+                                div { class: "sidebar-status", "No headings." }
+                            }
+                        } else {
+                            OutlinePane { headings: headings.clone(), in_rail: true }
+                        }
+                        BacklinksPanel {
+                            active: active_path.read().clone(),
+                            backlinks: {
+                                let idx = index.read();
+                                active_path.read().as_ref().map_or_else(Vec::new, |p| {
+                                    idx.backlinks(p).into_iter().map(ToString::to_string).collect()
+                                })
+                            },
+                            on_select: move |path: String| open_focused(path),
+                        }
+                    } else {
+                        div { class: "sidebar-status", "No note open." }
+                    }
+                    button {
+                        class: "rail-close",
+                        title: "Hide right panel",
+                        onclick: move |_| update_prefs(ui_prefs, |p| p.right_rail = false),
+                        IcoX { size: 13 }
                     }
                 }
             }
@@ -3134,13 +3184,27 @@ fn BookmarksPanel(
 // ── Outline pane ──────────────────────────────────────────────────────────────
 
 #[component]
-fn OutlinePane(headings: Vec<(u8, String)>) -> Element {
+fn OutlinePane(
+    headings: Vec<(u8, String, usize)>,
+    /// This is the Files-panel copy while the right rail is on: the rail shows
+    /// the outline on wide screens, so this one only appears on phones (where
+    /// the rail is hidden). Decided in CSS so resizing never loses the outline.
+    #[props(default)]
+    in_files_with_rail: bool,
+    /// Rendered in the right rail (no height cap: the rail is all outline).
+    #[props(default)]
+    in_rail: bool,
+) -> Element {
     // Foldable so it can't crowd the file list out of the sidebar; the folded
     // state is remembered.
     let prefs = use_ui_prefs();
     let collapsed = prefs.read().outline_collapsed;
+    let mut class = String::from("outline-pane");
+    if collapsed { class.push_str(" outline-pane--collapsed"); }
+    if in_files_with_rail { class.push_str(" outline-pane--rail-fallback"); }
+    if in_rail { class.push_str(" outline-pane--rail"); }
     rsx! {
-        div { class: if collapsed { "outline-pane outline-pane--collapsed" } else { "outline-pane" },
+        div { class: "{class}",
             button {
                 class: "outline-title",
                 "aria-expanded": if collapsed { "false" } else { "true" },
@@ -3149,10 +3213,12 @@ fn OutlinePane(headings: Vec<(u8, String)>) -> Element {
                 span { class: "outline-toggle", if collapsed { "▸" } else { "▾" } }
             }
             if !collapsed {
-                for (level, text) in &headings {
+                for (level, text, line) in headings.iter().cloned() {
                     div {
                         class: "outline-item",
-                        style: "padding-left: {14 + (*level as usize - 1) * 12}px",
+                        title: "{text}",
+                        style: "padding-left: {14 + (level as usize - 1) * 12}px",
+                        onclick: move |_| js::scroll_to_line(line),
                         "{text}"
                     }
                 }
@@ -4803,6 +4869,21 @@ fn ColumnView(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn headings_carry_their_editor_line_index() {
+        // Line indices must match the editor's one-`.md-line`-per-source-line
+        // layout, blank lines included, or the outline jumps to the wrong place.
+        let src = "# One\n\ntext\n## Two\n#nope\n\n### Three";
+        assert_eq!(
+            extract_headings(src),
+            vec![
+                (1, "One".to_string(), 0),
+                (2, "Two".to_string(), 3),
+                (3, "Three".to_string(), 6),
+            ]
+        );
+    }
 
     #[test]
     fn bytes_read_as_sizes_a_person_recognises() {

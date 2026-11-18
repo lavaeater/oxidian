@@ -21,7 +21,8 @@ mod bindings {
         records_all, records_put, records_delete, records_clear,
         today, date_vars,
         confirm_dialog, copy_to_clipboard,
-        focus_selector, scroll_active_into_view, start_sidebar_resize,
+        focus_selector, scroll_active_into_view, start_sidebar_resize, start_rail_resize,
+        scroll_to_line,
         download_file,
         editor_range, editor_apply,
         slash_query, apply_slash,
@@ -247,6 +248,20 @@ pub fn scroll_active_into_view() {
 pub fn start_sidebar_resize() {
     spawn(async move {
         let _: Result<(), _> = bindings::start_sidebar_resize().await;
+    });
+}
+
+/// Begins an interactive drag of the right rail's width.
+pub fn start_rail_resize() {
+    spawn(async move {
+        let _: Result<(), _> = bindings::start_rail_resize().await;
+    });
+}
+
+/// Scrolls the focused editor to 0-based source line `n`.
+pub fn scroll_to_line(n: usize) {
+    spawn(async move {
+        let _: Result<(), _> = bindings::scroll_to_line(n).await;
     });
 }
 

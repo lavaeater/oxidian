@@ -104,9 +104,14 @@ This was because the outline took up a lot of space. One way around this is to u
 making sidebars moveable to the left or right of the writing area. If we have two panes for writing, a bar would go to
 the far right or far left of both of the writing areas.
 
-> **Status: quick fix done; full left/right sidebars not started.** The outline title now folds and unfolds the
-> outline, and the state is remembered (`UiPrefs::outline_collapsed`). Level-1 outline entries also get their
-> indent back. The movable-sidebar feature needs a design decision first (see the summary).
+> **Status: done, using the right-hand rail.** Turn it on from the layout menu ("Outline & backlinks on the right")
+> or the command palette ("Toggle right panel"). The rail has its own drag handle and a close button, and the
+> setting is remembered (`UiPrefs::right_rail`). With it on, the outline leaves the left sidebar on wide screens.
+> On phones the rail and its menu option are hidden, and the outline stays in the Files panel. Outline entries
+> now scroll the editor to their heading (also in the sidebar). The outline folds, and its state is remembered.
+> E2E: `e2e/tests/right-rail.spec.js`.
+> *Known limitation, already true before this change:* backlinks only include notes opened this session, because
+> `WikiLinkIndex` is filled on open. Feeding it from the persisted vault index would fix that.
 >
 > **Analysis** — *Effort: quick fix XS (1–2 h); full left/right sidebars L (4–6 days).*
 >
@@ -164,7 +169,7 @@ across the document. Annoying.
 | 3 | Formatting toolbar dead | Yes: no repaint while focused + wrong offsets | S–M | All | Fixed |
 | 4 | Properties default open | Yes: `collapsed` defaults `false`, not persisted | XS | All | Fixed |
 | 5 | Configurable bars / Super Collapse | n/a (feature) | M | All; mobile keyboard caveat | Done; verify Android keyboard |
-| 6 | Outline crowding sidebar | Yes: fixed 35vh outline in Files panel | XS quick fix / L full | Web/iPad | Quick fix done; full feature open |
+| 6 | Outline crowding sidebar | Yes: fixed 35vh outline in Files panel | XS quick fix / L full | Web/iPad | Done (right rail) |
 
 **Start with #1 + #2 together.** They're the same component (task checkbox in `markdown_area.js` / `style.css`),
 both are small, both have identified causes, and they hit the core "smooth editing" promise every day, especially
@@ -173,7 +178,3 @@ the shopping-list-on-the-phone case. One PR, tested on web and Android.
 Then **#3** (toolbar). It's a real bug with a known fix, and it establishes a proper "apply an edit to the editor" API
 that #5 and slash commands can reuse. Then **#4 + the outline quick fix (#6)** as a quick-win batch, and finally
 **#5** as the one genuine feature project, once the toolbar it rearranges actually works.
-
-**Open decision (#6, full feature):** a full two-sidebar system with any panel on either side is L
-(4–6 days, desktop/iPad only). A cheaper option that targets the original pain is M (~1–2 days): an
-optional right-hand rail for Outline and Backlinks, so the left sidebar is left to files.

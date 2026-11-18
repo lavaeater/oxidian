@@ -67,6 +67,20 @@ pub fn LayoutMenu(on_close: EventHandler<()>) -> Element {
                     }
                 }
             }
+            // Wide screens only (the rail is hidden on phones), so is this row.
+            div { class: "layout-menu-sep layout-menu-wide" }
+            div { class: "layout-menu-title layout-menu-wide", "Side panel" }
+            label { class: "layout-menu-check layout-menu-rail layout-menu-wide",
+                input {
+                    r#type: "checkbox",
+                    checked: p.right_rail,
+                    onchange: move |e| {
+                        let on = e.checked();
+                        update_prefs(prefs, |p| p.right_rail = on);
+                    },
+                }
+                span { "Outline & backlinks on the right" }
+            }
             div { class: "layout-menu-sep" }
             label { class: "layout-menu-check layout-menu-super",
                 input {
