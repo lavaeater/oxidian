@@ -80,7 +80,8 @@ pub fn Settings(
         });
     };
 
-    let handle_save = move |_| {
+    let mut handle_save = move || {
+        if saving() { return; }
         let t = token.read().trim().to_string();
         let o = owner.read().trim().to_string();
         let r = repo.read().trim().to_string();
@@ -134,7 +135,15 @@ pub fn Settings(
 
     rsx! {
         div { class: "settings-wrap",
-            div { class: "settings-card",
+            // A real form, so Enter (or the keyboard's Go key) connects. Every
+            // other button in it is `type: "button"` so it can't submit.
+            form {
+                class: "settings-card",
+                novalidate: true,
+                onsubmit: move |e| {
+                    e.prevent_default();
+                    handle_save();
+                },
                 h2 { class: "settings-title", "Connect your vault" }
 
                 // Provider selector
@@ -145,6 +154,7 @@ pub fn Settings(
                             let label = p.label();
                             rsx! {
                                 button {
+                                    r#type: "button",
                                     class: if is_active { "provider-btn provider-btn--active" } else { "provider-btn" },
                                     onclick: move |_| { provider.set(p.clone()); oauth_phase.set(OAuthPhase::Idle); },
                                     "{label}"
@@ -180,6 +190,7 @@ pub fn Settings(
                             }
                             p { class: "settings-device-waiting", "Waiting for authorization…" }
                             button {
+                                r#type: "button",
                                 class: "settings-cancel-btn",
                                 onclick: move |_| oauth_phase.set(OAuthPhase::Idle),
                                 "Cancel"
@@ -188,7 +199,7 @@ pub fn Settings(
                     } else if is_done {
                         p { class: "settings-oauth-done", "✓ Signed in with GitHub" }
                     } else {
-                        button { class: "settings-oauth-btn", onclick: start_oauth,
+                        button { r#type: "button", class: "settings-oauth-btn", onclick: start_oauth,
                             "Sign in with GitHub"
                         }
                         p { class: "settings-divider", "— or enter a token manually —" }
@@ -213,9 +224,18 @@ pub fn Settings(
                 if !is_awaiting {
                     label { class: "settings-label", "Token"
                         div { class: "settings-input-row",
+                            // `type=text` masked with CSS rather than
+                            // `type=password`: keyboards (Gboard) hide their
+                            // clipboard suggestion for password fields, which
+                            // made pasting a token on Android needlessly hard.
                             input {
-                                class: "settings-input",
-                                r#type: if show_token() { "text" } else { "password" },
+                                class: if show_token() { "settings-input" } else { "settings-input settings-input--masked" },
+                                r#type: "text",
+                                autocomplete: "off",
+                                autocapitalize: "off",
+                                autocorrect: "off",
+                                spellcheck: "false",
+                                enterkeyhint: "go",
                                 placeholder: if is_done { "filled via OAuth" } else { token_hint },
                                 value: "{token}",
                                 oninput: move |e| token.set(e.value()),
@@ -243,31 +263,36 @@ pub fn Settings(
 
                 label { class: "settings-label", "Owner (user or namespace)"
                     input {
-                        class: "settings-input", placeholder: "octocat",
+                        class: "settings-input", autocapitalize: "off", autocorrect: "off",
+                        spellcheck: "false", enterkeyhint: "go", placeholder: "octocat",
                         value: "{owner}", oninput: move |e| owner.set(e.value()),
                     }
                 }
                 label { class: "settings-label", "Repository"
                     input {
-                        class: "settings-input", placeholder: "my-notes",
+                        class: "settings-input", autocapitalize: "off", autocorrect: "off",
+                        spellcheck: "false", enterkeyhint: "go", placeholder: "my-notes",
                         value: "{repo}", oninput: move |e| repo.set(e.value()),
                     }
                 }
                 label { class: "settings-label", "Branch"
                     input {
-                        class: "settings-input", placeholder: "main",
+                        class: "settings-input", autocapitalize: "off", autocorrect: "off",
+                        spellcheck: "false", enterkeyhint: "go", placeholder: "main",
                         value: "{branch}", oninput: move |e| branch.set(e.value()),
                     }
                 }
                 label { class: "settings-label", "Templates folder"
                     input {
-                        class: "settings-input", placeholder: ".oxidian/templates",
+                        class: "settings-input", autocapitalize: "off", autocorrect: "off",
+                        spellcheck: "false", enterkeyhint: "go", placeholder: ".oxidian/templates",
                         value: "{templates_dir}", oninput: move |e| templates_dir.set(e.value()),
                     }
                 }
                 label { class: "settings-label", "Daily note template"
                     input {
-                        class: "settings-input", placeholder: ".oxidian/templates/daily-note.md",
+                        class: "settings-input", autocapitalize: "off", autocorrect: "off",
+                        spellcheck: "false", enterkeyhint: "go", placeholder: ".oxidian/templates/daily-note.md",
                         value: "{daily_note_template}", oninput: move |e| daily_note_template.set(e.value()),
                     }
                 }
@@ -285,8 +310,8 @@ pub fn Settings(
 
                 if !is_awaiting {
                     button {
+                        r#type: "submit",
                         class: "settings-btn", disabled: saving(),
-                        onclick: handle_save,
                         if saving() { "Connecting…" } else { "Connect vault" }
                     }
                 }
