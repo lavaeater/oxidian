@@ -49,6 +49,7 @@ use_js!("assets/markdown_area.js"::{
     setup_scroll,
     read_state,
     read_click,
+    caret_offset,
     apply_html_and_restore_cursor
 });
 
@@ -734,11 +735,26 @@ pub fn MarkdownArea(
                     && pos + 3 <= src.len()
                 {
                     src.replace_range(pos..pos + 3, new_bracket);
-                    // Update rendered_html immediately so the toggle
-                    // is visible without waiting for blur — the
-                    // use_effect guard skips updates while focused.
-                    rendered_html.set(render_html(&src, None, render_block.read().as_ref(), resolve_link.read().as_ref()));
-                    content.set(src);
+                    if is_focused() {
+                        // Editing elsewhere in the note: the checkbox mousedown
+                        // kept the caret where it was. Repainting through
+                        // `rendered_html` would swap the DOM under it and
+                        // throw it to the top of the note, so paint directly
+                        // and put the caret back. The swap is same-length
+                        // (`[ ]` ↔ `[x]`), so the offset is still valid.
+                        // `rendered_html` catches up on blur, as for typing.
+                        let cursor: i64 = caret_offset(&editor_id).await.unwrap_or(-1);
+                        let active = usize::try_from(cursor).ok();
+                        let html = render_html(&src, active, render_block.read().as_ref(), resolve_link.read().as_ref());
+                        content.set(src);
+                        let _: Result<(), _> =
+                            apply_html_and_restore_cursor(&editor_id, &html, cursor).await;
+                    } else {
+                        // No caret to protect: repaint the normal way, so the
+                        // toggle shows without waiting for a blur.
+                        rendered_html.set(render_html(&src, None, render_block.read().as_ref(), resolve_link.read().as_ref()));
+                        content.set(src);
+                    }
                 }
             }
         });

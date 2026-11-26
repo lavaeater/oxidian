@@ -13,7 +13,10 @@ pub use index::frontmatter::{parse_pairs, set_frontmatter, split_frontmatter};
 
 #[component]
 pub fn PropertiesPanel(mut content: Signal<String>) -> Element {
-    let mut collapsed = use_signal(|| false);
+    // Folded state is a layout preference (default folded), so it survives
+    // switching notes instead of springing open on every file.
+    let prefs = super::layout_menu::use_ui_prefs();
+    let collapsed = move || prefs.read().props_collapsed;
     let mut new_key = use_signal(String::new);
     let mut new_val = use_signal(String::new);
 
@@ -42,7 +45,9 @@ pub fn PropertiesPanel(mut content: Signal<String>) -> Element {
         div { class: "props-panel",
             div {
                 class: "props-header",
-                onclick: move |_| collapsed.with_mut(|c| *c = !*c),
+                onclick: move |_| {
+                    super::layout_menu::update_prefs(prefs, |p| p.props_collapsed = !p.props_collapsed);
+                },
                 span { class: "props-title", "Properties" }
                 span { class: "props-toggle", if collapsed() { "▸" } else { "▾" } }
             }

@@ -54,6 +54,14 @@ export function setup_tasks(id) {
         // (a rendered dataview task) isn't editable through this path yet.
         const cb = e.target.closest('.md-task-checkbox');
         if (cb && cb.dataset.pos !== undefined) {
+            // Ticking a rendered checkbox is not a request to edit. Letting the
+            // caret land would focus the editor (popping the soft keyboard on
+            // Android), flip the line to raw source and recentre the document —
+            // the "whirlwind" when ticking off a shopping list. If the editor
+            // already has a caret elsewhere, it stays put. On the active line
+            // the box is raw `[ ]` text, so there the caret may land as usual.
+            const line = cb.closest('.md-line');
+            if (!line || !line.classList.contains('md-line--active')) e.preventDefault();
             el._taskClick = {
                 pos: parseInt(cb.dataset.pos),
                 checked: cb.dataset.checked === 'true'
@@ -153,6 +161,36 @@ export function setup_keyboard(id) {
     const el = document.getElementById(id);
     if (!el || el.dataset.kbSetup) return;
     el.dataset.kbSetup = '1';
+
+    // Edit API for code outside the editor (the formatting toolbar, via
+    // `oxidian.js`). Both work in the editor's own line-deterministic model, so
+    // offsets agree with `read_state`; an edit goes through the same pending
+    // path as Enter, so the Rust side re-renders and restores the caret. Writing
+    // the content signal directly instead would be invisible while the editor
+    // is focused (it doesn't repaint under the caret) and then overwritten by
+    // the next keystroke.
+    //   _mdRange()           → [text, start, end] or null when there's no caret
+    //   _mdApply(base, text, caret) → false (and no change) if the editor's
+    //                                 text is no longer `base`, i.e. the user
+    //                                 typed while the edit was being computed
+    el._mdRange = function () {
+        const sel = window.getSelection();
+        if (!sel || !sel.rangeCount || !el.contains(sel.anchorNode)) return null;
+        const r = sel.getRangeAt(0);
+        const [text] = lineTextAndCursor(el);
+        const start = modelOffset(el, r.startContainer, r.startOffset);
+        const end = modelOffset(el, r.endContainer, r.endOffset);
+        if (start < 0 || end < 0) return null;
+        return [text, Math.min(start, end), Math.max(start, end)];
+    };
+    el._mdApply = function (base, text, caret) {
+        if (lineTextAndCursor(el)[0] !== base) return false;
+        el._pendingText = text;
+        el._pendingCursor = caret;
+        el.dataset.lineChange = '1';
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        return true;
+    };
 
     // Space on a task line offers the task-metadata menu (due date, priority,
     // done). Obsidian triggers on space too, and although it fires often, it
@@ -308,6 +346,33 @@ function lineTextAndCursor(el) {
     return [text, cursor];
 }
 
+// The model offset (same space as `lineTextAndCursor`) of a DOM boundary point
+// `(node, off)` inside the editor, or -1 when it isn't in the editor.
+function modelOffset(el, node, off) {
+    const kids = el.childNodes;
+    if (node === el) {
+        let t = 0;
+        for (let i = 0; i < off && i < kids.length; i++) {
+            if (i > 0) t += 1;
+            t += visibleText(kids[i]).length;
+        }
+        return t;
+    }
+    let acc = 0;
+    for (let i = 0; i < kids.length; i++) {
+        if (i > 0) acc += 1;
+        const kid = kids[i];
+        if (kid === node || (kid.nodeType === 1 && kid.contains(node))) {
+            const pre = document.createRange();
+            pre.selectNodeContents(kid);
+            try { pre.setEnd(node, off); } catch (_) { }
+            return acc + visibleText(pre.cloneContents()).length;
+        }
+        acc += visibleText(kid).length;
+    }
+    return -1;
+}
+
 // What the last mousedown asked for, if anything. Read (and cleared) by the
 // click handler only — deliberately separate from `read_state`, because both
 // are destructive reads and a click and a selectionchange arrive together: when
@@ -342,6 +407,14 @@ export function read_click(id) {
         return 'edit:' + off;
     }
     return '';
+}
+
+// The caret offset in the same line-deterministic space as `read_state`, or -1
+// when there is no caret in the editor. Non-destructive (unlike `read_state`).
+export function caret_offset(id) {
+    const el = document.getElementById(id);
+    if (!el) return -1;
+    return lineTextAndCursor(el)[1];
 }
 
 // Reads text + cursor together and returns the tagged-string protocol the Rust

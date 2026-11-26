@@ -2,7 +2,7 @@ use crate::icons::{
     IcoBookmark, IcoBookmarkCheck, IcoCalendar, IcoChevronDown, IcoChevronLeft, IcoChevronRight,
     IcoDownload, IcoFilePlus, IcoFileText, IcoFolderClosed, IcoFolderKanban, IcoFolderOpen,
     IcoFolderPlus, IcoFolderTree, IcoLayoutList, IcoLink2, IcoListChecks, IcoNetwork, IcoSearch,
-    IcoPlug, IcoSettings, IcoTrash2, IcoX,
+    IcoPanelsTopLeft, IcoPlug, IcoSettings, IcoTrash2, IcoX,
 };
 use index::Index;
 use index::tasks::{self, Status, Task};
@@ -12,6 +12,7 @@ use vault::{FileMeta, GithubConfig};
 
 use super::graph::GraphView;
 use super::kanban::KanbanBoard;
+use super::layout_menu::{LayoutMenu, update_prefs, use_ui_prefs};
 use super::properties::PropertiesPanel;
 use super::plugins::PluginsModal;
 use super::slash::SlashMenu;
@@ -22,7 +23,7 @@ use crate::dates;
 use crate::export;
 use crate::js;
 use crate::plugins::{self, PluginStore};
-use crate::state;
+use crate::state::{self, Bar, BarPos, UiPrefs};
 use crate::template::{self, TemplateMeta};
 use crate::wikilink_index::WikiLinkIndex;
 
@@ -159,10 +160,14 @@ fn is_md_path(path: &str) -> bool {
         .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
 }
 
-fn extract_headings(content: &str) -> Vec<(u8, String)> {
+/// `(level, text, line)` for each ATX heading; `line` is the 0-based source
+/// line, which is also the editor's `.md-line` index (one div per line), so the
+/// outline can scroll straight to it.
+fn extract_headings(content: &str) -> Vec<(u8, String, usize)> {
     content
-        .lines()
-        .filter_map(|line| {
+        .split('\n')
+        .enumerate()
+        .filter_map(|(n, line)| {
             let level = line.bytes().take_while(|&b| b == b'#').count();
             if !(1..=6).contains(&level) {
                 return None;
@@ -171,7 +176,7 @@ fn extract_headings(content: &str) -> Vec<(u8, String)> {
             // Bounded 1..=6 by the check above.
             #[allow(clippy::cast_possible_truncation)]
             let level = level as u8;
-            Some((level, text.trim().to_string()))
+            Some((level, text.trim().to_string(), n))
         })
         .collect()
 }
@@ -255,6 +260,7 @@ enum Cmd {
     ExportHtml,
     ToggleSidebar,
     ToggleSplit,
+    ToggleRightRail,
     GoFiles,
     GoSearch,
     GoBacklinks,
@@ -276,6 +282,7 @@ impl Cmd {
         Cmd::ExportHtml,
         Cmd::ToggleSidebar,
         Cmd::ToggleSplit,
+        Cmd::ToggleRightRail,
         Cmd::GoFiles,
         Cmd::GoSearch,
         Cmd::GoBacklinks,
@@ -297,6 +304,7 @@ impl Cmd {
             Cmd::ExportHtml => "Export current note as HTML",
             Cmd::ToggleSidebar => "Toggle sidebar",
             Cmd::ToggleSplit => "Toggle editor split",
+            Cmd::ToggleRightRail => "Toggle right panel (outline & backlinks)",
             Cmd::GoFiles => "Show: Files",
             Cmd::GoSearch => "Show: Search",
             Cmd::GoBacklinks => "Show: Backlinks",
@@ -328,6 +336,7 @@ impl Cmd {
             Cmd::ExportHtml => "download save html",
             Cmd::ToggleSidebar => "hide show panel",
             Cmd::ToggleSplit => "pane two columns",
+            Cmd::ToggleRightRail => "rail outline backlinks side right sidebar",
             Cmd::GoFiles => "tree explorer",
             Cmd::GoSearch => "find grep",
             Cmd::GoBacklinks => "links references",
@@ -439,6 +448,9 @@ static NAV_PLUGINS: &[NavPlugin] = &[
 #[component]
 pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Element {
     let mut files: Signal<Vec<FileMeta>> = use_signal(Vec::new);
+    // Editor layout preferences (bars, Super Collapse, folded panels), shared
+    // by both panes and the sidebar outline. Loaded once on mount below.
+    let mut ui_prefs: Signal<UiPrefs> = use_context_provider(|| Signal::new(UiPrefs::default()));
     // ── Editor panes ──
     // Each pane (`EditorPane`) owns its own editor state and effects. Here we
     // hold only the per-pane *tab list* + *active path* + an *open mailbox*
@@ -516,6 +528,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
         spawn(async move {
             let file_result = vault::dispatch::list_files(&cfg).await;
             let bm = state::load_bookmarks().await;
+            ui_prefs.set(state::load_ui_prefs().await);
             match file_result {
                 Ok(mut list) => {
                     list.sort_by(|a, b| a.path.cmp(&b.path));
@@ -957,6 +970,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
             Cmd::ExportHtml => run_export.call(()),
             Cmd::ToggleSidebar => sidebar_open.set(!sidebar_open()),
             Cmd::ToggleSplit => split.set(!split()),
+            Cmd::ToggleRightRail => update_prefs(ui_prefs, |p| p.right_rail = !p.right_rail),
             Cmd::Plugins => show_plugins.set(true),
             Cmd::GoFiles => panel.set(Panel::Files),
             Cmd::GoSearch => panel.set(Panel::Search),
@@ -1295,7 +1309,7 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                                 }
                             }
                             if has_file && !headings.is_empty() {
-                                OutlinePane { headings }
+                                OutlinePane { headings: headings.clone(), in_files_with_rail: ui_prefs.read().right_rail }
                             }
                         },
                         Panel::Search => rsx! {
@@ -1488,6 +1502,47 @@ pub fn VaultBrowser(config: GithubConfig, on_logout: EventHandler<()>) -> Elemen
                             on_back: move |()| sidebar_open.set(true),
                             on_palette: move |()| show_palette.set(true),
                         }
+                    }
+                }
+            }
+
+            // ── Right rail: outline + backlinks (wide screens only) ──────────
+            // Gives the outline its own column so the left sidebar is all file
+            // list. Hidden by CSS on phones, where the Files-panel outline
+            // (`in_files_with_rail`) shows instead.
+            if ui_prefs.read().right_rail {
+                div {
+                    class: "rail-resize-handle",
+                    onpointerdown: move |_| js::start_rail_resize(),
+                }
+                aside { class: "right-rail",
+                    if has_file {
+                        if headings.is_empty() {
+                            div { class: "outline-pane outline-pane--rail",
+                                div { class: "outline-title outline-title--static", "Outline" }
+                                div { class: "sidebar-status", "No headings." }
+                            }
+                        } else {
+                            OutlinePane { headings: headings.clone(), in_rail: true }
+                        }
+                        BacklinksPanel {
+                            active: active_path.read().clone(),
+                            backlinks: {
+                                let idx = index.read();
+                                active_path.read().as_ref().map_or_else(Vec::new, |p| {
+                                    idx.backlinks(p).into_iter().map(ToString::to_string).collect()
+                                })
+                            },
+                            on_select: move |path: String| open_focused(path),
+                        }
+                    } else {
+                        div { class: "sidebar-status", "No note open." }
+                    }
+                    button {
+                        class: "rail-close",
+                        title: "Hide right panel",
+                        onclick: move |_| update_prefs(ui_prefs, |p| p.right_rail = false),
+                        IcoX { size: 13 }
                     }
                 }
             }
@@ -2520,6 +2575,87 @@ fn EditorPane(
     };
     let cfg_slash = config.clone();
 
+    // Bars under the tab strip, placed by the layout preferences.
+    let prefs = use_ui_prefs();
+    let mut layout_open = use_signal(|| false);
+    let top_bars = prefs.read().bars_at(BarPos::Top);
+    let bottom_bars = prefs.read().bars_at(BarPos::Bottom);
+    let status_bar: Element = match path_opt.clone() {
+        Some(path) => rsx! {
+            div { class: "editor-titlebar",
+                button {
+                    class: "editor-icon-btn editor-back-btn",
+                    title: "Back to files",
+                    onclick: move |_| on_back(()),
+                    IcoChevronLeft { size: 18 }
+                }
+                span { class: "editor-filename", "{path}" }
+                div { class: "editor-meta",
+                    button {
+                        class: "editor-icon-btn",
+                        title: "Command palette (Ctrl/⌘ P)",
+                        onclick: move |_| on_palette.call(()),
+                        IcoLayoutList { size: 15 }
+                    }
+                    button {
+                        class: if is_bookmarked { "editor-icon-btn editor-icon-btn--active" } else { "editor-icon-btn" },
+                        title: if is_bookmarked { "Remove bookmark" } else { "Add bookmark" },
+                        onclick: move |_| {
+                            if let Some(p) = active() {
+                                if is_bookmarked {
+                                    bookmarks.with_mut(|bm| bm.retain(|b| b != &p));
+                                } else {
+                                    bookmarks.with_mut(|bm| { if !bm.contains(&p) { bm.push(p); } });
+                                }
+                                state::save_bookmarks(&bookmarks.read());
+                            }
+                        },
+                        if is_bookmarked { IcoBookmarkCheck { size: 15 } } else { IcoBookmark { size: 15 } }
+                    }
+                    if loading_file() {
+                        span { class: "save-status", "Loading…" }
+                    } else {
+                        span { class: "word-count", "{words} words" }
+                        span { class: "{status_class}", title: "{status_title}", "{status_label}" }
+                        button {
+                            class: "editor-icon-btn",
+                            title: "Move to other pane",
+                            onclick: move |_| {
+                                if let Some(p) = active.peek().clone() {
+                                    on_send_other(p.clone());
+                                    close_tab(tabs, active, &p);
+                                }
+                            },
+                            "⇄"
+                        }
+                        button {
+                            class: "editor-icon-btn",
+                            title: "Export as HTML",
+                            onclick: move |_| {
+                                if let Some(ref path) = active() {
+                                    let title = path.rsplit('/').next().unwrap_or(path)
+                                        .trim_end_matches(".md").to_string();
+                                    let filename = format!("{title}.html");
+                                    let html = export::to_html(&title, &content.read());
+                                    js::download_file(filename, html);
+                                }
+                            },
+                            IcoDownload { size: 15 }
+                        }
+                    }
+                }
+            }
+        },
+        None => rsx! {},
+    };
+    let render_bar = move |bar: Bar| -> Element {
+        match bar {
+            Bar::Status => status_bar.clone(),
+            Bar::Properties => rsx! { PropertiesPanel { content } },
+            Bar::Formatting => rsx! { FormattingToolbar {} },
+        }
+    };
+
     rsx! {
         div { class: "{col_class}",
             // ── Tab strip (hidden until at least one doc is open) ──
@@ -2558,6 +2694,14 @@ fn EditorPane(
                     }
                 }
                 div { class: "tab-strip-actions",
+                    button {
+                        class: if layout_open() || prefs.read().super_collapse { "editor-icon-btn editor-icon-btn--active" } else { "editor-icon-btn" },
+                        title: "Layout: bars and Super Collapse",
+                        "aria-haspopup": "menu",
+                        "aria-expanded": if layout_open() { "true" } else { "false" },
+                        onclick: move |_| layout_open.set(!layout_open()),
+                        IcoPanelsTopLeft { size: 14 }
+                    }
                     if can_split {
                         button { class: "editor-icon-btn", title: "Split right", onclick: move |_| on_split(()), "⊟" }
                     }
@@ -2567,73 +2711,18 @@ fn EditorPane(
                 }
             }
             }
+            if layout_open() {
+                LayoutMenu { on_close: move |()| layout_open.set(false) }
+            }
 
-            if let Some(path) = path_opt {
-                div { class: "editor-titlebar",
-                    button {
-                        class: "editor-icon-btn editor-back-btn",
-                        title: "Back to files",
-                        onclick: move |_| on_back(()),
-                        IcoChevronLeft { size: 18 }
-                    }
-                    span { class: "editor-filename", "{path}" }
-                    div { class: "editor-meta",
-                        button {
-                            class: "editor-icon-btn",
-                            title: "Command palette (Ctrl/⌘ P)",
-                            onclick: move |_| on_palette.call(()),
-                            IcoLayoutList { size: 15 }
-                        }
-                        button {
-                            class: if is_bookmarked { "editor-icon-btn editor-icon-btn--active" } else { "editor-icon-btn" },
-                            title: if is_bookmarked { "Remove bookmark" } else { "Add bookmark" },
-                            onclick: move |_| {
-                                if let Some(p) = active() {
-                                    if is_bookmarked {
-                                        bookmarks.with_mut(|bm| bm.retain(|b| b != &p));
-                                    } else {
-                                        bookmarks.with_mut(|bm| { if !bm.contains(&p) { bm.push(p); } });
-                                    }
-                                    state::save_bookmarks(&bookmarks.read());
-                                }
-                            },
-                            if is_bookmarked { IcoBookmarkCheck { size: 15 } } else { IcoBookmark { size: 15 } }
-                        }
-                        if loading_file() {
-                            span { class: "save-status", "Loading…" }
-                        } else {
-                            span { class: "word-count", "{words} words" }
-                            span { class: "{status_class}", title: "{status_title}", "{status_label}" }
-                            button {
-                                class: "editor-icon-btn",
-                                title: "Move to other pane",
-                                onclick: move |_| {
-                                    if let Some(p) = active.peek().clone() {
-                                        on_send_other(p.clone());
-                                        close_tab(tabs, active, &p);
-                                    }
-                                },
-                                "⇄"
-                            }
-                            button {
-                                class: "editor-icon-btn",
-                                title: "Export as HTML",
-                                onclick: move |_| {
-                                    if let Some(ref path) = active() {
-                                        let title = path.rsplit('/').next().unwrap_or(path)
-                                            .trim_end_matches(".md").to_string();
-                                        let filename = format!("{title}.html");
-                                        let html = export::to_html(&title, &content.read());
-                                        js::download_file(filename, html);
-                                    }
-                                },
-                                IcoDownload { size: 15 }
-                            }
+            if path_opt.is_some() {
+                if !top_bars.is_empty() {
+                    div { class: "editor-bars editor-bars--top",
+                        for bar in top_bars {
+                            Fragment { key: "{bar:?}", {render_bar(bar)} }
                         }
                     }
                 }
-                PropertiesPanel { content }
-                FormattingToolbar { content }
                 MarkdownArea {
                     content,
                     variant: MarkdownAreaVariant::Ghost,
@@ -2643,6 +2732,13 @@ fn EditorPane(
                     on_block_action,
                     on_navigate,
                     onfocus: move |_| focused.set(pane_idx),
+                }
+                if !bottom_bars.is_empty() {
+                    div { class: "editor-bars editor-bars--bottom",
+                        for bar in bottom_bars {
+                            Fragment { key: "{bar:?}", {render_bar(bar)} }
+                        }
+                    }
                 }
             } else {
                 div {
@@ -3088,15 +3184,43 @@ fn BookmarksPanel(
 // ── Outline pane ──────────────────────────────────────────────────────────────
 
 #[component]
-fn OutlinePane(headings: Vec<(u8, String)>) -> Element {
+fn OutlinePane(
+    headings: Vec<(u8, String, usize)>,
+    /// This is the Files-panel copy while the right rail is on: the rail shows
+    /// the outline on wide screens, so this one only appears on phones (where
+    /// the rail is hidden). Decided in CSS so resizing never loses the outline.
+    #[props(default)]
+    in_files_with_rail: bool,
+    /// Rendered in the right rail (no height cap: the rail is all outline).
+    #[props(default)]
+    in_rail: bool,
+) -> Element {
+    // Foldable so it can't crowd the file list out of the sidebar; the folded
+    // state is remembered.
+    let prefs = use_ui_prefs();
+    let collapsed = prefs.read().outline_collapsed;
+    let mut class = String::from("outline-pane");
+    if collapsed { class.push_str(" outline-pane--collapsed"); }
+    if in_files_with_rail { class.push_str(" outline-pane--rail-fallback"); }
+    if in_rail { class.push_str(" outline-pane--rail"); }
     rsx! {
-        div { class: "outline-pane",
-            div { class: "outline-title", "Outline" }
-            for (level, text) in &headings {
-                div {
-                    class: "outline-item",
-                    style: "padding-left: {(*level as usize - 1) * 12}px",
-                    "{text}"
+        div { class: "{class}",
+            button {
+                class: "outline-title",
+                "aria-expanded": if collapsed { "false" } else { "true" },
+                onclick: move |_| update_prefs(prefs, |p| p.outline_collapsed = !p.outline_collapsed),
+                span { "Outline" }
+                span { class: "outline-toggle", if collapsed { "▸" } else { "▾" } }
+            }
+            if !collapsed {
+                for (level, text, line) in headings.iter().cloned() {
+                    div {
+                        class: "outline-item",
+                        title: "{text}",
+                        style: "padding-left: {14 + (level as usize - 1) * 12}px",
+                        onclick: move |_| js::scroll_to_line(line),
+                        "{text}"
+                    }
                 }
             }
         }
@@ -4745,6 +4869,21 @@ fn ColumnView(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn headings_carry_their_editor_line_index() {
+        // Line indices must match the editor's one-`.md-line`-per-source-line
+        // layout, blank lines included, or the outline jumps to the wrong place.
+        let src = "# One\n\ntext\n## Two\n#nope\n\n### Three";
+        assert_eq!(
+            extract_headings(src),
+            vec![
+                (1, "One".to_string(), 0),
+                (2, "Two".to_string(), 3),
+                (3, "Three".to_string(), 6),
+            ]
+        );
+    }
 
     #[test]
     fn bytes_read_as_sizes_a_person_recognises() {
