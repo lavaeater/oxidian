@@ -464,6 +464,56 @@ pub fn append_lines(content: &str, lines: &[String]) -> String {
     out
 }
 
+/// Adds task lines to `content` at the end of its **first task list**, so they
+/// join the day's list instead of landing below everything else in the note.
+///
+/// A daily log usually opens with a list (recurring habits, say), followed by
+/// free-form sections (`# Journal`, notes). Carried-forward entries belong in
+/// that list, not under the last heading. The list is the first task line plus
+/// every line after it that is another task or an indented continuation of one
+/// (subtasks, wrapped text); it ends at a blank line or anything else.
+///
+/// Empty open entries at the end of the list (`- [ ] `, the template's "start
+/// typing here") stay last, so the new lines go in just above them.
+///
+/// A note with no task list gets the lines appended, as [`append_lines`] does.
+pub fn insert_lines(content: &str, lines: &[String]) -> String {
+    if lines.is_empty() {
+        return content.to_string();
+    }
+    let src: Vec<&str> = content.lines().collect();
+    let Some(first) = src.iter().enumerate().position(|(i, l)| parse_line("", i, l).is_some()) else {
+        return append_lines(content, lines);
+    };
+    let mut end = first + 1;
+    while end < src.len() {
+        let l = src[end];
+        let is_task = parse_line("", end, l).is_some();
+        let continues = !l.trim().is_empty() && l.starts_with([' ', '\t']);
+        if !is_task && !continues {
+            break;
+        }
+        end += 1;
+    }
+    // Keep trailing empty placeholders below the inserted lines.
+    while end > first {
+        match parse_line("", end - 1, src[end - 1]) {
+            Some(t) if t.status == Status::Open && t.text.is_empty() => end -= 1,
+            _ => break,
+        }
+    }
+
+    let mut out: Vec<&str> = Vec::with_capacity(src.len() + lines.len());
+    out.extend_from_slice(&src[..end]);
+    out.extend(lines.iter().map(String::as_str));
+    out.extend_from_slice(&src[end..]);
+    let mut joined = out.join("\n");
+    if content.ends_with('\n') || end == src.len() {
+        joined.push('\n');
+    }
+    joined
+}
+
 /// Re-mark several of one file's entries in a single rewrite.
 ///
 /// The migration review resolves a whole period at once, and writing per entry
@@ -818,6 +868,47 @@ mod tests {
     fn append_to_empty_note_adds_no_leading_blank_line() {
         assert_eq!(append_lines("", &["- [ ] a".to_string()]), "- [ ] a\n");
         assert_eq!(append_lines("\n\n", &["- [ ] a".to_string()]), "- [ ] a\n");
+    }
+
+    #[test]
+    fn insert_lands_after_the_first_task_list_not_at_the_end() {
+        let src = "# Thursday\n\n- [ ] Stretch\n- [x] Walk the dog\n\n# Dagbok\n\nWrote things.\n";
+        let out = insert_lines(src, &["- [ ] carried".to_string()]);
+        assert_eq!(
+            out,
+            "# Thursday\n\n- [ ] Stretch\n- [x] Walk the dog\n- [ ] carried\n\n# Dagbok\n\nWrote things.\n"
+        );
+    }
+
+    #[test]
+    fn insert_keeps_subtasks_with_their_parent() {
+        let src = "- [ ] Habit\n  - [ ] sub\n  more text\n## Log\n";
+        let out = insert_lines(src, &["- [ ] new".to_string()]);
+        assert_eq!(out, "- [ ] Habit\n  - [ ] sub\n  more text\n- [ ] new\n## Log\n");
+    }
+
+    #[test]
+    fn insert_goes_above_an_empty_placeholder() {
+        let src = "- [ ] Habit\n- [ ] \n\n# Dagbok\n";
+        let out = insert_lines(src, &["- [ ] a".to_string(), "- [ ] b".to_string()]);
+        assert_eq!(out, "- [ ] Habit\n- [ ] a\n- [ ] b\n- [ ] \n\n# Dagbok\n");
+    }
+
+    #[test]
+    fn insert_without_a_task_list_appends() {
+        assert_eq!(
+            insert_lines("# Today\n", &["- [ ] a".to_string()]),
+            "# Today\n\n- [ ] a\n"
+        );
+        assert_eq!(insert_lines("", &["- [ ] a".to_string()]), "- [ ] a\n");
+    }
+
+    #[test]
+    fn insert_at_the_very_end_of_a_note_without_newline() {
+        assert_eq!(
+            insert_lines("- [ ] Habit", &["- [ ] a".to_string()]),
+            "- [ ] Habit\n- [ ] a\n"
+        );
     }
 
     #[test]

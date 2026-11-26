@@ -47,6 +47,7 @@ use_js!("assets/markdown_area.js"::{
     setup_selection,
     setup_keyboard,
     setup_scroll,
+    setup_drag,
     read_state,
     read_click,
     caret_offset,
@@ -376,6 +377,13 @@ fn push_token_html(
                 out,
                 "<span class=\"md-token md-task-item\" style=\"padding-left:{indent}\">"
             );
+            // Drag handle for reordering (`setup_drag` in markdown_area.js).
+            // It is empty, with its glyph drawn by CSS, so it adds no text
+            // to the document model.
+            out.push_str(
+                "<span class=\"md-task-handle\" contenteditable=\"false\" \
+                 aria-hidden=\"true\" title=\"Drag to reorder\"></span>",
+            );
             marker(&raw[..prefix_len], out);
             let _ = write!(
                 out,
@@ -610,6 +618,7 @@ pub fn MarkdownArea(
             let _: Result<(), _> = setup_selection(&editor_id).await;
             let _: Result<(), _> = setup_keyboard(&editor_id).await;
             let _: Result<(), _> = setup_scroll(&editor_id).await;
+            let _: Result<(), _> = setup_drag(&editor_id).await;
         });
     });
 
@@ -932,6 +941,14 @@ mod tests {
         assert!(checked.contains("data-checked=\"true\""));
         let unchecked = html("- [ ] todo");
         assert!(unchecked.contains("data-checked=\"false\""));
+    }
+
+    #[test]
+    fn task_items_get_an_empty_drag_handle() {
+        let out = html("- [ ] todo\nplain");
+        assert_eq!(out.matches("md-task-handle").count(), 1, "only the task line");
+        // Empty: any text inside it would leak into the document model.
+        assert!(out.contains("title=\"Drag to reorder\"></span>"), "got: {out}");
     }
 
     #[test]

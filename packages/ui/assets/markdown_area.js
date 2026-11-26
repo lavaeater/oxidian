@@ -203,6 +203,12 @@ export function setup_keyboard(id) {
     // purely additive. `updateTaskMenuArm` disarms the moment you type anything
     // else, so ignoring it costs one keystroke.
     el.addEventListener('keydown', function (e) {
+        if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && e.altKey
+            && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.isComposing) {
+            if (moveLineByKey(el, e)) e.preventDefault();
+            return;
+        }
+
         if (e.key === ' ' && !e.ctrlKey && !e.metaKey && !e.isComposing) {
             const [text, cursor] = lineTextAndCursor(el);
             if (cursor >= 0) {
@@ -461,6 +467,200 @@ function updateTaskMenuArm(el, text, cursor) {
         && /^\s*[-*+] \[[ xX]\] /.test(line)
         && line.endsWith(' ');
     if (!stillArmed) el._armTaskMenu = false;
+}
+
+// ── Reordering tasks ─────────────────────────────────────────────────────────
+// Every task line renders a `.md-task-handle` (see component.rs). Dragging it
+// moves the task, along with its indented children, to another position. The
+// move happens in the text model and goes through the same pending path as
+// Enter, so the Rust side re-renders and the auto-save picks it up.
+// Alt+↑ / Alt+↓ (in `setup_keyboard`) does the same from the keyboard.
+
+function indentOf(line) {
+    return line.match(/^\s*/)[0].length;
+}
+
+// The end (exclusive) of the block starting at line `from`: that line plus
+// every non-blank line after it indented deeper (subtasks, wrapped text).
+function blockEnd(lines, from) {
+    const ind = indentOf(lines[from]);
+    let i = from + 1;
+    while (i < lines.length && lines[i].trim() !== '' && indentOf(lines[i]) > ind) i++;
+    return i;
+}
+
+// Moves lines [from, end) so they start before line `k` of the *original*
+// array (k may equal lines.length, meaning the end). Returns the new lines and
+// a function mapping an old line index to its new one.
+function moveBlock(lines, from, end, k) {
+    const n = end - from;
+    const block = lines.slice(from, end);
+    const rest = lines.slice(0, from).concat(lines.slice(end));
+    const at = k > from ? k - n : k;
+    rest.splice(at, 0, ...block);
+    const map = function (li) {
+        if (li >= from && li < end) return at + (li - from);
+        const r = li < from ? li : li - n;
+        return r >= at ? r + n : r;
+    };
+    return [rest, map];
+}
+
+// Applies a block move and keeps the caret (if any) on the line it was on.
+function applyMove(el, from, end, k) {
+    const [text, cursor] = lineTextAndCursor(el);
+    const lines = text.split('\n');
+    if (from < 0 || end > lines.length || (k >= from && k <= end)) return false;
+    const [moved, map] = moveBlock(lines, from, end, k);
+    let newCursor = -1;
+    if (cursor >= 0) {
+        const before = text.slice(0, cursor).split('\n');
+        const li = before.length - 1, col = before[li].length;
+        const nli = map(li);
+        newCursor = col;
+        for (let i = 0; i < nli; i++) newCursor += moved[i].length + 1;
+    }
+    el._pendingText = moved.join('\n');
+    el._pendingCursor = newCursor;
+    el.dataset.lineChange = '1';
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    return true;
+}
+
+const DRAG_EDGE_PX = 48, DRAG_SCROLL_STEP = 12;
+
+export function setup_drag(id) {
+    const el = document.getElementById(id);
+    if (!el || el.dataset.dragSetup) return;
+    el.dataset.dragSetup = '1';
+    let drag = null;
+
+    // Grabbing the handle must never place the caret, focus the editor (and pop
+    // the Android keyboard), start a text selection, or scroll the page.
+    const onHandle = (e) => e.target && e.target.closest && e.target.closest('.md-task-handle');
+    const swallow = function (e) { if (onHandle(e)) e.preventDefault(); };
+    el.addEventListener('mousedown', swallow, true);
+    el.addEventListener('touchstart', swallow, { capture: true, passive: false });
+
+    const lineEls = () => Array.from(el.querySelectorAll(':scope > .md-line'));
+
+    function clearMarks() {
+        el.querySelectorAll('.md-line--drop-before, .md-line--drop-after')
+            .forEach(l => l.classList.remove('md-line--drop-before', 'md-line--drop-after'));
+    }
+
+    // Insertion point (index of the line to insert before) for pointer `y`,
+    // or null when dropping there would change nothing.
+    function targetFor(y) {
+        const lines = drag.lines;
+        let k = lines.length;
+        for (let i = 0; i < lines.length; i++) {
+            // A folded block's source lines are hidden; never drop into one.
+            if (lines[i].classList.contains('md-render-hidden')) continue;
+            const r = lines[i].getBoundingClientRect();
+            if (y < r.top + r.height / 2) { k = i; break; }
+        }
+        return (k >= drag.from && k <= drag.end) ? null : k;
+    }
+
+    function update() {
+        drag.target = targetFor(drag.y);
+        clearMarks();
+        if (drag.target === null) return;
+        if (drag.target < drag.lines.length) drag.lines[drag.target].classList.add('md-line--drop-before');
+        else drag.lines[drag.lines.length - 1].classList.add('md-line--drop-after');
+    }
+
+    // Scroll while the pointer is held near the top or bottom edge, so a task
+    // can travel further than one screen.
+    function tick() {
+        if (!drag) return;
+        const cont = scrollContainer(el);
+        if (cont) {
+            const r = cont.getBoundingClientRect();
+            const top = Math.max(r.top, 0), bottom = Math.min(r.bottom, window.innerHeight);
+            let dy = 0;
+            if (drag.y < top + DRAG_EDGE_PX) dy = -DRAG_SCROLL_STEP;
+            else if (drag.y > bottom - DRAG_EDGE_PX) dy = DRAG_SCROLL_STEP;
+            if (dy) { cont.scrollTop += dy; update(); }
+        }
+        drag.raf = requestAnimationFrame(tick);
+    }
+
+    function finish(commit) {
+        if (!drag) return;
+        const d = drag;
+        drag = null;
+        cancelAnimationFrame(d.raf);
+        document.removeEventListener('pointermove', onMove, true);
+        document.removeEventListener('pointerup', onUp, true);
+        document.removeEventListener('pointercancel', onCancel, true);
+        clearMarks();
+        d.lines.forEach(l => l.classList.remove('md-line--dragging'));
+        el.classList.remove('md-area--dragging');
+        if (commit && d.target !== null) applyMove(el, d.from, d.end, d.target);
+    }
+
+    function onMove(e) {
+        if (!drag || e.pointerId !== drag.pointerId) return;
+        e.preventDefault();
+        drag.y = e.clientY;
+        update();
+    }
+    function onUp(e) {
+        if (drag && e.pointerId === drag.pointerId) finish(true);
+    }
+    function onCancel(e) {
+        if (drag && e.pointerId === drag.pointerId) finish(false);
+    }
+
+    el.addEventListener('pointerdown', function (e) {
+        const handle = onHandle(e);
+        if (!handle || drag || (e.pointerType === 'mouse' && e.button !== 0)) return;
+        const line = handle.closest('.md-line');
+        const lines = lineEls();
+        const from = lines.indexOf(line);
+        if (from < 0) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const end = blockEnd(lines.map(visibleText), from);
+        drag = { pointerId: e.pointerId, from, end, lines, y: e.clientY, target: null, raf: 0 };
+        for (let i = from; i < end; i++) lines[i].classList.add('md-line--dragging');
+        el.classList.add('md-area--dragging');
+        document.addEventListener('pointermove', onMove, true);
+        document.addEventListener('pointerup', onUp, true);
+        document.addEventListener('pointercancel', onCancel, true);
+        drag.raf = requestAnimationFrame(tick);
+    }, true);
+
+    // Escape abandons a drag in progress.
+    document.addEventListener('keydown', function (e) {
+        if (drag && e.key === 'Escape') finish(false);
+    });
+}
+
+// Alt+↑ / Alt+↓: move the caret's line (with its indented children) past the
+// neighbouring block. Returns true when it handled the key.
+function moveLineByKey(el, e) {
+    const [text, cursor] = lineTextAndCursor(el);
+    if (cursor < 0) return false;
+    const lines = text.split('\n');
+    const li = text.slice(0, cursor).split('\n').length - 1;
+    // Move the whole block the caret's line heads; a child line moves alone.
+    const end = blockEnd(lines, li);
+    let k;
+    if (e.key === 'ArrowUp') {
+        if (li === 0) return true;
+        // Hop over the previous sibling block, children and all.
+        k = li - 1;
+        const ind = indentOf(lines[li]);
+        while (k > 0 && lines[k].trim() !== '' && indentOf(lines[k]) > ind) k--;
+    } else {
+        if (end >= lines.length) return true;
+        k = blockEnd(lines, end);
+    }
+    applyMove(el, li, end, k);
+    return true;
 }
 
 // ── Keep the writing line comfortable ────────────────────────────────────────

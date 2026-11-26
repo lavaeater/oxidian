@@ -460,3 +460,50 @@
   cursor: pointer;
   margin: 0.4em 0;
 }
+
+/* ── Task reordering ──
+   The drag handle in front of every task (see `setup_drag` in
+   markdown_area.js). It is an empty element with a CSS-drawn glyph, so it
+   never adds text to the document model. `touch-action: none` makes a
+   drag on Android move the task rather than scroll the page. */
+.md-task-handle {
+  display: inline-block;
+  width: 1.1rem;
+  margin-left: -0.2rem;
+  margin-right: 0.1rem;
+  text-align: center;
+  vertical-align: middle;
+  font-size: 0.95rem;
+  line-height: 1;
+  color: var(--secondary-color-5, #888);
+  opacity: 0.35;
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+  transition: opacity 100ms ease-out;
+}
+.md-task-handle::before {
+  content: '⠿';
+}
+/* With a mouse, show it only on the line under the pointer, so lists stay calm. */
+@media (hover: hover) {
+  .md-task-handle { opacity: 0; }
+  .md-line:hover .md-task-handle { opacity: 0.55; }
+  .md-task-handle:hover { opacity: 1; }
+}
+.md-area--dragging,
+.md-area--dragging * {
+  cursor: grabbing !important;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.md-line--dragging {
+  opacity: 0.4;
+}
+.md-line--drop-before {
+  box-shadow: inset 0 2px 0 var(--accent-color, #4a9eff);
+}
+.md-line--drop-after {
+  box-shadow: inset 0 -2px 0 var(--accent-color, #4a9eff);
+}

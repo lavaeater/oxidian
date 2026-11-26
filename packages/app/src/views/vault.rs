@@ -1961,8 +1961,8 @@ async fn migrate_tasks(
         let dest_name = dest.rsplit('/').next().unwrap_or(dest);
         let msg = format!("Migrate {} entr(y/ies) to {dest_name}", lines.len());
         let (content, sha) = match vault::dispatch::read_file(cfg, dest).await {
-            Ok(fc) => (tasks::append_lines(&fc.content, &lines), Some(fc.sha)),
-            Err(_) => (tasks::append_lines(dest_body, &lines), None),
+            Ok(fc) => (tasks::insert_lines(&fc.content, &lines), Some(fc.sha)),
+            Err(_) => (tasks::insert_lines(dest_body, &lines), None),
         };
         let new_sha = match sha {
             Some(sha) => vault::dispatch::write_file(cfg, dest, &content, &sha, &msg)
@@ -2162,9 +2162,9 @@ async fn move_tasks(
     let dest_name = dest.rsplit('/').next().unwrap_or(dest);
     let msg = format!("Move {} task(s) to {dest_name}", moved_lines.len());
     let (dest_content, dest_sha) = match vault::dispatch::read_file(cfg, dest).await {
-        Ok(fc) => (tasks::append_lines(&fc.content, &moved_lines), Some(fc.sha)),
+        Ok(fc) => (tasks::insert_lines(&fc.content, &moved_lines), Some(fc.sha)),
         // Not there yet — this is the "creating it if it doesn't exist" path.
-        Err(_) => (tasks::append_lines(dest_body, &moved_lines), None),
+        Err(_) => (tasks::insert_lines(dest_body, &moved_lines), None),
     };
     let dest_new_sha = match dest_sha {
         Some(sha) => vault::dispatch::write_file(cfg, dest, &dest_content, &sha, &msg)
